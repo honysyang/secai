@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecAI 实时对话</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", monospace;
+    background: #0f1115; color: #e6e6e6; height: 100vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    padding: 12px 16px; border-bottom: 1px solid #23262d;
+    font-size: 15px; font-weight: 600; color: #fff;
+  }
+  #main { flex: 1; display: flex; min-height: 0; }
+  .pane { display: flex; flex-direction: column; min-width: 0; }
+  .pane h2 {
+    padding: 10px 14px; font-size: 12px; color: #8b919d;
+    border-bottom: 1px solid #23262d; font-weight: 500;
+  }
+  /* 左：对话页（用户消息 + Agent 过程流 + 最终回复） */
+  #chat-pane { flex: 1.2; border-right: 1px solid #23262d; }
+  #chat { flex: 1; overflow-y: auto; padding: 16px; }
+  .msg { margin-bottom: 14px; max-width: 80%; }
+  .msg.user { margin-left: auto; text-align: right; }
+  .msg .bubble {
+    display: inline-block; padding: 10px 14px; border-radius: 12px;
+    line-height: 1.6; font-size: 14px; white-space: pre-wrap; word-break: break-word;
+    text-align: left;
+  }
+  .msg.user .bubble { background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+  .msg.agent .bubble { background: #1b1e24; color: #e6e6e6; border-bottom-left-radius: 4px; }
+  .msg .meta { font-size: 11px; color: #8b919d; margin-bottom: 4px; }
+  /* 过程事件卡片（对话页内联 + 任务流共用） */
+  .ev {
+    margin-bottom: 8px; line-height: 1.6; word-break: break-word;
+    padding: 8px 10px; border-radius: 8px; background: #15181e;
+    border-left: 3px solid #2c3038; max-width: 92%;
+  }
+  .ev .agent {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    background: #1f2937; color: #e5e7eb; font-weight: 600; margin-right: 6px;
+  }
+  .ev .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    border: 1px solid; font-size: 11px; margin-right: 6px;
+  }
+  .ev .txt { color: #c7ccd6; white-space: pre-wrap; word-break: break-word; }
+  .ev.thought { border-left-color: #a78bfa; }
+  .ev.tool { border-left-color: #60a5fa; }
+  .ev.tool_result { border-left-color: #f59e0b; }
+  .ev.token { border-left-color: #f472b6; }
+  .ev.compact { border-left-color: #f97316; }
+  .ev.agent_start, .ev.agent_end { border-left-color: #4ade80; }
+  .ev.skill_disclosed { border-left-color: #22d3ee; }
+  .ev.llm_call { border-left-color: #94a3b8; }
+  /* 右：任务流（三智能体） */
+  #stream-pane { flex: 1; }
+  #active {
+    padding: 8px 14px; font-size: 12px; color: #4ade80;
+    border-bottom: 1px solid #23262d; background: #14171c;
+  }
+  #stream { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 12px; }
+  /* 底部输入 */
+  #form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid #23262d; }
+  #input {
+    flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid #2c3038;
+    background: #1b1e24; color: #e6e6e6; font-size: 14px; outline: none;
+  }
+  #input:focus { border-color: #2563eb; }
+  button {
+    padding: 10px 18px; border: none; border-radius: 8px; background: #2563eb;
+    color: #fff; font-size: 14px; cursor: pointer;
+  }
+  button:disabled { background: #3a3f4a; cursor: not-allowed; }
+</style>
+</head>
+<body>
+  <header>SecAI 实时对话</header>
+
+  <div id="main">
+    <div id="chat-pane" class="pane">
+      <h2>对话（含 Agent 思考 / 执行过程）</h2>
+      <div id="chat"></div>
+    </div>
+    <div id="stream-pane" class="pane">
+      <h2>任务流（三智能体）</h2>
+      <div id="active">等待任务事件…</div>
+      <div id="stream"></div>
+    </div>
+  </div>
+
+  <form id="form">
+    <input id="input" placeholder="输入消息，回车发送…" autocomplete="off">
+    <button id="send" type="submit">发送</button>
+  </form>
+
+<script>
+(function () {
+  var chat = document.getElementById('chat');
+  var stream = document.getElementById('stream');
+  var active = document.getElementById('active');
+  var form = document.getElementById('form');
+  var input = document.getElementById('input');
+  var sendBtn = document.getElementById('send');
+
+  // 事件 kind → [状态文案, 状态颜色]
+  var STATUS = {
+    llm_call:        ['思考中', '#94a3b8'],
+    thought:         ['思考',   '#a78bfa'],
+    tool:            ['执行中', '#60a5fa'],
+    tool_result:     ['执行结果','#f59e0b'],
+    agent_start:     ['Agent开始','#4ade80'],
+    agent_end:       ['Agent结束','#4ade80'],
+    token:           ['Token',  '#f472b6'],
+    compact:         ['压缩',   '#f97316'],
+    token_estimate:  ['上下文预算','#f97316'],
+    phase_changed:   ['阶段切换','#4ade80'],
+    skill_disclosed: ['技能披露','#22d3ee']
+  };
+
+  function buildText(ev, kind) {
+    if (kind === 'token') {
+      var u = ev.usage || {};
+      var t = ev.total || {};
+      return '本次 input=' + (u.input || 0) + ' output=' + (u.output || 0) +
+             ' total=' + (u.total || 0) +
+             ' ｜ 累计 input=' + (t.input || 0) + ' output=' + (t.output || 0) +
+             ' total=' + (t.total || 0) + ' requests=' + (t.requests || 0);
+    }
+    if (kind === 'compact') {
+      return '上下文压缩：估算 ' + ev.estimate_before + ' token，' +
+             'item ' + ev.items_before + ' → ' + ev.items_after;
+    }
+    if (kind === 'token_estimate') {
+      return '会话 token 估算：' + (ev.estimate || 0) + ' / 阈值 ' + (ev.threshold || 0);
+    }
+    if (kind === 'phase_changed') {
+      return '切换到阶段 ' + (ev.phase || '') + '（触发：' + (ev.trigger || '') + '）';
+    }
+    if (kind === 'tool') return ev.tool || '';
+    if (kind === 'tool_result') return ev.text || ev.preview || '';
+    if (kind === 'skill_disclosed') return '披露技能 ' + ev.skill + '（触发工具 ' + ev.tool + '）';
+    if (kind === 'agent_start') return '开始执行';
+    return ev.text || ev.preview || '';
+  }
+
+  function buildEvent(ev) {
+    var kind = ev.kind || '';
+    var agent = ev.agent || '';
+    var st = STATUS[kind] || [kind, '#9aa1ad'];
+
+    var div = document.createElement('div');
+    div.className = 'ev ' + kind;
+
+    var a = document.createElement('span');
+    a.className = 'agent';
+    a.textContent = agent || '系统';
+    div.appendChild(a);
+
+    var b = document.createElement('span');
+    b.className = 'badge';
+    b.style.color = st[1];
+    b.style.borderColor = st[1];
+    b.textContent = st[0];
+    div.appendChild(b);
+
+    var txt = document.createElement('div');
+    txt.className = 'txt';
+    txt.textContent = buildText(ev, kind);
+    div.appendChild(txt);
+    return div;
+  }
+
+  function addMsg(role, text) {
+    var div = document.createElement('div');
+    div.className = 'msg ' + role;
+    var meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = role === 'user' ? '你' : 'SecAI';
+    var bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+    div.appendChild(meta);
+    div.appendChild(bubble);
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  // 对话流事件 → 内联进左侧对话页（只展示有意义的过程，忽略底层 llm_call/agent 生命周期）
+  function addProc(ev) {
+    var kind = ev.kind || '';
+    if (kind === 'llm_call' || kind === 'agent_start' || kind === 'agent_end') return;
+    chat.appendChild(buildEvent(ev));
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  // 任务流事件 → 右侧三智能体面板
+  function addTaskEvent(ev) {
+    stream.appendChild(buildEvent(ev));
+    stream.scrollTop = stream.scrollHeight;
+    var kind = ev.kind || '';
+    var st = STATUS[kind] || [kind, '#9aa1ad'];
+    active.textContent = '当前：' + (ev.agent || '系统') + ' · ' + st[0];
+  }
+
+  // 对话流 SSE（web）→ 左侧对话页
+  var esChat = new EventSource('/api/stream?dir=web');
+  esChat.onmessage = function (e) {
+    try { addProc(JSON.parse(e.data)); } catch (err) { /* 忽略 */ }
+  };
+
+  // 任务流 SSE（generic）→ 右侧面板
+  var esTask = new EventSource('/api/stream?dir=generic');
+  esTask.onmessage = function (e) {
+    try { addTaskEvent(JSON.parse(e.data)); } catch (err) { /* 忽略 */ }
+  };
+
+  // 发送消息
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var msg = input.value.trim();
+    if (!msg) return;
+    addMsg('user', msg);
+    input.value = '';
+    sendBtn.disabled = true;
+    fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        addMsg('agent', data.reply || '(无回复)');
+      })
+      .catch(function (err) {
+        addMsg('agent', '(请求失败: ' + err + ')');
+      })
+      .finally(function () {
+        sendBtn.disabled = false;
+        input.focus();
+      });
+  });
+})();
+</script>
+</body>
+</html>

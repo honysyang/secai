@@ -1,0 +1,46 @@
+name: "searchsploit"
+command: "searchsploit"
+enabled: true
+short_description: "本地 ExploitDB 检索：按产品/版本/CVE 关键词查找公开 EXP/POC"
+description: |
+  本地 Exploit-DB（ExploitDB）检索工具，按关键词查找公开漏洞利用代码（EXP/POC）。
+
+  **主要功能：**
+  - 按产品名/版本/CVE 编号检索本地 ExploitDB
+  - 列出匹配的 EXP 标题与 Exploit-DB ID
+  - 用 additional_args 传 `-m <ID>` 把 EXP 镜像到当前目录、`-x <ID>` 查看内容、`-w` 显示来源链接
+
+  **使用场景：**
+  - 指纹到某服务/版本后，查找已知 EXP（如 `searchsploit openssh 7.4`）
+  - 拿到 CVE 编号后，查找对应 POC（如 `searchsploit cve-2021-44228`）
+  - 复现已知漏洞前先看有没有现成 EXP
+
+  **注意事项：**
+  - 仅用于授权安全测试
+  - 先用「产品名 + 版本」精确检索，再逐条查看命中项
+parameters:
+  - name: "query"
+    type: "string"
+    description: "检索关键词，建议「产品名 版本」或 CVE 编号，例如 'openssh 7.4'、'apache log4j'、'cve-2021-44228'"
+    required: true
+    position: 0
+    format: "positional"
+  - name: "title"
+    type: "bool"
+    description: "仅按标题精确匹配（-t）"
+    required: false
+    default: false
+    flag: "-t"
+    format: "flag"
+  - name: "json"
+    type: "bool"
+    description: "JSON 格式输出（-j），便于程序解析"
+    required: false
+    default: false
+    flag: "-j"
+    format: "flag"
+  - name: "additional_args"
+    type: "string"
+    description: "额外参数，多个用空格分隔。常用：`-m <ID>` 镜像 EXP 到当前目录、`-x <ID>` 查看 EXP 内容、`-w` 显示来源 URL"
+    required: false
+    format: "positional"

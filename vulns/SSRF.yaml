@@ -1,0 +1,14 @@
+type: SSRF
+name: 服务端请求伪造
+description: 服务端可被诱导请求内网/任意地址
+need_detect: 目标存在 URL 参数（url/path/redirect/image 等），服务端会请求该地址
+prompt: |
+  SSRF 检测：
+  1. 用 http://127.0.0.1 或 http://169.254.169.254 探测内网
+  2. 用 dnslog/外带地址探测是否外连
+  3. 尝试 file:// 协议读文件
+payloads:
+  - "http://127.0.0.1"
+  - "http://169.254.169.254/latest/meta-data/"
+  - "file:///etc/passwd"
+  - "http://[::1]"

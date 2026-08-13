@@ -1,0 +1,16 @@
+type: RCE
+name: 命令注入/远程代码执行
+description: 用户输入进入系统命令或代码执行，可 RCE
+need_detect: 目标存在命令执行点（ping/traceroute/上传/反序列化等）
+prompt: |
+  命令注入/RCE 检测：
+  1. 用 ; id、| id、`id`、$(id)、& id 探测命令拼接
+  2. 观察响应是否回显命令输出
+  3. 反序列化/代码注入用对应语言 payload
+  4. 执行命令类载荷建议用 distinguish 对比正常请求差异
+payloads:
+  - "; id"
+  - "| id"
+  - "`id`"
+  - "$(id)"
+  - "& id"

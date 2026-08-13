@@ -1,0 +1,686 @@
+"""通用执行工具：shell / http_request / distinguish / web_search。
+
+TaskContext 通过 Runner.run(context=...) 注入；disclosed_skills 是「多 Skills 渐进披露」
+的技能缓冲，初始包在派任时写入，运行中由 hooks.py 按事件证据逐步追加。
+
+（提交铁律 / flag 扫描 / submit_flag 属于 CTF 靶场层，后续单独接入，不进通用流程。）
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any, Dict, List
+
+import requests
+from agents import function_tool, RunContextWrapper
+
+from task_context import TaskContext
+
+import sec_tools
+import poc_registry
+import vuln_registry
+import knowledge_registry
+import platform_tools
+from skill_registry import find_skills as search_skills
+from config import VPN_CMD, VPN_CONFIG, VPN_AUTH
+
+PREVIEW = 4000
+ARTIFACT_SPILL_THRESHOLD = 800  # 工具输出超过此字符数就外置到 artifacts/
+BLACKBOARD_MAX_ENTRIES = 50     # 黑板容量上限，超出淘汰最旧条目（优先淘汰 done/failed）
+
+
+def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
+    """工具输出超长时写入 artifacts/ 文件，只返回预览 + 引用，避免撑爆会话上下文。
+
+    大段源码/扫描结果不再整段塞进 session，改为落盘 + 摘要，需要全文时用
+    read_artifact 按需读取。
+    """
+    if len(text) <= ARTIFACT_SPILL_THRESHOLD:
+        return text
+    c = ctx.context
+    art_dir = c.workdir / "artifacts"
+    art_dir.mkdir(exist_ok=True)
+    art_id = uuid.uuid4().hex[:8]
+    (art_dir / f"{art_id}.txt").write_text(text, encoding="utf-8")
+    return (text[:ARTIFACT_SPILL_THRESHOLD]
+            + f"\n...[已截断，全文 {len(text)} 字符保存到 artifacts/{art_id}.txt]"
+            + f"\n[用 read_artifact {art_id} 读取全文]")
+
+
+@function_tool
+def shell(ctx: RunContextWrapper[TaskContext], command: str, timeout: int = 30) -> str:
+    """在工作目录执行 shell 命令。探测请打包：一条命令完成多个动作。
+    复杂逻辑（多行 python3 脚本）请先用 write_file 写到文件，再执行 `python3 <文件>`，避免命令参数过长撑爆上下文。
+    """
+    c = ctx.context
+    try:
+        p = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
+                           timeout=min(timeout, 120), cwd=str(c.workdir))
+        out = f"rc={p.returncode}\nstdout:\n{p.stdout[:PREVIEW]}\nstderr:\n{p.stderr[:1000]}"
+        return _spill_output(ctx, out)
+    except subprocess.TimeoutExpired:
+        return f"命令超时（{timeout}s）。hint: 缩短范围或加 --max-time"
+    except Exception as e:
+        return f"执行失败: {str(e)[:300]}"
+
+
+@function_tool
+def http_request(ctx: RunContextWrapper[TaskContext], url: str, method: str = "GET",
+                 body: str = "", timeout: int = 15) -> str:
+    """发送单次 HTTP 请求，返回状态码/响应头/正文预览。批量探测请用 shell+python3。"""
+    try:
+        r = requests.request(method, url, data=body or None,
+                             timeout=min(timeout, 60), verify=False)
+        head = "; ".join(f"{k}: {v}" for k, v in list(r.headers.items())[:8])
+        out = f"status={r.status_code}\nheaders: {head}\nbody:\n{r.text[:PREVIEW]}"
+        return _spill_output(ctx, out)
+    except Exception as e:
+        return f"请求失败: {str(e)[:300]}"
+
+
+@function_tool
+def distinguish(url: str, probes: List[str], method: str = "GET", keyword: str = "") -> str:
+    """差分实验（实验代替知识）：url 中用 {payload} 占位，注入多组探测值，
+    对比状态码/长度/关键词差异，差异点即攻击面。"""
+    rows = []
+    for p in probes[:8]:
+        u = url.replace("{payload}", requests.utils.quote(str(p), safe=""))
+        try:
+            r = requests.request(method, u, timeout=10, verify=False,
+                                 data={"payload": p} if method == "POST" else None)
+            row: Dict[str, Any] = {"probe": str(p)[:60], "status": r.status_code,
+                                   "len": len(r.text)}
+            if keyword: row["kw_count"] = r.text.count(keyword)
+            rows.append(row)
+        except Exception as e:
+            rows.append({"probe": str(p)[:60], "error": str(e)[:120]})
+    dims = {k for row in rows for k in ("status", "len", "kw_count") if k in row}
+    diff = any(len({row.get(d) for row in rows if d in row}) > 1 for d in dims)
+    verdict = ("响应存在差异 → 探测面有效，沿差异方向深入" if diff
+               else "响应无差异 → 该探测面无效，换攻击面")
+    return json.dumps({"rows": rows, "differentiated": diff, "verdict": verdict},
+                      ensure_ascii=False)
+
+
+@function_tool
+def web_search(query: str, max_results: int = 5) -> str:
+    """联网搜索（外脑）：不认识的技术栈/报错/CVE，先查再打。"""
+    try:
+        from ddgs import DDGS
+        with DDGS() as d:
+            hits = list(d.text(query, max_results=min(max_results, 8)))
+        return json.dumps([{"title": h.get("title", ""),
+                            "snippet": h.get("body", "")[:300],
+                            "url": h.get("href", "")} for h in hits], ensure_ascii=False)
+    except Exception as e:
+        return f"搜索不可用: {str(e)[:200]}。hint: 依靠内置打法与差分实验"
+
+
+@function_tool
+def find_skills(ctx: RunContextWrapper[TaskContext], query: str, limit: int = 5) -> str:
+    """在技能库中检索相关技能（按名称/描述/触发词匹配），命中即自动解锁（披露）该技能。
+
+    用法：遇到不熟悉的场景时，先调用本工具找找有没有对应打法。
+    """
+    c = ctx.context
+    matches = search_skills(query, limit)
+    for m in matches:
+        if m["name"] not in c.disclosed_skills:
+            c.disclosed_skills.append(m["name"])
+            c.skill_events.append(f"find_skills 检索披露 {m['name']}")
+    return json.dumps({
+        "matches": matches,
+        "disclosed": [m["name"] for m in matches],
+    }, ensure_ascii=False)
+
+
+@function_tool
+def list_tools(ctx: RunContextWrapper[TaskContext], keyword: str = "", limit: int = 20) -> str:
+    """列出本机已安装、可直接调用的安全 CLI 工具（nmap/sqlmap/ffuf/nuclei 等）。
+
+    keyword 可按名称或描述过滤。看完整参数用 get_tool_spec，执行用 run_tool。
+    """
+    tools = sec_tools.available_tools()
+    rows = []
+    for name, spec in tools.items():
+        if keyword and keyword.lower() not in f"{name} {spec.short_description}".lower():
+            continue
+        rows.append({"name": name, "description": spec.short_description or spec.description[:60]})
+        if len(rows) >= max(1, limit):
+            break
+    return json.dumps({"available": len(tools), "tools": rows}, ensure_ascii=False)
+
+
+@function_tool
+def get_tool_spec(ctx: RunContextWrapper[TaskContext], tool_name: str) -> str:
+    """查看某个安全工具的完整说明与参数定义（先 list_tools 找名字）。"""
+    spec = sec_tools.get_spec(tool_name)
+    if spec is None:
+        return json.dumps({"error": f"工具 '{tool_name}' 不存在"}, ensure_ascii=False)
+    return json.dumps({
+        "name": spec.name,
+        "command": spec.command,
+        "description": spec.description,
+        "parameters": [
+            {"name": p.get("name"), "type": p.get("type"), "required": p.get("required"),
+             "flag": p.get("flag"), "format": p.get("format"),
+             "description": str(p.get("description", ""))[:200]}
+            for p in spec.parameters
+        ],
+    }, ensure_ascii=False)
+
+
+@function_tool
+def run_tool(ctx: RunContextWrapper[TaskContext], tool_name: str,
+             args_json: str = "{}", timeout: int = 300) -> str:
+    """执行一个本地安全 CLI 工具。
+
+    args_json 是参数字典的 JSON 字符串，例如 '{"target":"10.0.0.1","ports":"80,443"}'。
+    先 list_tools 看有哪些工具，再 get_tool_spec 看该工具的参数字段。
+    """
+    try:
+        args = json.loads(args_json) if args_json else {}
+    except Exception as e:
+        # 不要静默降级为 {} 再误执行，明确回错误让模型重试
+        return json.dumps({"error": f"args_json 不是合法 JSON：{str(e)[:120]}，请修正后重试"},
+                          ensure_ascii=False)
+    if not isinstance(args, dict):
+        return json.dumps({"error": "args_json 必须是对象（字典），请修正后重试"},
+                          ensure_ascii=False)
+    result = sec_tools.execute(tool_name, args, timeout=timeout)
+    return json.dumps(result, ensure_ascii=False)
+
+
+@function_tool
+def search_cve(ctx: RunContextWrapper[TaskContext], query: str, limit: int = 5) -> str:
+    """在 POC 库中检索 CVE（按产品名 / CVE 编号 / 漏洞摘要关键词）。
+
+    指纹到某产品/版本后，用产品名或 CVE 编号检索已知漏洞，判断是否有现成 POC 或利用思路。
+    """
+    matches = poc_registry.find_pocs(query, limit)
+    return json.dumps({"matches": matches}, ensure_ascii=False)
+
+
+@function_tool
+def list_vulns(ctx: RunContextWrapper[TaskContext]) -> str:
+    """列出系统内置的漏洞类型检测模块（SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD）。
+
+    先看有哪些类型，再用 detect_vuln 取某类型的标准检测规范与 payload。
+    """
+    return json.dumps({"vulns": vuln_registry.list_vulns()}, ensure_ascii=False)
+
+
+@function_tool
+def detect_vuln(ctx: RunContextWrapper[TaskContext], vuln_type: str) -> str:
+    """按漏洞类型加载标准检测规范 + 基础 payload（如 SQLI/XSS/SSTI）。
+
+    指纹到目标后，用本工具取对应漏洞类型的标准打法，再结合 shell/http_request 执行。
+    先 list_vulns 看有哪些类型。
+    """
+    v = vuln_registry.get_vuln(vuln_type)
+    if v is None:
+        return json.dumps({"error": f"未找到漏洞类型 {vuln_type}，可用 list_vulns 查看"},
+                          ensure_ascii=False)
+    return json.dumps({
+        "type": v.type,
+        "name": v.name,
+        "description": v.description,
+        "need_detect": v.need_detect,
+        "prompt": v.prompt,
+        "payloads": v.payloads,
+    }, ensure_ascii=False)
+
+
+@function_tool
+def get_poc(ctx: RunContextWrapper[TaskContext], cve: str) -> str:
+    """按 CVE 编号取完整 POC（含利用原理/步骤/载荷/验证方式）。
+
+    先用 search_cve 找到 CVE 编号，再用本工具取完整利用细节。
+    """
+    p = poc_registry.get_poc(cve)
+    if p is None:
+        return json.dumps({"error": f"未找到 {cve} 的 POC"}, ensure_ascii=False)
+    return json.dumps({
+        "cve": p.cve,
+        "name": p.name,
+        "severity": p.severity,
+        "summary": p.summary,
+        "affected": p.affected,
+        "type": p.poc_type,
+        "principle": p.principle,
+        "steps": p.steps,
+        "payload": p.payload,
+        "verification": p.verification,
+        "references": p.references,
+    }, ensure_ascii=False)
+
+
+@function_tool
+def finalize(ctx: RunContextWrapper[TaskContext], findings: str = "") -> str:
+    """当你认为任务已完成（目标达成或证据枯竭）时调用，提交最终结论并结束本次执行。
+
+    findings 为结论摘要（用中文描述做了什么、发现了什么、结论是什么）。
+    """
+    c = ctx.context
+    c.finalized = True
+    c.final_payload = {"findings": findings}
+    return json.dumps({"finalized": True, "findings": findings}, ensure_ascii=False)
+
+
+@function_tool
+def checkpoint(ctx: RunContextWrapper[TaskContext], reason: str = "") -> str:
+    """在关键节点（阶段完成/重要发现/进展显著）主动存档，便于中断后 --resume 续跑。
+
+    reason 说明为何存档（如「已完成端口扫描，得到 80/443 开放」）。调用时机由你判断，
+    不必每轮都存，但遇到值得保留的里程碑时应主动存。
+    """
+    # 延迟 import，避免与 context_manager 的模块级循环依赖
+    from context_manager import save_state
+    c = ctx.context
+    save_state(c.workdir, c, c.turn_count, c.task, c.charter, c.role)
+    return json.dumps({"checkpointed": True, "turn": c.turn_count,
+                       "reason": reason[:200]}, ensure_ascii=False)
+
+
+@function_tool
+def connect_vpn(ctx: RunContextWrapper[TaskContext]) -> str:
+    """当任务目标需要走 VPN/内网（如远程靶场、需特定网络出口）时调用，后台启用 OpenVPN。
+
+    读取 .env 里的 VPN_CONFIG（.ovpn 绝对路径，可选 VPN_AUTH / VPN_CMD），
+    用 --daemon 后台连接；已连接则直接返回，重复调用安全。
+    """
+    c = ctx.context
+    if c.vpn_connected:
+        return json.dumps({"connected": True, "already": True, "config": VPN_CONFIG},
+                          ensure_ascii=False)
+    if not VPN_CONFIG:
+        return json.dumps({"error": "未配置 VPN_CONFIG（.env 中缺少 .ovpn 路径），无法启用 VPN"},
+                          ensure_ascii=False)
+    if not Path(VPN_CONFIG).exists():
+        return json.dumps({"error": f"VPN 配置文件不存在：{VPN_CONFIG}"}, ensure_ascii=False)
+
+    cmd = [VPN_CMD, "--config", VPN_CONFIG]
+    if VPN_AUTH:
+        cmd += ["--auth-user-pass", VPN_AUTH]
+    cmd += ["--daemon"]
+
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except Exception as e:
+        return json.dumps({"error": f"VPN 启动异常：{str(e)[:200]}"}, ensure_ascii=False)
+
+    if p.returncode != 0:
+        return json.dumps({"error": f"VPN 启动失败（rc={p.returncode}）：{p.stderr[:300]}"},
+                          ensure_ascii=False)
+
+    c.vpn_connected = True
+    return json.dumps({"connected": True, "command": " ".join(cmd), "config": VPN_CONFIG},
+                      ensure_ascii=False)
+
+
+@function_tool
+def blackboard(ctx: RunContextWrapper[TaskContext], action: str, key: str = "",
+               value: str = "", status: str = "done") -> str:
+    """全局黑板：跨轮记录「已完成事项 / 全局变量」，每条带时间戳与状态。
+
+    action 取值：
+      - set : 写入 key=value，可带 status（pending/doing/done/failed，默认 done），自动记时间戳
+      - get : 读取 key 的完整条目（含 value/status/时间戳）
+      - list: 列出全部条目
+      - del : 删除 key
+    """
+    c = ctx.context
+    a = (action or "").strip().lower()
+    if a == "set":
+        if not key:
+            return json.dumps({"error": "set 需要提供 key"}, ensure_ascii=False)
+        if key not in c.blackboard and len(c.blackboard) >= BLACKBOARD_MAX_ENTRIES:
+            # 淘汰最旧条目：优先淘汰已完成/失败的，避免挤掉进行中的关键项
+            done = [k for k, v in c.blackboard.items()
+                    if isinstance(v, dict) and v.get("status") in ("done", "failed")]
+            victim = min(done, key=lambda k: c.blackboard[k].get("ts", 0)) if done \
+                else min(c.blackboard, key=lambda k: c.blackboard[k].get("ts", 0)
+                         if isinstance(c.blackboard[k], dict) else 0)
+            c.blackboard.pop(victim, None)
+        c.blackboard[key] = {
+            "value": value,
+            "status": (status or "done").strip(),
+            "ts": int(time.time()),
+        }
+        return json.dumps({"ok": True, "key": key, "entry": c.blackboard[key]},
+                          ensure_ascii=False)
+    if a == "get":
+        return json.dumps({"key": key, "entry": c.blackboard.get(key)},
+                          ensure_ascii=False)
+    if a == "list":
+        return json.dumps({"blackboard": c.blackboard}, ensure_ascii=False)
+    if a == "del":
+        c.blackboard.pop(key, None)
+        return json.dumps({"ok": True, "deleted": key}, ensure_ascii=False)
+    return json.dumps({"error": f"未知 action：{action}（可用 set/get/list/del）"},
+                      ensure_ascii=False)
+
+
+@function_tool
+def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
+                   timeout: int = 60, max_workers: int = 8) -> str:
+    """并发执行多条独立 shell 命令（换行分隔），用于路径爆破/端口扫描/多 payload 测试等互不依赖的探测。
+
+    commands 用换行分隔，每条独立并发执行，返回各自 rc/输出预览。
+    """
+    cmds = [c.strip() for c in (commands or "").split("\n") if c.strip()]
+    if not cmds:
+        return json.dumps({"error": "commands 为空"}, ensure_ascii=False)
+
+    def _run(cmd):
+        try:
+            p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
+                               timeout=min(timeout, 120))
+            out = (p.stdout or p.stderr or "")[:200]
+            return {"cmd": cmd[:80], "rc": p.returncode, "out": out}
+        except subprocess.TimeoutExpired:
+            return {"cmd": cmd[:80], "error": "超时"}
+        except Exception as e:
+            return {"cmd": cmd[:80], "error": str(e)[:100]}
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(cmds))) as ex:
+        results = list(ex.map(_run, cmds))
+    return json.dumps({"results": results}, ensure_ascii=False)
+
+
+@function_tool
+def list_knowledge(ctx: RunContextWrapper[TaskContext]) -> str:
+    """列出知识库条目（id + 简介），先看简介，再用 get_knowledge 按 id 取全文。"""
+    return json.dumps({"knowledge": knowledge_registry.list_knowledge()}, ensure_ascii=False)
+
+
+@function_tool
+def get_knowledge(ctx: RunContextWrapper[TaskContext], kid: str) -> str:
+    """按 id 取知识库完整内容（如 get_flag/post_exploit/waf_bypass）。"""
+    k = knowledge_registry.get_knowledge(kid)
+    if k is None:
+        return json.dumps({"error": f"未找到知识条目 {kid}，可用 list_knowledge 查看"},
+                          ensure_ascii=False)
+    return json.dumps({"id": k["id"], "content": k["all"]}, ensure_ascii=False)
+
+
+@function_tool
+def set_phase(ctx: RunContextWrapper[TaskContext], sub: str) -> str:
+    """切换当前阶段（recon/enumerate/detect/exploit/post），驱动系统提示按阶段切换目标与焦点。
+
+    当当前阶段目标已达成或需要换方向时调用；下一轮系统提示会自动带上新阶段的目标与焦点。
+    注意：阶段之间有合法转移约束，乱跳会被拒绝（发现 flag 线索可直接切 post）。
+    """
+    from status import set_status, PHASE_DEFS, PHASE_TRANSITIONS
+    c = ctx.context
+    sub = (sub or "").strip().lower()
+    if sub not in PHASE_DEFS:
+        return json.dumps({"error": f"未知阶段 {sub}（可用 {list(PHASE_DEFS.keys())}）"},
+                          ensure_ascii=False)
+    if sub != c.phase:
+        allowed = PHASE_TRANSITIONS.get(c.phase, [])
+        if sub not in allowed:
+            return json.dumps({"error": f"阶段 {c.phase} 只能切到 {allowed}，不能切到 {sub}"},
+                              ensure_ascii=False)
+    c.phase = sub
+    set_status(c.workdir, "execute", "running", sub=sub, turn=c.turn_count)
+    return json.dumps({"ok": True, "phase": sub,
+                       "goal": PHASE_DEFS[sub]["goal"]}, ensure_ascii=False)
+
+
+@function_tool
+def get_payload(ctx: RunContextWrapper[TaskContext], payload_type: str) -> str:
+    """按类型取 payload 字典（sqli/path/lfi/xss/ssrf/ssti/rce/idor/upload/xxe），返回每行一个载荷。
+
+    用于路径爆破、注入 fuzz 等；配合 parallel_shell 或 shell 使用。
+    """
+    payloads = vuln_registry.load_payloads(payload_type)
+    if not payloads:
+        return json.dumps({"error": f"未找到 payload 类型 {payload_type}（可用 sqli/path/lfi/xss 等）"},
+                          ensure_ascii=False)
+    return json.dumps({"type": payload_type, "count": len(payloads),
+                       "payloads": payloads}, ensure_ascii=False)
+
+
+@function_tool
+def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str) -> str:
+    """声明一个独立子任务（互不依赖的探测点/线），主循环会并发调度执行。
+
+    当任务同时出现多个独立的探测分支（如 3 个端口、3 个独立漏洞点）时，
+    用本工具分别声明子任务；每个子任务用独立会话并发执行，结果写回黑板（subtask:<id>）。
+    """
+    c = ctx.context
+    sub = {"id": uuid.uuid4().hex[:8], "desc": desc, "status": "pending", "result": ""}
+    c.subtasks.append(sub)
+    return json.dumps({"spawned": sub}, ensure_ascii=False)
+
+
+@function_tool
+def read_artifact(ctx: RunContextWrapper[TaskContext], artifact_id: str,
+                  offset: int = 0, limit: int = 4000) -> str:
+    """读取之前外置到 artifacts/ 的工具输出全文（大段源码/扫描结果）。
+
+    artifact_id 是工具返回里「artifacts/xxx.txt」中的 xxx；offset/limit 可分段读取。
+    """
+    c = ctx.context
+    path = c.workdir / "artifacts" / f"{artifact_id}.txt"
+    if not path.exists():
+        return json.dumps({"error": f"artifact {artifact_id} 不存在"}, ensure_ascii=False)
+    text = path.read_text(encoding="utf-8")
+    chunk = text[offset:offset + limit]
+    return json.dumps({"artifact_id": artifact_id, "total": len(text),
+                       "offset": offset, "content": chunk}, ensure_ascii=False)
+
+
+@function_tool
+def write_file(ctx: RunContextWrapper[TaskContext], path: str, content: str) -> str:
+    """把内容写入工作目录下的文件（如 python3 脚本、payload 文件）。
+
+    复杂探测逻辑请先写到文件，再用 shell 执行 `python3 <文件>`——避免把大段脚本
+    反复塞进 shell 命令参数、撑爆上下文。path 为相对工作目录的路径。
+    """
+    c = ctx.context
+    try:
+        p = (c.workdir / path).resolve()
+        p.relative_to(c.workdir.resolve())
+    except (ValueError, OSError):
+        return json.dumps({"error": "path 必须在工作目录内"}, ensure_ascii=False)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return json.dumps({"written": str(p), "chars": len(content)}, ensure_ascii=False)
+
+
+def _replace_placeholder(obj, placeholder: str, payload) -> Any:
+    """递归把对象中所有字符串里的占位符替换成 payload（可出现在 url/header/param/body）。"""
+    if isinstance(obj, str):
+        return obj.replace(placeholder, str(payload))
+    if isinstance(obj, dict):
+        return {k: _replace_placeholder(v, placeholder, payload) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_replace_placeholder(v, placeholder, payload) for v in obj]
+    return obj
+
+
+def _run_http(req: dict, timeout: int) -> str:
+    """执行单个 HTTP 请求，返回响应指纹（status + 长度 + body 预览）。"""
+    url = req.get("url", "")
+    method = (req.get("method") or "GET").upper()
+    headers = req.get("header") or req.get("headers") or {}
+    params = req.get("param") or req.get("params") or {}
+    files = req.get("files") or {}
+    data = req.get("data") or req.get("body") or req.get("raw")
+    try:
+        if files:
+            r = requests.request(method, url, headers=headers, params=params,
+                                 files=files, timeout=timeout, verify=False)
+        elif data is not None:
+            r = requests.request(method, url, headers=headers, params=params,
+                                 data=data, timeout=timeout, verify=False)
+        else:
+            r = requests.request(method, url, headers=headers, params=params,
+                                 timeout=timeout, verify=False)
+        return f"status={r.status_code} len={len(r.content)} body={r.text[:1500]}"
+    except Exception as e:
+        return f"error={str(e)[:200]}"
+
+
+def _parse_payloads(payloads: str, payload_type: str) -> List[str]:
+    """解析载荷：payload_type 优先从内置字典加载，否则解析 payloads（逗号分隔或 a-b 范围）。"""
+    if payload_type:
+        pl = vuln_registry.load_payloads(payload_type.strip().lower())
+        return [p for p in pl if p.strip()]
+    if (payloads or "").strip():
+        raw = payloads.strip()
+        if "-" in raw and raw.replace("-", "").isdigit():
+            lo_s, hi_s = raw.split("-", 1)
+            lo, hi = int(lo_s), int(hi_s)
+            if hi < lo:
+                lo, hi = hi, lo
+            if hi - lo > 499:
+                hi = lo + 499
+            return [str(i) for i in range(lo, hi + 1)]
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    return []
+
+
+@function_tool
+def fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
+         payloads: str = "", payload_type: str = "", placeholder: str = "{FUZZ}",
+         max_workers: int = 10, timeout: int = 15) -> str:
+    """差分模糊测试（代码级并发 + 响应归一化归组，替代手写 shell 逐个试）。
+
+    把 payload 批量替换到请求模板的占位符位置（默认 {FUZZ}，可出现在 url/param/header/body），
+    并发发请求，把响应里的 payload 归一化为 {payload} 后按「相同响应」归组，返回差异分组——
+    一眼看出哪些载荷改变了响应（即攻击面）。
+
+    request_template 是 JSON 字符串，例如：
+      {"url": "http://host/download.php?id={FUZZ}", "method": "GET", "header": {"Cookie": "x"}}
+    payload_type 可用 sqli/path/lfi/xss/ssti/rce/idor/upload/xxe 等内置字典；
+    或 payloads 传逗号分隔列表 / 数值范围（如 1-100）。
+    """
+    try:
+        req = json.loads(request_template)
+    except Exception as e:
+        return json.dumps({"error": f"request_template 不是合法 JSON：{str(e)[:120]}"},
+                          ensure_ascii=False)
+
+    pl = _parse_payloads(payloads, payload_type)
+    if not pl:
+        return json.dumps({"error": "未提供 payloads 或 payload_type"}, ensure_ascii=False)
+    pl = pl[:200]
+
+    def _test(p):
+        return _run_http(_replace_placeholder(req, placeholder, p), timeout)
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(pl))) as ex:
+        results = list(ex.map(_test, pl))
+
+    groups: Dict[str, List[str]] = {}
+    for p, resp in zip(pl, results):
+        norm = resp.replace(str(p), "{payload}")
+        groups.setdefault(norm, []).append(str(p))
+
+    rows = [{"payloads": v, "response": k} for k, v in groups.items()]
+    diff = len(groups) > 1
+    return json.dumps({
+        "tested": len(pl),
+        "groups": rows,
+        "differentiated": diff,
+        "verdict": ("响应存在差异 → 攻击面有效，聚焦差异组深入" if diff
+                    else "所有载荷响应一致 → 该位置/参数无差异，换攻击面"),
+    }, ensure_ascii=False)
+
+
+# ================= 工具按需加载（分桶） =================
+# 常驻核心工具：任何任务都需要的基础执行/状态/归档能力，schema 精简，不随上下文增长。
+CORE_TOOL_NAMES = {"shell", "http_request", "read_artifact", "write_file", "finalize",
+                   "checkpoint", "blackboard", "set_phase", "find_skills", "fuzz",
+                   "spawn_subtask", "parallel_shell", "enable_tool", "list_disabled_tools"}
+
+# 工具分组：按需加载时可用「组名」一次性启用一批（配合 enable_tool）。
+TOOL_GROUPS = {
+    "web": ["distinguish", "web_search"],
+    "seccli": ["list_tools", "get_tool_spec", "run_tool"],
+    "poc": ["search_cve", "get_poc"],
+    "vuln": ["list_vulns", "detect_vuln", "get_payload"],
+    "knowledge": ["list_knowledge", "get_knowledge"],
+    "vpn": ["connect_vpn"],
+    "platform": ["check_vpn", "list_challenges", "start_challenge",
+                 "get_hint", "submit_flag", "close_challenge"],
+}
+
+_BASE_TOOLS = [shell, http_request, distinguish, web_search, find_skills,
+               list_tools, get_tool_spec, run_tool, search_cve, list_vulns,
+               detect_vuln, get_poc, finalize, checkpoint, connect_vpn, blackboard,
+               parallel_shell, list_knowledge, get_knowledge, set_phase, get_payload,
+               spawn_subtask, read_artifact, write_file, fuzz] + platform_tools.PLATFORM_TOOLS
+
+ALL_TOOL_NAMES = {t.name for t in _BASE_TOOLS}
+
+
+@function_tool
+def enable_tool(ctx: RunContextWrapper[TaskContext], name: str) -> str:
+    """启用一个此前未挂载的工具。可传「组名」（platform/poc/vuln/knowledge/seccli/web/vpn）
+    或单个工具名；当前未挂载的工具用 list_disabled_tools 查看。"""
+    c = ctx.context
+    if c.enabled_tools is None:
+        return json.dumps({"error": "当前上下文已全部启用工具，无需按需加载"}, ensure_ascii=False)
+    key = (name or "").strip().lower()
+    if key in TOOL_GROUPS:
+        enabled = {n for n in TOOL_GROUPS[key]}
+    else:
+        hit = next((n for n in ALL_TOOL_NAMES if n.lower() == key), None)
+        if hit is None:
+            return json.dumps({"error": f"未知工具/组：{name}，可用 list_disabled_tools 查看"},
+                              ensure_ascii=False)
+        enabled = {hit}
+    c.enabled_tools.update(enabled)
+    return json.dumps({"enabled": sorted(enabled),
+                       "available_now": sorted(c.enabled_tools)}, ensure_ascii=False)
+
+
+@function_tool
+def list_disabled_tools(ctx: RunContextWrapper[TaskContext]) -> str:
+    """列出当前未挂载（需用 enable_tool 启用）的工具，以及可一次性启用的工具组。"""
+    c = ctx.context
+    if c.enabled_tools is None:
+        return json.dumps({"disabled": [], "note": "全部工具已启用"}, ensure_ascii=False)
+    disabled = sorted(n for n in ALL_TOOL_NAMES if n not in c.enabled_tools)
+    return json.dumps({"disabled": disabled, "groups": TOOL_GROUPS}, ensure_ascii=False)
+
+
+def _lazy_enabled(name: str):
+    """动态开关：非核心工具仅在 ctx.enabled_tools 中包含该工具名时启用。"""
+    def _check(ctx, agent) -> bool:
+        c = getattr(ctx, "context", None)
+        if c is None or c.enabled_tools is None:
+            return True
+        return name in c.enabled_tools
+    return _check
+
+
+def _apply_tool_gating(tools):
+    """给非核心工具挂上 is_enabled 动态开关（核心工具保持默认全开）。"""
+    for t in tools:
+        if t.name not in CORE_TOOL_NAMES:
+            t.is_enabled = _lazy_enabled(t.name)
+    return tools
+
+
+ALL_TOOLS = _apply_tool_gating(_BASE_TOOLS + [enable_tool, list_disabled_tools])
+
+
+def build_default_tools(groups=("platform", "vpn", "seccli")) -> set:
+    """构建「初始启用工具集」= 核心工具 + 指定工具组。
+
+    用于 main.py 跑分任务初始化 ctx.enabled_tools：核心工具常驻，平台/VPN/安全CLI
+    默认可用，其余（web/poc/vuln/knowledge）按需用 enable_tool 再挂载。
+    """
+    enabled = set(CORE_TOOL_NAMES)
+    for g in groups:
+        enabled.update(TOOL_GROUPS.get(g, []))
+    return enabled

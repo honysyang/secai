@@ -1,0 +1,18 @@
+type: SQLI
+name: SQL 注入
+description: 数据库查询参数存在注入，可读取/篡改数据库
+need_detect: 目标存在数据库查询参数（id/search/query/keyword/category 等），响应随参数值变化
+prompt: |
+  SQL 注入检测：
+  1. 用单引号 ' 或双引号 " 探测，观察是否报 SQL 语法错误或响应异常
+  2. 用 1' or '1'='1 与 1' and '1'='2 对比响应差异（差异说明存在注入）
+  3. 用 1 order by N 判断列数
+  4. 用 union select 尝试回显
+  5. 确认注入后，用 sqlmap 或手写脚本进一步利用
+payloads:
+  - "'"
+  - '"'
+  - "1' or '1'='1"
+  - "1' and '1'='2"
+  - "1 order by 1"
+  - "1 union select 1,2,3"

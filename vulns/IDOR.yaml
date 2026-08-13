@@ -1,0 +1,15 @@
+type: IDOR
+name: 越权访问
+description: 直接对象引用未鉴权，可访问他人资源
+need_detect: 目标存在对象 ID 参数（id/uid/user_id/order_id 等），且资源按 ID 访问
+prompt: |
+  IDOR 检测：
+  1. 修改 id/uid 等数字参数为其他值（id=1 改 id=2），对比响应
+  2. 数字型参数在附近范围 fuzz（如 1-100）
+  3. 若参数同时出现在 JWT 中，需同时修改 JWT payload 对应字段
+  4. 测试参数必须存在于原请求包中，不猜不存在的参数
+payloads:
+  - "id=2"
+  - "id=0"
+  - "id=-1"
+  - "uid=1"

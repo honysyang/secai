@@ -1,0 +1,15 @@
+type: XSS
+name: 跨站脚本
+description: 用户输入未过滤导致脚本注入，可窃取 Cookie/会话
+need_detect: 目标存在回显用户输入的功能（搜索框/留言/评论/URL 参数回显）
+prompt: |
+  XSS 检测：
+  1. 输入 <script>alert(1)</script> 或 <img src=x onerror=alert(1)>，观察是否回显/执行
+  2. 若被过滤，尝试大小写/编码/事件绕过（onerror/onload/onmouseover）
+  3. 检查注入点在标签属性、JS 上下文还是 HTML 正文
+  4. 用 distinguish 对比过滤前后差异
+payloads:
+  - "<script>alert(1)</script>"
+  - "<img src=x onerror=alert(1)>"
+  - "\"'><img src=x onerror=alert(1)>"
+  - "<svg/onload=alert(1)>"

