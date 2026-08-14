@@ -9,6 +9,8 @@
 > - `solution_templates.py` → `solvecraft/solution_templates.py`
 > - `demo_tools.py` 保留在项目根目录
 > - 各 `*_registry.py` → `arsenal/registries/`；skills/roles/pocs/vulns/payloads/knowledge/tools → `arsenal/`
+>
+> 作者：一片丹心（别名：奋进的小杨）
 
 > 依据：当前仓库（commit 63a0101）评估报告。上一轮的六条修复已全部落地，本手册处理**残留的 1 个重伤 + 3 个中伤 + 3 个小伤**，全部为可直接照抄的代码补丁。
 > 总目标：通关题不再空烧 token、hint/skip 机制对 Web 题恢复生效、终局信号零丢失、接力档案按题检索。
