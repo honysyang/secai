@@ -15,6 +15,7 @@ from agents import RunHooks
 
 from core.events import BUS
 from arsenal.registries.skill_registry import detect_skill_triggers
+from runtime.log import log_info, log_warn, log_debug
 
 
 def _output_text(response) -> str:
@@ -72,6 +73,7 @@ def _auto_advance_phase(task_ctx, text: str) -> bool:
         if ('"vuln": true' in low or '"vuln":"true"' in low
                 or '"vulnerable": true' in low or '"differentiated": true' in low):
             task_ctx.phase = "exploit"
+            log_warn("[漏洞] 检测到漏洞确认（vuln/vulnerable/differentiated=true）→ 阶段切到 exploit")
             return True
     return False
 
@@ -140,6 +142,71 @@ def _is_network_unreachable(text: str) -> bool:
     return any(k in low for k in _NET_UNREACHABLE_HINTS)
 
 
+def _clip(text, limit: int) -> str:
+    """压缩换行并按上限截断，超长时附加字数提示（避免终端被长文本刷屏）。"""
+    text = str(text).replace("\n", " ")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}…（已截断，共 {len(text)} 字符）"
+
+
+# 工具返回内容中的错误特征（系统工具自身的固定报错格式，非靶场响应正文）
+_TOOL_ERROR_HINTS = (
+    '"error"', '命令超时', '执行失败', '请求失败', '搜索不可用',
+    '未创建', '无权限', 'denied', 'refused', 'timed out', '不存在',
+)
+
+
+def _is_error_result(text: str) -> bool:
+    """判断工具返回内容是否属于失败/报错，用于把日志级别升级为 WARN。"""
+    low = text.lower()
+    return any(k in low for k in _TOOL_ERROR_HINTS)
+
+
+def _log_event(code: str, kind: str, data: dict) -> None:
+    """把事件流中的关键事件投影成带时间戳/级别的终端日志。
+
+    终端只展示 INFO 及以上；thought/reward/llm_call 等细粒度事件用 DEBUG，
+    只落盘到 data/logs/*.log，不刷终端。完整事件仍由 _emit 写入 events.jsonl。
+    """
+    tag = f"[{code}] " if code and code != "generic" else ""
+    agent = str(data.get("agent", ""))
+    tool = str(data.get("tool", ""))
+
+    if kind == "agent_start":
+        log_info(f"{tag}智能体启动：{agent}")
+    elif kind == "agent_end":
+        log_info(f"{tag}智能体结束：{agent} → {_clip(data.get('text', ''), 500)}")
+    elif kind == "tool":
+        log_info(f"{tag}调用工具：{agent} → {tool}")
+    elif kind == "tool_result":
+        text = str(data.get("text", ""))
+        if _is_error_result(text):
+            log_warn(f"{tag}工具返回异常：{tool}（{len(text)} 字符）{_clip(text, 300)}")
+        else:
+            log_info(f"{tag}工具返回：{tool}（{len(text)} 字符）{_clip(text, 300)}")
+    elif kind == "skill_disclosed":
+        log_warn(f"{tag}技能披露：{tool} 命中证据 → {data.get('skill')}")
+    elif kind == "phase_changed":
+        log_warn(f"{tag}阶段切换：{agent} → {data.get('phase')}（触发 {data.get('trigger')}）")
+    elif kind == "net_unreachable":
+        log_warn(f"{tag}网络不可达：{tool}")
+    elif kind == "token":
+        usage = data.get("usage", {})
+        total = data.get("total", {})
+        log_info(f"{tag}Token：{agent} 本轮 +{usage.get('total', 0)}，"
+                 f"累计 {total.get('total', 0)}")
+    elif kind == "llm_call":
+        log_debug(f"{tag}LLM 调用：{agent}")
+    elif kind == "thought":
+        text = str(data.get("text", ""))[:200].replace("\n", " ")
+        log_debug(f"{tag}思考：{agent} → {text}")
+    elif kind == "reward":
+        log_debug(f"{tag}增量打分：{tool} score={data.get('score')}")
+    else:
+        log_info(f"{tag}[{kind}] {json.dumps(data, ensure_ascii=False)[:200]}")
+
+
 class EventStreamHooks(RunHooks):
     def __init__(self, workdir: Path, code: str):
         self.workdir = workdir
@@ -150,7 +217,7 @@ class EventStreamHooks(RunHooks):
         # 保留文件留痕（向后兼容，main.py 读 events.jsonl 的地方不变）
         entry = {"kind": kind, "ts": round(time.time(), 1), "code": self.code, **data}
         line = json.dumps(entry, ensure_ascii=False)
-        print(f"  [{kind}] {json.dumps(data, ensure_ascii=False)[:200]}")
+        _log_event(self.code, kind, data)
         with open(self.workdir / "events.jsonl", "a", encoding="utf-8") as f:
             f.write(line + "\n")
         # 发射到进程级事件总线（内存历史 + SQLite 落库订阅者）

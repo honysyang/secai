@@ -29,6 +29,7 @@ from arsenal.registries import knowledge_registry
 from platform import platform_tools
 from arsenal.registries.skill_registry import find_skills as search_skills, create_skill
 from runtime.budget import brute_gate
+from runtime.log import log_info
 from adapters.config import (VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL,
                              BENCHMARK_TOKEN)
 from platform.platform_client import PlatformClient, TaskEnded, TaskNotFound
@@ -110,6 +111,7 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     flags = _scan_flags(text)
     if not flags:
         return ""
+    log_warn(f"[FLAG] 检测到 flag：{', '.join(flags)}")
     c = ctx.context
     code = c.current_code
     notes = [f"[系统·检测到flag] {f}" for f in flags]
@@ -141,6 +143,7 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
         # ---- R1 核心：correct=true 后的机械判决，不等 LLM finalize ----
         c.correct_flags.append(f)
         fc, tc = r.get("correct_flag_count"), r.get("total_flag_count")
+        log_warn(f"[FLAG] {f} 提交正确（进度 {fc}/{tc or '?'}）")
         if fc and tc and fc < tc:
             notes.append(
                 f"[系统] 本题共 {tc} 面 flag，已拿 {fc} 面——"
@@ -268,10 +271,14 @@ def find_skills(ctx: RunContextWrapper[TaskContext], query: str, limit: int = 5)
     """
     c = ctx.context
     matches = search_skills(query, limit)
+    newly = []
     for m in matches:
         if m["name"] not in c.disclosed_skills:
             c.disclosed_skills.append(m["name"])
             c.skill_events.append(f"find_skills 检索披露 {m['name']}")
+            newly.append(m["name"])
+    if newly:
+        log_info(f"find_skills 检索 '{query}' → 披露技能 {newly}")
     return json.dumps({
         "matches": matches,
         "disclosed": [m["name"] for m in matches],
@@ -638,6 +645,8 @@ def blackboard(ctx: RunContextWrapper[TaskContext], action: str, key: str = "",
             entry["supersedes"] = supersedes
         c.blackboard[key] = entry
         _persist_blackboard(ctx)  # 落盘，挂起/重试时保留进度
+        ev = f"，证据={evidence[:60]}" if evidence else ""
+        log_info(f"[黑板] {key} = {str(value)[:60]}（{status}，verified={verified}{ev}）")
         return json.dumps({"ok": True, "key": key, "entry": entry},
                           ensure_ascii=False)
     if a == "get":

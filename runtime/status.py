@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from runtime.log import log_info
+
 PHASES = ("legislate", "assign", "execute", "report")
 STATUSES = ("running", "finish", "error", "interrupted")
 # execute 阶段的子状态（由 Agent 通过 set_phase 工具标记）
@@ -68,6 +70,10 @@ def set_status(workdir: Path, phase: str, status: str, **extra) -> None:
     }
     (workdir / "status.json").write_text(
         json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 状态变化日志：追踪系统当前处于哪个阶段/状态（code/sub/turn 等关键字段）
+    detail = " ".join(f"{k}={v}" for k, v in extra.items() if k in ("code", "sub", "turn"))
+    log_info(f"状态更新：phase={phase} status={status}"
+             f"{' ' + detail if detail else ''}")
 
 
 def get_status(workdir: Path) -> Dict[str, Any]:

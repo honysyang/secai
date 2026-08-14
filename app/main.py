@@ -29,7 +29,8 @@ from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
 from runtime.model_pool import ModelPool, ModelExhaustedError, is_model_failure
 from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
-from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
+from adapters.config import (BENCHMARK_BASE_URL, BENCHMARK_TOKEN,
+                             BASE_URL, MODEL_NAME, API_KEY, VPN_CONFIG)
 from core.context_manager import compact_if_needed
 import adapters.db as db_mod
 from demo_tools import build_default_tools
@@ -37,10 +38,13 @@ from core.events import BUS
 from core.hooks import EventStreamHooks
 from platform.platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
 from arsenal.registries.role_registry import assign_role
+from arsenal.registries.skill_registry import load_skills
+from arsenal.registries import sec_tools
 from platform.scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
 from solvecraft.solution_templates import append_solution_template, load_solution_hint
 from runtime.status import set_status
 from runtime.deadline import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
+from runtime.log import log_info, log_warn, log_error
 from core.task_context import TaskContext
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -67,6 +71,7 @@ def _init_observability() -> None:
     db = db_mod.init_default()
     BUS.subscribe(db_mod.db_subscriber(db))
     _db_initialized = True
+    log_info("可观测性初始化完成：SQLite 落库 + 事件总线订阅")
 
 # 跑分任务模板已抽离到 prompts/tsec_task.txt（见下方 build_default_task）
 
@@ -153,12 +158,12 @@ async def run_with_model_fallback(agent, input, *, hooks=None, context=None,
             entry = model_pool.next(current_name=current_name,
                                     reason=f"model_failure:{type(exc).__name__}")
             if entry is None:
-                print(f"  [model-exhausted] {agent_name or '外层 Agent'} 所有模型均不可用：{exc}")
+                log_error(f"[model-exhausted] {agent_name or '外层 Agent'} 所有模型均不可用：{exc}")
                 raise ModelExhaustedError(
                     f"{agent_name or '外层 Agent'} 模型池耗尽") from exc
             agent.model = entry.model
-            print(f"  [model-fallback] {agent_name or '外层 Agent'} {current_name} 失败，"
-                  f"切换到 {entry.name} 继续")
+            log_warn(f"[model-fallback] {agent_name or '外层 Agent'} {current_name} 失败，"
+                     f"切换到 {entry.name} 继续")
 
 
 async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None) -> None:
@@ -302,7 +307,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     challenge_hooks = EventStreamHooks(challenge_workdir, code)
 
     role = assign_role(code, desc)  # 题级派任（P0-5：按 unique_code 前缀 + 描述）
-    print(f"== 单题 {code}：派任 {role['role']} ==")
+    log_info(f"== 单题 {code}：派任 {role['role']} ==")
+    log_info(f"单题 {code} 目标：{desc.strip()[:150]}，flag 目标 {flag_total} 面（已拿 {flag_done}）")
     ctx = TaskContext(workdir=challenge_workdir, disclosed_skills=list(role["playbooks"]),
                       task=task, charter=charter, role=role)
     ctx.blackboard = _load_blackboard(challenge_workdir)  # 回注上次尝试进度（挂起/重试）
@@ -327,6 +333,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     executor = build_executor(role, charter, brief,
                               field_notes=load_notes_for(code) or _load_field_notes(),
                               model=model_pool.current.model)
+    log_info(f"单题 {code} 模型池：{model_pool}，起始模型 {model_pool.current.name}")
     session = SQLiteSession(session_id=f"challenge_{code}",
                             db_path=str(SESSIONS_DIR / f"challenge_{code}.sqlite"))
 
@@ -361,8 +368,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     old = getattr(executor.model, "model", "?")
                     executor.model = entry.model
                     switched = True
-                    print(f"  [switch] 单题 {code} token {used} 到换脑档，"
-                          f"{old} -> {entry.name}")
+                    log_warn(f"[switch] 单题 {code} token {used} 到换脑档，"
+                             f"{old} -> {entry.name}")
             if suspend_tokens and used >= suspend_tokens:
                 outcome = "suspended"
                 break
@@ -386,12 +393,12 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     model_pool.mark_failed(current_name)
                     entry = model_pool.next(current_name=current_name, reason=f"model_failure:{type(exc).__name__}")
                     if entry is None:
-                        print(f"  [model-exhausted] 单题 {code} 所有模型均不可用：{exc}")
+                        log_error(f"[model-exhausted] 单题 {code} 所有模型均不可用：{exc}")
                         outcome = "fatal"
                         break
                     executor.model = entry.model
-                    print(f"  [model-fallback] 单题 {code} {current_name} 失败，"
-                          f"切换到 {entry.name} 继续同一会话")
+                    log_warn(f"[model-fallback] 单题 {code} {current_name} 失败，"
+                             f"切换到 {entry.name} 继续同一会话")
                     # 不更新 next_input，直接继续 while 循环用同一输入重试
                     continue
                 # 非模型类异常（如平台错误、工具异常）按原逻辑抛出，由外层处理
@@ -420,7 +427,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
 
             # 网络不可达：连续 2 次连接失败/超时 → 判定本题不可达，机械换题
             if ctx.net_fail_turns >= 2:
-                print(f"  [skip] 单题 {code} 连续 {ctx.net_fail_turns} 次网络不可达，机械换题")
+                log_warn(f"[skip] 单题 {code} 连续 {ctx.net_fail_turns} 次网络不可达，机械换题")
                 outcome = "stuck"
                 break
 
@@ -433,7 +440,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             if ctx.turn_tool_count == 0:
                 ctx.empty_turns += 1
                 if ctx.empty_turns >= SINGLE_EMPTY_TURNS:
-                    print(f"  [skip] 单题 {code} 连续 {ctx.empty_turns} 轮空转，机械换题")
+                    log_warn(f"[skip] 单题 {code} 连续 {ctx.empty_turns} 轮空转，机械换题")
                     outcome = "stuck"
                     break
             else:
@@ -449,22 +456,22 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                                         reason=f"stuck:{stuck_action.reason}")
                 if entry is not None and entry.name != current_name:
                     executor.model = entry.model
-                    print(f"  [model-switch] 单题 {code} {stuck_action.reason}，"
-                          f"{current_name} -> {entry.name} 接管会话")
+                    log_warn(f"[model-switch] 单题 {code} {stuck_action.reason}，"
+                             f"{current_name} -> {entry.name} 接管会话")
                     next_input = switch_model_prompt(ctx, current_name, entry.name)
                     ctx.zero_gain_turns = 0
                     continue
                 # 无可用候选时落回 scheduler 决策
             elif stuck_action.action == StuckActionType.SELF_RESCUE:
-                print(f"  [self-rescue] 单题 {code} {stuck_action.reason}"
-                      f"，解锁技能 {stuck_action.extra_skills}，阶段重置")
+                log_warn(f"[self-rescue] 单题 {code} {stuck_action.reason}"
+                         f"，解锁技能 {stuck_action.extra_skills}，阶段重置")
                 # 自救时压缩上下文：用 compactor_agent 摘要历史并清空 session
                 summary = await compact_session(
                     ctx, session, getattr(executor, "model", None))
                 if summary:
-                    print(f"  [self-rescue] 单题 {code} 历史压缩成功")
+                    log_info(f"[self-rescue] 单题 {code} 历史压缩成功")
                 else:
-                    print(f"  [self-rescue] 单题 {code} 历史压缩失败或跳过")
+                    log_warn(f"[self-rescue] 单题 {code} 历史压缩失败或跳过")
                 next_input = stuck_action.next_input
                 ctx.zero_gain_turns = 0
                 continue
@@ -488,11 +495,11 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     hint = f"（获取提示失败：{str(e)[:120]}）"
                 hint_used = True
                 ctx.zero_gain_turns = 0
-                print(f"  [hint] 单题 {code} 停滞，机械看提示")
+                log_info(f"[hint] 单题 {code} 停滞，机械看提示")
                 next_input = f"本题卡住。系统已获取提示：\n{hint}\n\n请结合提示继续攻击本题。"
                 continue
             if action == "skip":
-                print(f"  [skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
+                log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
                 outcome = "stuck"
                 break
 
@@ -508,7 +515,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     "ts": int(time.time()),
                     "verified": False,
                 }
-                print(f"  [coach] 单题 {code} hint 后仍停滞 {ctx.zero_gain_turns} 轮，教练给方向")
+                log_info(f"[coach] 单题 {code} hint 后仍停滞 {ctx.zero_gain_turns} 轮，教练给方向")
                 next_input = (f"本题卡住。教练建议（可尝试的新方向）：\n{advice}\n\n"
                               f"请结合建议继续尝试，产出新证据。")
                 continue
@@ -530,7 +537,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
 
             # 历史压缩
             if await compact_if_needed(session, ctx):
-                print("  [compact] 单题历史已压缩")
+                log_info("[compact] 单题历史已压缩")
 
             next_input = "继续攻击本题：调用工具产出新证据增量，或调用 finalize 提交本题结论。"
     finally:
@@ -552,6 +559,19 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
 
 async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict:
     _init_observability()  # 事件总线 → SQLite 落库（只初始化一次）
+    log_info("===== 跑分任务开始 =====")
+    log_info(
+        f"启动配置：模型 {MODEL_NAME}，网关 {BASE_URL}，"
+        f"API_KEY {'已配置' if API_KEY else '未配置'}，"
+        f"平台 {'已配置' if BENCHMARK_BASE_URL and BENCHMARK_TOKEN else '未配置'}，"
+        f"VPN {'已配置' if VPN_CONFIG else '未配置'}，resume={resume}"
+    )
+    # 任务与系统能力摘要：启动期一眼确认「任务是什么、加载了什么、具备哪些能力」
+    log_info(f"任务摘要：{task.strip()[:200]}")
+    skills = load_skills()
+    log_info(f"技能库加载：{len(skills)} 个技能（{', '.join(sorted(skills))[:300]}）")
+    available_tools = sec_tools.available_tools()
+    log_info(f"本机安全工具：{len(available_tools)} 个可用（{', '.join(sorted(available_tools))[:300]}）")
     workdir = WORKDIR
     workdir.mkdir(exist_ok=True)
     hooks = EventStreamHooks(workdir, "generic")
@@ -559,6 +579,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     # 外层 Agent 全局模型池（与单题 executor 内部模型池隔离，互不污染）
     global global_model_pool
     global_model_pool = ModelPool()
+    log_info(f"== 模型池就绪：{global_model_pool} ==")
     # 同步更新外层 Agent 默认模型为当前模型池入口，避免首次调用仍用旧默认
     if global_model_pool is not None:
         manager_agent.model = global_model_pool.current.model
@@ -572,7 +593,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     (workdir / "events.jsonl").write_text("", encoding="utf-8")
 
     # ① 管理者·立法（全局一次）
-    print("== 管理者：写使命宪章 ==")
+    log_info("== 管理者：写使命宪章 ==")
     set_status(workdir, "legislate", "running")
     charter_result = await run_with_model_fallback(
         manager_agent,
@@ -586,10 +607,10 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
     # 全局 fallback 角色（单题会按 unique_code 重新派任）
     base_role = assign_role(role_hint, task)
-    print(f"== 全局角色：{base_role['role']} ==")
+    log_info(f"== 全局角色：{base_role['role']} ==")
 
     # ② 规划师·全局计划（一次，单题复用 + 单题 brief 补充）
-    print("== 规划师：任务深度分析，产出作战计划 ==")
+    log_info("== 规划师：任务深度分析，产出作战计划 ==")
     plan_result = await run_with_model_fallback(
         planner_agent,
         input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
@@ -612,7 +633,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         for c in client.list_challenges():
             if c.get("container_status") in ("available", "stopped", ""):
                 client.close_challenge(c.get("unique_code"))
-                print(f"  [cleanup] 清理残留容器 {c.get('unique_code')}")
+                log_info(f"[cleanup] 清理残留容器 {c.get('unique_code')}")
     except Exception:
         pass
 
@@ -636,7 +657,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
             if TASK_DEADLINE_TS:
                 try:
                     if time.time() >= float(TASK_DEADLINE_TS) - DEADLINE_SAFE_MARGIN:
-                        print("== deadline 到达，停止跑分 ==")
+                        log_warn("== deadline 到达，停止跑分 ==")
                         break
                 except ValueError:
                     pass
@@ -646,7 +667,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 challenges = await asyncio.to_thread(client.list_challenges)
             except (TaskEnded, TaskNotFound) as e:
                 fatal_reason = str(e)
-                print(f"== 平台终止：{fatal_reason} ==")
+                log_warn(f"== 平台终止：{fatal_reason} ==")
                 break
 
             # 自适应并发：持续 start 直到 container_busy（名额满）或没题或软上限
@@ -666,7 +687,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                     break
                 except Exception as e:
                     attempts[code] = attempts.get(code, 0) + 1
-                    print(f"  [start] 启动 {code} 失败：{str(e)[:200]}，跳过")
+                    log_warn(f"[start] 启动 {code} 失败：{str(e)[:200]}，跳过")
                     continue
                 if not addrs:
                     attempts[code] = attempts.get(code, 0) + 1
@@ -674,10 +695,10 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 # start 成功：真正占用容器，创建跑题任务
                 t = asyncio.create_task(_run_one(code, desc, addrs, difficulty, chal))
                 active[code] = t
-                print(f"  [slot] 启动 {code}（活跃 {len(active)}/{MAX_SLOTS}）")
+                log_info(f"[slot] 启动 {code}（活跃 {len(active)}/{MAX_SLOTS}）")
 
             if not active:
-                print("== 全部题目已完成（无可选题目）==")
+                log_info("== 全部题目已完成（无可选题目）==")
                 break
 
             # 等待任一单题完成
@@ -693,7 +714,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                     outcome = t.result()  # _run_one 直接返回 outcome
                 except Exception as e:
                     outcome = "error"
-                    print(f"  [error] 单题 {code} 异常：{str(e)[:200]}")
+                    log_error(f"[error] 单题 {code} 异常：{str(e)[:200]}")
                 # 关闭容器释放名额：检查返回值，失败重试（close 静默失败是 container_busy 灾难根因）
                 closed = False
                 for _ in range(3):
@@ -705,12 +726,12 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                         break
                     await asyncio.sleep(1)
                 if not closed:
-                    print(f"  [warn] 单题 {code} 容器关闭失败，名额可能泄漏")
+                    log_warn(f"[warn] 单题 {code} 容器关闭失败，名额可能泄漏")
                 # attempts 只对真正跑过且未解的题降权（container_busy/start_failed 已在 start 阶段处理）
                 if outcome in ("stuck", "suspended", "error"):
                     attempts[code] = attempts.get(code, 0) + 1
                 results.append({"code": code, "outcome": outcome})
-                print(f"== 单题 {code} 结果：{outcome} ==")
+                log_info(f"== 单题 {code} 结果：{outcome} ==")
                 if outcome == "fatal":
                     fatal_reason = "task_ended"
                     fatal_hit = True
@@ -721,7 +742,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                     other.cancel()
                 break
     except KeyboardInterrupt:
-        print("\n== 已中断 ==")
+        log_warn("== 已中断 ==")
         set_status(workdir, "execute", "interrupted")
         for t in active.values():
             t.cancel()
@@ -751,7 +772,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     print("\n===== 战报 =====\n" + report_text)
     set_status(workdir, "report", "finish")
 
-    print(f"\n== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
+    log_info(f"== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
     return {"status": "finished", "results": results, "report": report_text}
 
 
@@ -764,5 +785,4 @@ if __name__ == "__main__":
     task = args[0] if args else build_default_task()
     role_hint = args[1] if len(args) > 1 else ""
     out = asyncio.run(run_task(task, role_hint, resume=resume))
-    print("\n最终状态：", json.dumps({k: v for k, v in out.items() if k != "report"},
-                                  ensure_ascii=False))
+    log_info(f"最终状态：{json.dumps({k: v for k, v in out.items() if k != 'report'}, ensure_ascii=False)}")
