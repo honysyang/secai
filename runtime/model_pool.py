@@ -37,17 +37,34 @@ class ModelExhaustedError(RuntimeError):
 def is_model_failure(exc: Exception) -> bool:
     """判断异常是否属于「模型服务端失败/额度/限流/鉴权」类，应触发灾备切换。
 
-    包含：openai 各类 APIError、RateLimitError、AuthenticationError、超时。
+    包含：openai 各类 APIError、RateLimitError、AuthenticationError、超时，
+    以及百度等兼容网关常见的鉴权/限流/余额/服务不可用错误提示。
     不包含：MaxTurnsExceeded（回合上限，不是模型问题）。
     """
     if isinstance(exc, (APIError, RateLimitError, AuthenticationError,
                         APIStatusError, APITimeoutError)):
         return True
-    # 兼容某些后端返回的通用异常提示
+    # 兼容某些后端返回的通用异常提示（覆盖百度/智谱/通义等兼容网关）
     msg = str(exc).lower()
-    if any(k in msg for k in ("insufficient_quota", "quota", "rate limit",
-                               "too many requests", "payment_required",
-                               "invalid api key", "unauthorized", "timeout")):
+    keywords = (
+        # 额度 / 余额 / 配额
+        "insufficient_quota", "quota", "insufficient balance",
+        "account balance", "no quota", "credit exhausted", "余额不足",
+        # 限流
+        "rate limit", "too many requests", "throttled", "request rate",
+        # 鉴权
+        "invalid api key", "unauthorized", "authentication", "token invalid",
+        "api key invalid", "invalid token", "鉴权",
+        # 超时
+        "timeout", "timed out",
+        # 服务端不可用
+        "service unavailable", "internal server error", "bad gateway",
+        "gateway timeout", " temporarily unavailable",
+        # 模型不可用
+        "model not found", "model is not available", "invalid model",
+        "model not supported",
+    )
+    if any(k in msg for k in keywords):
         return True
     return False
 
