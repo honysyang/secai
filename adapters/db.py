@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-DB_PATH = Path(__file__).parent / "data" / "agent.db"
+DB_PATH = Path(__file__).parent.parent / "data" / "agent.db"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks(

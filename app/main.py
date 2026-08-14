@@ -64,12 +64,12 @@ def _init_observability() -> None:
 # 跑分任务模板已抽离到 prompts/tsec_task.txt（见下方 build_default_task）
 
 
-TSEC_TASK_FILE = Path(__file__).parent / "prompts" / "tsec_task.txt"
+TSEC_TASK_FILE = Path(__file__).parent.parent / "prompts" / "tsec_task.txt"
 
 
 def build_default_task() -> str:
     """读跑分任务模板并替换占位符（模板独立在 prompts/tsec_task.txt）。"""
-    from config import BENCHMARK_TOKEN, BENCHMARK_BASE_URL
+    from adapters.config import BENCHMARK_TOKEN, BENCHMARK_BASE_URL
     token = BENCHMARK_TOKEN or "（未配置 BENCHMARK_TOKEN）"
     base_url = BENCHMARK_BASE_URL or "（未配置 BENCHMARK_BASE_URL）"
     return (TSEC_TASK_FILE.read_text(encoding="utf-8")
