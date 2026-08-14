@@ -28,7 +28,8 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 DEFAULT_TOOLS_DIR = str(Path(__file__).parent.parent / "tools")
-TOOLS_DIR = os.getenv("TOOLS_DIR", DEFAULT_TOOLS_DIR)
+_env_tools_dir = os.getenv("TOOLS_DIR", "")
+TOOLS_DIR = _env_tools_dir if _env_tools_dir and Path(_env_tools_dir).exists() else DEFAULT_TOOLS_DIR
 
 MAX_OUTPUT = 8000          # stdout 截断
 DEFAULT_TIMEOUT = 300      # 默认单工具超时（秒）

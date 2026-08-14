@@ -446,7 +446,7 @@ def checkpoint(ctx: RunContextWrapper[TaskContext], reason: str = "") -> str:
     不必每轮都存，但遇到值得保留的里程碑时应主动存。
     """
     # 延迟 import，避免与 context_manager 的模块级循环依赖
-    from context_manager import save_state
+    from core.context_manager import save_state
     c = ctx.context
     save_state(c.workdir, c, c.turn_count, c.task, c.charter, c.role)
     return json.dumps({"checkpointed": True, "turn": c.turn_count,
@@ -693,7 +693,7 @@ def set_phase(ctx: RunContextWrapper[TaskContext], sub: str) -> str:
     当当前阶段目标已达成或需要换方向时调用；下一轮系统提示会自动带上新阶段的目标与焦点。
     注意：阶段之间有合法转移约束，乱跳会被拒绝（发现 flag 线索可直接切 post）。
     """
-    from status import set_status, PHASE_DEFS, PHASE_TRANSITIONS
+    from runtime.status import set_status, PHASE_DEFS, PHASE_TRANSITIONS
     c = ctx.context
     sub = (sub or "").strip().lower()
     if sub not in PHASE_DEFS:
