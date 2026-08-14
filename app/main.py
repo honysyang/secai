@@ -45,7 +45,8 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 WORKDIR = DATA_DIR / "worker_generic"
-
+SESSIONS_DIR = WORKDIR / "sessions"
+SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 _db_initialized = False
 
 
@@ -145,7 +146,7 @@ async def _run_subtasks(ctx, pending, workdir, brief) -> None:
         sub_ctx.phase = ctx.phase
         sub_ctx.plan = ctx.plan
         sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
-                                    db_path=str(workdir / f"sub_{sub['id']}.sqlite"))
+                                    db_path=str(SESSIONS_DIR / f"sub_{sub['id']}.sqlite"))
         sub_hooks = EventStreamHooks(workdir, f"sub_{sub['id']}")
         try:
             await Runner.run(
@@ -274,7 +275,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     executor = build_executor(role, charter, brief,
                               field_notes=load_notes_for(code) or _load_field_notes())
     session = SQLiteSession(session_id=f"challenge_{code}",
-                            db_path=str(workdir / f"challenge_{code}.sqlite"))
+                            db_path=str(SESSIONS_DIR / f"challenge_{code}.sqlite"))
 
     turn_count = 0
     hint_used = False
@@ -430,7 +431,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     finally:
         # 清理单题 session 文件，避免堆积（保留 events/artifacts 作为证据）
         try:
-            (challenge_workdir / "session.sqlite").unlink(missing_ok=True)
+            (SESSIONS_DIR / f"challenge_{code}.sqlite").unlink(missing_ok=True)
         except Exception:
             pass
     answer = ""
@@ -632,6 +633,9 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        sys.exit(0)
     resume = "--resume" in sys.argv
     args = [a for a in sys.argv[1:] if a != "--resume"]
     task = args[0] if args else build_default_task()
