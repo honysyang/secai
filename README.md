@@ -19,9 +19,13 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 
 | 特性 | 说明 |
 |---|---|
-| 多智能体协作 | Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩） |
+| 多智能体协作 | Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）→ Coach（教练） |
 | 子任务并发 | `spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离 |
-| 零 LLM 跑分调度 | EV 选题、容器 SOP、hint 前置、换题决策、**3 槽并发**全部代码机械执行 |
+| 零 LLM 跑分调度 | EV 选题、容器 SOP、hint 前置、换题决策、**自适应容器并发**全部代码机械执行 |
+| 自适应容器并发 | 持续 start 直到 container_busy 被拒，并发度随平台真实上限自动收敛（2/3/4 自适应） |
+| 通关机械判决 | correct=true 后复核平台 is_completed，通关即退出，不等 LLM finalize |
+| 解法模板化 | solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式，正向复用 |
+| 软干预教练 | hint 后仍卡壳触发 Coach 给具体方向（写黑板半持久），不换题不重规划 |
 | 成本治理 | 爆破/hint 预算 → 无感知换脑（switch）→ 挂起（suspend），token + 时钟双档 |
 | 信息增量判停 | 从「看阶段切换」升级为「看产出质量」，正向证据清零、零增量累计 |
 | 提交铁律 | 工具输出先全文扫 flag 再机械提交，不靠 LLM 自觉 |
@@ -282,9 +286,10 @@ flowchart LR
 
 ```
 SECAI/
-├── main.py                 # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理）
-├── agents_def.py           # Agent 定义 + 动态 instructions + 子任务结束协议
+├── main.py                 # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
+├── agents_def.py           # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
 ├── scheduler.py            # 跑分调度器（EV选题/难度分级/停滞决策，纯函数）
+├── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
 ├── budget.py               # 成本治理（爆破/hint 预算 + 换脑/挂起）
 ├── hooks.py                # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
 ├── events.py               # 进程级事件总线（内存历史 + 订阅者分发）

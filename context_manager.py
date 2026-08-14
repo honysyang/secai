@@ -45,6 +45,14 @@ def _is_boundary(item: Any) -> bool:
     return isinstance(item, dict) and item.get("role") in ("user", "assistant")
 
 
+def _is_orphan_tool_output(item: Any) -> bool:
+    """首条消息是游离的 tool 输出（无配对 assistant 调用）判定。"""
+    if isinstance(item, dict):
+        return item.get("type") == "function_call_output" or (
+            item.get("role") == "tool")
+    return getattr(item, "type", "") == "function_call_output"
+
+
 def _item_tokens(item: Any) -> int:
     """估算单条 item 的 token 量（复用 JSON 序列化口径，与 _estimate_tokens 一致）。"""
     try:
@@ -199,8 +207,12 @@ async def compact_if_needed(session, ctx: TaskContext) -> bool:
     if len(summary) > COMPACTION_SUMMARY_CHARS:
         summary = summary[:COMPACTION_SUMMARY_CHARS]
 
-    # 清空会话，只保留最近原文；摘要走系统提示，不占 session item
+    # 清空会话，只保留最近若干条；摘要走系统提示，不占 session item
     await session.clear_session()
+    # 防孤儿：recent 首条若是 tool 响应（function_call_output），
+    # 其配对的 assistant tool_calls 已被裁掉，OpenAI 会 400——丢弃前导孤儿
+    while recent and _is_orphan_tool_output(recent[0]):
+        recent = recent[1:]
     await session.add_items(recent)
     ctx.compaction_summary = summary
     _emit_compact(ctx, estimate_before=estimate, items_before=len(items),

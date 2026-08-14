@@ -22,7 +22,7 @@ from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.memory import SQLiteSession
 
-from agents_def import (manager_agent, planner_agent, reporter_agent,
+from agents_def import (manager_agent, planner_agent, reporter_agent, coach_agent,
                         build_executor, build_subtask_executor)
 from budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                     build_escalation_models, should_pull_hint_by_budget)
@@ -36,6 +36,7 @@ from hooks import EventStreamHooks
 from platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
 from role_registry import assign_role
 from scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
+from solution_templates import append_solution_template, load_solution_hint
 from status import set_status
 from stop_policy import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
 from task_context import TaskContext
@@ -85,9 +86,38 @@ def _load_field_notes(max_chars: int = 3000) -> str:
     return FIELD_NOTES_FILE.read_text(encoding="utf-8")[-max_chars:]
 
 
+def _append_mechanical_note(code: str, outcome: str, ctx) -> None:
+    """题级机械沉淀（零 LLM）：战果 + 死路从黑板/提交记录直接提取。"""
+    failed = [k for k, v in ctx.blackboard.items()
+              if isinstance(v, dict) and v.get("status") == "failed"][:8]
+    wins = [f"correct:{f}" for f in getattr(ctx, "correct_flags", [])][:8]
+    disclosed = ",".join(getattr(ctx, "disclosed_skills", [])[:6])
+    lines = [f"\n# {code} · {outcome} · {time.strftime('%m-%d %H:%M')}",
+             f"- 战果: {', '.join(wins) or '无'}",
+             f"- 死路: {', '.join(failed) or '无'}",
+             f"- 披露技能: {disclosed}"]
+    try:
+        with FIELD_NOTES_FILE.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+
+
+def load_notes_for(code: str, max_chars: int = 900) -> str:
+    """按题检索档案：本题 + 同前缀题的历史段落，最近 3 段。"""
+    if not FIELD_NOTES_FILE.exists():
+        return ""
+    text = FIELD_NOTES_FILE.read_text(encoding="utf-8")
+    prefix = code.rsplit("-", 1)[0] if "-" in code else code
+    hits = [sec[:max_chars] for sec in text.split("\n# ")
+            if sec.startswith(code) or sec.startswith(prefix + "-")]
+    return "\n---\n".join(hits[-3:])
+
+
 SUBTASK_MAX_TURNS = 8  # 每个子任务最多 LLM 回合数（内部 ReAct，Agent 可 finalize 提前结束）
 ZERO_GAIN_REPLAN_TURNS = 5  # 连续零信息增量轮数触发 replan（替代旧「阶段停滞」判据）
 REPLAN_MAX = 3           # 最多 replan 次数，防止无限重规划
+COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（每题目仅 1 次）
 
 
 async def _run_subtasks(ctx, pending, workdir, brief) -> None:
@@ -183,9 +213,33 @@ async def _replan(ctx, task: str, charter: str, role: dict, hooks) -> str:
     return str(result.final_output)
 
 
+async def _coach(ctx, brief, hooks) -> str:
+    """软干预教练：基于黑板 + 事件流尾部给 1~2 条具体可试方向（轻量，单轮）。
+
+    与 _replan 分工：replan 产出完整作战计划（重），coach 只给方向建议（轻）。
+    输入裁剪（黑板 2000 字符 + 事件流尾 4000 字符）控制 token 成本。
+    """
+    blackboard_text = json.dumps(ctx.blackboard, ensure_ascii=False)[:2000]
+    try:
+        events_text = (ctx.workdir / "events.jsonl").read_text(encoding="utf-8")[-4000:]
+    except Exception:
+        events_text = ""
+    skills = ", ".join(ctx.disclosed_skills) or "无"
+    result = await Runner.run(
+        coach_agent,
+        input=(f"题目：\n{brief}\n\n"
+               f"已解锁技能：{skills}\n\n"
+               f"当前黑板（已尝试/已完成）：\n{blackboard_text}\n\n"
+               f"近期执行动作（事件流尾部）：\n{events_text}\n\n"
+               f"请给出 1~2 条具体可执行的新方向。"),
+        hooks=hooks)
+    return str(result.final_output)
+
+
 async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                                 task: str, global_plan: str, hooks, workdir: Path,
-                                client: PlatformClient, difficulty: str = "") -> str:
+                                client: PlatformClient, difficulty: str = "",
+                                flag_total: int = 1, flag_done: int = 0) -> str:
     """对一道题执行完整渗透循环，返回 outcome：solved / stuck / fatal。
 
     单题独立 context + 独立 session；停滞时机械看 hint / 换题（调度器决策），
@@ -207,17 +261,24 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         ctx.enabled_tools.discard(t)
     ctx.current_code = code
     ctx.plan = global_plan
+    sol_hint = load_solution_hint(code, desc)
     brief = (f"# 任务书\n{task}\n\n"
              f"# 当前题目（只打这道题）\n"
-             f"- unique_code: {code}\n- 描述: {desc}\n- 容器地址: {addrs}\n\n"
-             f"选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
-             f"不要自己调用 list_challenges / start_challenge / close_challenge。")
-    executor = build_executor(role, charter, brief, field_notes=_load_field_notes())
+             f"- unique_code: {code}\n- 描述: {desc}\n- 容器地址: {addrs}\n"
+             f"- flag 进度：已拿 {flag_done}/{flag_total} 面"
+             f"（多 flag 题须逐面提交；系统提交回执会告知剩余面数）\n\n")
+    if sol_hint:
+        brief += (f"# 历史成功解法参考（同类题，可优先尝试）\n{sol_hint}\n\n")
+    brief += ("选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
+              "不要自己调用 list_challenges / start_challenge / close_challenge。")
+    executor = build_executor(role, charter, brief,
+                              field_notes=load_notes_for(code) or _load_field_notes())
     session = SQLiteSession(session_id=f"challenge_{code}",
                             db_path=str(workdir / f"challenge_{code}.sqlite"))
 
     turn_count = 0
     hint_used = False
+    coach_used = False  # 软干预教练：每题目仅触发 1 次
     outcome = "stopped"
     # 成本治理：本尝试的 token/时钟起点 + 换脑/挂起档
     cost_limit = COST_LIMITS.get(str(difficulty).lower(), COST_LIMITS.get("medium", {}))
@@ -331,6 +392,23 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 outcome = "stuck"
                 break
 
+            # 软干预（教练式转向）：hint 后仍零增益，给一次具体方向建议再给机会
+            if (hint_used and ctx.zero_gain_turns >= COACH_AFTER_HINT_TURNS
+                    and not coach_used):
+                coach_used = True
+                advice = await _coach(ctx, brief, challenge_hooks)
+                # 建议写进题级黑板（战术记忆，半持久纠偏；verified=False 表示待验证方向）
+                ctx.blackboard["coach_advice"] = {
+                    "value": advice,
+                    "status": "done",
+                    "ts": int(time.time()),
+                    "verified": False,
+                }
+                print(f"  [coach] 单题 {code} hint 后仍停滞 {ctx.zero_gain_turns} 轮，教练给方向")
+                next_input = (f"本题卡住。教练建议（可尝试的新方向）：\n{advice}\n\n"
+                              f"请结合建议继续尝试，产出新证据。")
+                continue
+
             # 单题 replan（停滞重新规划，仍针对本题）
             if ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS and ctx.replan_count < REPLAN_MAX:
                 ctx.plan = await _replan(ctx, brief, charter, role, hooks)
@@ -358,6 +436,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     answer = ""
     if outcome == "solved" and ctx.final_payload:
         answer = str(ctx.final_payload.get("findings", ""))[:500]
+    _append_mechanical_note(code, outcome, ctx)  # 题级机械沉淀（零 LLM，按题写档案）
+    if outcome == "solved":
+        append_solution_template(code, desc, ctx)  # 正向解法模板沉淀（同类题复用）
     if db is not None:
         db.task_finished(code, outcome, answer)  # 登记题目终态（监控页状态/结论）
     return outcome
@@ -396,38 +477,36 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         hooks=hooks)
     global_plan = str(plan_result.final_output)
 
-    # ③ 调度器主循环：3 槽并发（同时跑最多 3 道题，吞吐 ×3）
+    # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
     attempts: Dict[str, int] = {}
     active: Dict[str, asyncio.Task] = {}  # code -> 单题 asyncio 任务
+    MAX_SLOTS = 6  # 软上限保护（防平台异常无限 start；实际并发由 container_busy 反馈决定）
     results = []
     fatal_reason = ""
 
-    # 启动前清理残留容器（上次运行残留的活跃容器，避免一上来就 max active 3）
+    # 启动前清理残留容器（上次运行残留的活跃容器，避免一上来就 max active）
     try:
         for c in client.list_challenges():
-            if c.get("container_status") == "available":
+            if c.get("container_status") in ("available", "stopped", ""):
                 client.close_challenge(c.get("unique_code"))
                 print(f"  [cleanup] 清理残留容器 {c.get('unique_code')}")
     except Exception:
         pass
 
-    async def _start_one(code: str, desc: str, difficulty: str):
-        """启动并运行一道题，返回 (code, outcome)。"""
-        try:
-            addrs = await asyncio.to_thread(client.start_challenge, code)
-        except ContainerBusy:
-            return (code, "container_busy")
-        except Exception as e:
-            print(f"  [start] 启动 {code} 失败：{str(e)[:200]}，跳过")
-            return (code, "start_failed")
-        if not addrs:
-            return (code, "start_failed")
+    async def _run_one(code: str, desc: str, addrs: list, difficulty: str,
+                       chal: dict) -> str:
+        """运行一道已 start 成功的题，返回 outcome。
+
+        start 由主循环同步完成（以便立即感知 container_busy），本函数只负责跑题。
+        """
         set_status(workdir, "execute", "running", code=code)
-        outcome = await _run_single_challenge(code, desc, addrs, charter, task,
-                                              global_plan, hooks, workdir, client,
-                                              difficulty)
-        return (code, outcome)
+        outcome = await _run_single_challenge(
+            code, desc, addrs, charter, task, global_plan, hooks, workdir,
+            client, difficulty,
+            flag_total=chal.get("flag_count") or 1,
+            flag_done=chal.get("correct_flag_count") or 0)
+        return outcome
 
     try:
         while True:
@@ -448,8 +527,8 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 print(f"== 平台终止：{fatal_reason} ==")
                 break
 
-            # 补满 3 个槽：选未启动的题，start 并启动单题任务
-            while len(active) < 3:
+            # 自适应并发：持续 start 直到 container_busy（名额满）或没题或软上限
+            while len(active) < MAX_SLOTS:
                 # 排除已活跃的题，避免重复选题
                 candidates = [c for c in challenges if c.get("unique_code") not in active]
                 chal = select_challenge(candidates, attempts)
@@ -458,9 +537,22 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 code = chal.get("unique_code", "")
                 desc = chal.get("description", "") or ""
                 difficulty = chal.get("difficulty", "")
-                t = asyncio.create_task(_start_one(code, desc, difficulty))
+                # 同步 start：立即感知 container_busy，被拒就停止派发（等活跃题 close 释放）
+                try:
+                    addrs = await asyncio.to_thread(client.start_challenge, code)
+                except ContainerBusy:
+                    break
+                except Exception as e:
+                    attempts[code] = attempts.get(code, 0) + 1
+                    print(f"  [start] 启动 {code} 失败：{str(e)[:200]}，跳过")
+                    continue
+                if not addrs:
+                    attempts[code] = attempts.get(code, 0) + 1
+                    continue
+                # start 成功：真正占用容器，创建跑题任务
+                t = asyncio.create_task(_run_one(code, desc, addrs, difficulty, chal))
                 active[code] = t
-                print(f"  [slot] 启动 {code}（活跃 {len(active)}/3）")
+                print(f"  [slot] 启动 {code}（活跃 {len(active)}/{MAX_SLOTS}）")
 
             if not active:
                 print("== 全部题目已完成（无可选题目）==")
@@ -476,17 +568,24 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 code = next(c for c, task in active.items() if task is t)
                 del active[code]
                 try:
-                    _, outcome = t.result()
+                    outcome = t.result()  # _run_one 直接返回 outcome
                 except Exception as e:
                     outcome = "error"
                     print(f"  [error] 单题 {code} 异常：{str(e)[:200]}")
-                # 关闭容器释放名额
-                try:
-                    await asyncio.to_thread(client.close_challenge, code)
-                except Exception:
-                    pass
-                if outcome in ("stuck", "suspended", "container_busy",
-                               "start_failed", "error"):
+                # 关闭容器释放名额：检查返回值，失败重试（close 静默失败是 container_busy 灾难根因）
+                closed = False
+                for _ in range(3):
+                    try:
+                        closed = await asyncio.to_thread(client.close_challenge, code)
+                    except Exception:
+                        closed = False
+                    if closed:
+                        break
+                    await asyncio.sleep(1)
+                if not closed:
+                    print(f"  [warn] 单题 {code} 容器关闭失败，名额可能泄漏")
+                # attempts 只对真正跑过且未解的题降权（container_busy/start_failed 已在 start 阶段处理）
+                if outcome in ("stuck", "suspended", "error"):
                     attempts[code] = attempts.get(code, 0) + 1
                 results.append({"code": code, "outcome": outcome})
                 print(f"== 单题 {code} 结果：{outcome} ==")

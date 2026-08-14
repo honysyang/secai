@@ -74,22 +74,17 @@ EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的
 {plan}
 
 # 工作纪律
-1. 每轮必须产出至少一个新信息（证据增量），禁止空转。
-2. 目标地址以任务书为准，禁止自猜。
-3. 禁止重复已失败的方向（历史作战档案全是已证伪死路）。
-4. 没有现成工具就自己写 Python 脚本——shell 里的 python3 是主武器库。
-5. 重要发现/已完成事项/全局变量写入 blackboard（用 blackboard set），不要依赖记忆；**登录成功（含 session/cookie 路径）、确认漏洞类型、关键文件/flag 路径 等关键进展必须写黑板**——上下文压缩后靠黑板恢复记忆，不写会忘导致重复劳动。写「失败/排除」类结论时：要判死（禁止重做）必须附 evidence，否则默认只是未验证线索；旧结论被证伪时用 supersedes 指向旧 key 取代。
-6. 当你认为任务已完成（目标达成或证据枯竭），必须调用 finalize 工具提交结论，而不是只输出一段文字。
-7. 遇到不熟悉的场景，先调用 find_skills 检索技能库，看有没有对应打法。
-8. 如果收到提示，那么要对提示进行深度分析和思考。
-9. 拿到 flag / 确认漏洞 / 形成可复用攻击链后，调用 remember 工具把「战果」沉淀为 POC（kind=poc）/ 知识（kind=knowledge）/ 技能（kind=skill），让下次遇到同类题直接复用；只在真正有价值时沉淀，不必每轮都做。
-10. 任务目标若指向远程内网/靶场（需走 VPN 才能访问目标），先调用 connect_vpn 启用 VPN 再开始探测；连接失败就如实报告，不要反复硬连。
-11. 互不依赖的探测（路径爆破/端口扫描/多 payload 测试）用 parallel_shell 并发执行，不要串行一个个来。
-12. 不熟悉的后利用/绕过场景，先 list_knowledge 看知识库简介，再用 get_knowledge 按 id 取全文。
-13. 根据当前进展调用 set_phase 切换阶段（recon=侦察 / enumerate=枚举 / detect=检测 / exploit=利用 / post=后利用拿flag）。阶段目标达成或方向改变时及时切换，别在旧阶段空转。
-14. 当任务同时出现多个互不依赖的探测分支（多个端口/子目标/漏洞点）时，用 spawn_subtask 分别声明子任务，让系统并发调度；不要自己一个个串行做。
-15. 部分工具默认未挂载（按需加载）。需要时先调用 list_disabled_tools 查看有哪些未挂载的工具/工具组，再用 enable_tool 启用（如 enable_tool knowledge / poc / vuln / web / seccli）；启用后即可正常调用。不要因为工具暂时不可见就判定其不存在。
-16. 做参数/路径/注入点的批量探测（fuzz）时，优先用 fuzz 工具（代码并发 + 响应差分归组），不要用 shell 手写循环逐个 curl——fuzz 一次跑完并自动按响应差异分组，又快又省上下文。request_template 用 JSON，在待测位置放 {{FUZZ}} 占位；payload_type 可用内置字典（sqli/lfi/path/xss/ssti/rce/idor/upload/xxe），或 payloads 传逗号分隔列表 / 数值范围（如 1-100）。shell 只用于 fuzz 覆盖不了的场景（登录、读单个已知文件、跑现成 CLI）；凡是「批量试多个 payload/路径」一律用 fuzz，禁止 shell 手写循环逐个试。
+1. 每轮必须产出至少一个新信息（证据增量），禁止空转与重复已失败方向。
+2. 目标地址以任务书为准，禁止自猜；python3 脚本是主武器库。
+3. 关键进展（登录态/漏洞确认/文件路径）立即写 blackboard 并附 evidence；
+   判死结论必须附证据，被证伪的旧结论用 supersedes 取代。
+4. 批量探测（多 payload/路径/参数）一律用 fuzz；互不依赖的动作用 parallel_shell；
+   多个独立分支用 spawn_subtask。shell 只用于 fuzz 覆盖不了的场景。
+5. 发现 flag 系统会机械代提交并回执：correct=true 且有剩余面数→继续找下一面；
+   全部通关系统会自动结束本题。
+6. 卡壳时：先 find_skills / list_knowledge 查打法；提示来了先深度分析再动手。
+7. 拿到可复用攻击链后用 remember 沉淀 POC/知识/技能（只在真正有价值时）。
+8. 阶段随进展用 set_phase 切换；任务完成或证据枯竭时调用 finalize 提交结论。
 
 # 可用打法（随战况渐进披露，当前已解锁）
 {playbooks}
@@ -220,3 +215,19 @@ COMPACTOR_INSTRUCTIONS = """你是对话历史的压缩器。输入包含「更�
 
 compactor_agent = Agent(name="Compactor", instructions=COMPACTOR_INSTRUCTIONS,
                         model=MODEL, model_settings=SETTINGS)
+
+
+# ================= 卡壳教练（软干预：hint 后给具体方向，不重规划） =================
+COACH_INSTRUCTIONS = """你是 SecAI 的卡壳教练。执行者在一道题上卡住了（看过官方提示仍无进展），
+基于它已有的尝试给出 1~2 条【具体、可执行、且不同于已试路径】的新方向。
+
+输入包含：题目、已解锁技能、当前黑板（已尝试/已完成）、近期执行动作（事件流尾部）。
+
+输出要求（只输出建议本身，不要寒暄）：
+- 每条必须指向具体动作：明确的参数/路径/工具/方法，例如「对 /login 的 username 参数用 fuzz 跑 sqli 字典」；
+- 优先从「已解锁技能」和知识库里找方向；
+- 禁止输出「继续尝试」「深入分析」等没有信息量的空话；
+- 最多 2 条，每条一句话。"""
+
+coach_agent = Agent(name="Coach", instructions=COACH_INSTRUCTIONS,
+                    model=MODEL, model_settings=SETTINGS)

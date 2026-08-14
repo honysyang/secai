@@ -31,7 +31,7 @@ from skill_registry import find_skills as search_skills, create_skill
 from budget import brute_gate
 from config import (VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL,
                     BENCHMARK_TOKEN)
-from platform_client import PlatformClient
+from platform_client import PlatformClient, TaskEnded, TaskNotFound
 
 PREVIEW = 4000
 ARTIFACT_SPILL_THRESHOLD = 800  # 工具输出超过此字符数就外置到 artifacts/
@@ -79,8 +79,31 @@ def _scan_flags(text: str) -> List[str]:
     return list(dict.fromkeys(m.group(0) for m in FLAG_RE.finditer(text)))[:10]
 
 
+_PLATFORM = None  # 模块级单例（避免每次提交都新建 PlatformClient）
+
+
+def _platform() -> PlatformClient:
+    global _PLATFORM
+    if _PLATFORM is None:
+        _PLATFORM = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
+    return _PLATFORM
+
+
+def _is_completed(client: PlatformClient, code: str) -> bool:
+    """机械复核平台通关状态（记分牌是唯一权威）。"""
+    try:
+        for c in client.list_challenges():
+            if c.get("unique_code") == code:
+                return bool(c.get("is_completed"))
+    except (TaskEnded, TaskNotFound):
+        raise                       # R3：终局信号必须上抛
+    except Exception:
+        return False
+    return False
+
+
 def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
-    """提交铁律：扫描完整输出中的 flag，若已知当前题 code 则机械提交，回执拼在返回文本尾部。
+    """提交铁律：扫描完整输出中的 flag，机械提交 + 机械通关判决。
 
     必须在 _spill_output 截断前调用（全文扫描），否则 flag 落在截断点之后会被埋没。
     """
@@ -96,13 +119,45 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     if not (BENCHMARK_BASE_URL and BENCHMARK_TOKEN):
         notes.append("[系统] 未配置平台凭证（BENCHMARK_BASE_URL/BENCHMARK_TOKEN），无法机械提交")
         return "\n".join(notes)
-    try:
-        client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
-        for f in flags:
+
+    client = _platform()
+    for f in flags:
+        if f in c.submitted:
+            continue
+        c.submitted.add(f)
+        try:
             r = client.submit_flag(code, f)
-            notes.append(f"[系统·提交铁律] {f} → {json.dumps(r, ensure_ascii=False)[:200]}")
-    except Exception as e:
-        notes.append(f"[系统·提交异常] {str(e)[:120]}")
+        except (TaskEnded, TaskNotFound):
+            c.fatal = "task_ended"    # R3：与 platform_tools 行为对齐
+            raise
+        except Exception as e:
+            notes.append(f"[系统·提交异常] {str(e)[:120]}")
+            continue
+
+        notes.append(f"[系统·提交铁律] {f} → {json.dumps(r, ensure_ascii=False)[:200]}")
+        if not r.get("correct"):
+            continue
+
+        # ---- R1 核心：correct=true 后的机械判决，不等 LLM finalize ----
+        c.correct_flags.append(f)
+        fc, tc = r.get("correct_flag_count"), r.get("total_flag_count")
+        if fc and tc and fc < tc:
+            notes.append(
+                f"[系统] 本题共 {tc} 面 flag，已拿 {fc} 面——"
+                f"继续找下一面，不要 finalize")
+        else:
+            # 单 flag 题或最后一面：机械复核平台通关状态
+            try:
+                done = _is_completed(client, code)
+            except (TaskEnded, TaskNotFound):
+                c.fatal = "task_ended"
+                raise
+            if done:
+                c.finalized = True
+                c.final_payload = {"findings":
+                    f"平台确认 {code} 全部 flag 通关（铁律提交，机械判决）"}
+                notes.append("[系统·通关判决] 平台 is_completed=true，本题结束，"
+                             "系统将自动换题")
     return "\n".join(notes)
 
 

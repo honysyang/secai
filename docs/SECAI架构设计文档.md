@@ -34,9 +34,13 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 
 核心能力：
 
-- **多智能体协作**：Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）
+- **多智能体协作**：Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）→ Coach（教练）
 - **子任务并发**：`spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离
 - **跑分调度**：面向 TSecBench 等靶场平台的「选题 → 启动 → 渗透 → 提交 → 关闭 → 换题」机械编排
+- **自适应容器并发**：持续 start 直到 container_busy 被拒，并发度随平台真实上限自动收敛（2/3/4 自适应）；close 检查返回值 + 失败重试
+- **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出，不等 LLM finalize
+- **解法模板化**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式，正向复用
+- **软干预教练**：hint 后仍卡壳触发 Coach 给具体方向（写黑板半持久），不换题不重规划
 - **成本治理**：爆破/hint 预算 → 无感知换脑（switch）→ 挂起（suspend），token + 时钟双档止损
 - **信息增量判停**：从「看阶段切换」升级为「看产出质量」，正向证据清零、零增量累计，统一驱动 replan/判停
 - **提交铁律**：工具输出先全文扫 flag 再机械提交，不靠 LLM 自觉
@@ -124,9 +128,10 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 
 | 模块 | 职责 |
 |---|---|
-| `main.py` | 主编排入口：立法 → 规划 → 调度器循环 → 报告 + 子任务并发 + 成本治理 |
-| `agents_def.py` | Agent 定义与动态 instructions 组装 + 子任务结束协议 |
+| `main.py` | 主编排入口：立法 → 规划 → 调度器循环 → 报告 + 子任务并发 + 成本治理 + 自适应容器 |
+| `agents_def.py` | Agent 定义与动态 instructions 组装 + 子任务结束协议 + 卡壳教练 |
 | `scheduler.py` | 跑分编排纯函数层（EV 选题 / 停滞决策） |
+| `solution_templates.py` | 解法模板（solved 题正向沉淀 + 同指纹题复用） |
 | `budget.py` | 成本治理（爆破/hint 预算 + 换脑/挂起），单一事实源 |
 | `hooks.py` | RunHooks 事件流 + 渐进披露 + 信息增量打分 + 网络不可达检测 |
 | `events.py` | 进程级事件总线（内存历史 + 订阅者分发） |
@@ -155,6 +160,7 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 | **Subtask Executor** | 子任务并发执行 | `finish_subtask` 结构化结论（summary/findings/flag） | 主 Agent `spawn_subtask` 后并发调度 |
 | **Reporter** 报告者 | 战报 + 死路蒸馏 | 战报 + field_notes | 任务结束，一次 |
 | **Compactor** 压缩器 | 历史压缩 | 压缩摘要 | 上下文超阈值时 |
+| **Coach** 教练 | 软干预：卡壳给方向 | 1~2 条具体可试方向（写黑板半持久） | hint 后仍零增益 3 轮，每题目 1 次 |
 
 ### 4.2 数据流
 
@@ -621,9 +627,10 @@ SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
 
 ```
 SECAI/
-├── main.py                 # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理）
-├── agents_def.py           # Agent 定义 + 动态 instructions + 子任务结束协议
+├── main.py                 # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
+├── agents_def.py           # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
 ├── scheduler.py            # 跑分调度器（EV选题/停滞决策，纯函数）
+├── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
 ├── budget.py               # 成本治理（爆破/hint 预算 + 换脑/挂起）
 ├── hooks.py                # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
 ├── events.py               # 进程级事件总线（内存历史 + 订阅者分发）
@@ -677,6 +684,10 @@ SECAI/
 11. **结构化记忆（黑板）**：`verified/evidence/supersedes` 三字段 + 落盘持久化，判死必须附证据、被取代指向旧 key。
 12. **Prompt 注入防御**：工具输出统一检测注入特征，只检测不修改原文，命中追加安全提醒。
 13. **任务模板外置**：跑分任务模板抽离到 `prompts/tsec_task.txt`，与编排代码解耦。
+14. **自适应容器并发**：不硬编码容器上限，持续 start 直到 container_busy 被拒，并发度随平台真实上限收敛；close 检查返回值 + 失败重试，堵住名额静默泄漏。
+15. **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出不等 LLM finalize；多 flag 题明确告知剩余面数。
+16. **解法模板化（正向复用）**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式；与 field_notes（负向死路）分工，形成正负双向跨题复用。
+17. **软干预教练（Coach）**：hint 后仍卡壳触发 Coach 给 1~2 条具体方向，写题级黑板半持久（verified=False），不重规划不换题，只做轻量纠偏。
 
 ### 16.2 实战教训
 

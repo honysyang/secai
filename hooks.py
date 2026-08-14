@@ -78,27 +78,49 @@ def _auto_advance_phase(task_ctx, text: str) -> bool:
 
 _HTTP_STATUS_RE = re.compile(r"\b(?:200|201|204|301|302|307|308|401|403|405|500)\b")
 _PORT_OPEN_RE = re.compile(r"\b\d{1,5}/(?:tcp|udp)\s+open\b", re.IGNORECASE)
+# 增量打分 v2：路径抽取与敏感文件识别（配合 seen_signatures 去重）
+_PATH_EXTRACT_RE = re.compile(r"(?:/[A-Za-z0-9_.~%-]{2,}){1,4}")
+_SENSITIVE_RE = re.compile(
+    r"(config\.php|\.git/|backup|\.env|phpinfo|/flag|flag\.txt|wp-config|"
+    r"\.bak|\.sql|\.zip|web\.config|id_rsa|shadow)", re.I)
+_ENUM_TOOLS = {"run_tool", "fuzz", "parallel_shell"}   # 只有枚举类工具的状态码算增量
 
 
-def _score_tool_result(tool: str, text: str) -> int:
-    """把工具输出量化为「信息增量」：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
+def _score_tool_result(tool: str, text: str, ctx) -> int:
+    """信息增量打分 v2：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
 
-    对齐 sec-agent-v2 的 default-soft 原则：工具失败/网络错误不是「死路」而是「信息」，
-    一律判 0 交给 LLM 自行决策（换工具/改参数），只识别明确的「新认知」作为正向增量，
-    避免把正常侦察（目录枚举发现路径、端口扫描发现开放端口）误判成死路导致误停。
-    正向 = flag/漏洞确认/登录/响应差异/新路径入口（HTTP 状态码）/开放端口。
+    收窄原则：
+    - 铁证（flag/提交正确/漏洞确认/登录/差分判定）任何工具都算；
+    - HTTP 状态码只在【枚举类工具】输出里算增量，且必须出现 2 个以上不同状态码
+      （单次 http_request 的状态码不算——内容差异才算）；
+    - 新路径/敏感文件：与历史签名去重后，首次出现才算；
+    - 工具失败/网络错误判 0 交给 LLM 决策（default-soft 不变）。
     """
     low = text.lower()
-    # 明确的关键证据（flag/提交成功/漏洞确认/登录/响应差异）
+    # ① 铁证：任何工具
     if any(k in low for k in (
             "flag{", '"correct": true', '"correct":true',
             '"vulnerable": true', '"vulnerable":"true"',
             '"differentiated": true', '"vuln": true', '"vuln":"true"',
             "login success", "logged in", "session=", "响应存在差异")):
         return 1
-    # 新路径/入口发现（目录枚举、HTTP 探测有状态码响应）或开放端口（nmap/masscan）
-    if _HTTP_STATUS_RE.search(text) or _PORT_OPEN_RE.search(text) or "open port" in low:
+    # ② 新敏感文件：任何工具，首次出现才算（去重）
+    sensitive = {m.lower() for m in _SENSITIVE_RE.findall(text)}
+    if sensitive - ctx.seen_signatures:
+        ctx.seen_signatures |= sensitive
         return 1
+    # ③ 枚举类工具：多状态码并存（说明扫到了存活的端点集合）
+    if tool in _ENUM_TOOLS:
+        codes = set(_HTTP_STATUS_RE.findall(text))
+        if len(codes) >= 2 or _PORT_OPEN_RE.search(text) or "open port" in low:
+            return 1
+        # 枚举发现的新路径（去重后仍有新货）
+        new_paths = {p.lower() for p in _PATH_EXTRACT_RE.findall(text)} \
+                    - ctx.seen_signatures
+        if len(new_paths) >= 2:                      # 至少 2 条新路径才算一轮增量
+            ctx.seen_signatures |= new_paths
+            return 1
+    # ④ shell/http_request：只看铁证与敏感文件（①②已覆盖），状态码一律不算
     return 0
 
 
@@ -187,7 +209,7 @@ class EventStreamHooks(RunHooks):
                        phase=task_ctx.phase, trigger=tool.name)
 
         # ---- 信息增量打分：正向证据置位 turn_gain，供判停/replan 复用 ----
-        score = _score_tool_result(tool.name, str(result))
+        score = _score_tool_result(tool.name, str(result), task_ctx)
         if score > 0:
             task_ctx.turn_gain = True
         self._emit("reward", tool=tool.name, score=score)
