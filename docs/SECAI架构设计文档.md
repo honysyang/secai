@@ -13,7 +13,7 @@
 4. [多智能体体系](#4-多智能体体系)
 5. [工作模式与工作流程](#5-工作模式与工作流程)
 6. [调度器（跑分编排）](#6-调度器跑分编排)
-7. [阶段状态机](#7-阶段状态机)
+7. [杀伤链（Kill-Chain）](#7-杀伤链kill-chain)
 8. [上下文生命周期管理](#8-上下文生命周期管理)
 9. [工具体系](#9-工具体系)
 10. [Skills 技能体系](#10-skills-技能体系)
@@ -185,7 +185,24 @@ def _instructions(ctx, agent):
 | **通用模式** | 单 Executor 循环，Agent 自主编排，适合任意渗透任务 |
 | **跑分模式（调度器）** | 代码机械编排「选题→启动→渗透→提交→关闭→换题」，适合 TSecBench 等平台 |
 
-### 5.2 跑分模式完整流程（3 槽并发）
+### 5.2 通用渗透工作流程
+
+无论跑分还是通用任务，都遵循同一套「立法 → 规划 → 杀伤链推进 → 报告」的核心流程：
+
+```
+任务接收
+  → ① Manager 立法（使命宪章：目标/原则/约束/终止判据）
+  → ② Planner 规划（作战计划：任务研判/攻击面/flag 定位/分步计划）
+  → ③ Executor 执行（按 5 阶段杀伤链推进：recon→enumerate→detect→exploit→post）
+       ├─ 停滞 → replan（重新规划，最多 3 次）
+       ├─ 超阈值 → compact（上下文压缩）
+       └─ 关键进展 → 写黑板 / checkpoint
+  → ④ Reporter 报告（战报 + 死路蒸馏 → field_notes 沉淀）
+```
+
+跑分模式是在这套通用流程上，**增加调度器层**（选题/容器/换题/hint 的机械编排），杀伤链本身不变。
+
+### 5.3 跑分模式完整流程（3 槽并发）
 
 ```
 ① Manager 立法 → charter
@@ -205,7 +222,7 @@ def _instructions(ctx, agent):
 
 吞吐：串行 ×1 → 并发 ×3，配合平台 3 容器上限。
 
-### 5.3 单题循环（_run_single_challenge）
+### 5.4 单题循环（_run_single_challenge）
 
 单题独立工作区（`worker_{code}`）+ 独立事件流，避免并发交错：
 
@@ -269,25 +286,21 @@ start_challenge
 
 ---
 
-## 7. 阶段状态机
+## 7. 杀伤链（Kill-Chain）
 
-### 7.1 顶层流程阶段
+SECAI 的渗透执行采用 **5 阶段杀伤链**，对标经典 Cyber Kill Chain / MITRE ATT&CK 方法论，是「从侦察到拿 flag」的核心推进模型。
 
-```
-legislate（立法）→ assign（派任）→ execute（执行）→ report（收尾）
-```
+### 7.1 杀伤链对标
 
-### 7.2 Kill-Chain 渗透阶段
+| SECAI 阶段 | 对标标准杀伤链 | 目标 | 关键活动 | 退出条件 |
+|---|---|---|---|---|
+| `recon` 侦察 | Reconnaissance | 摸清指纹与技术栈 | HTTP头/banner/证书/端口/路径 | 拿到指纹+端口+入口 |
+| `enumerate` 枚举 | Weaponization | 枚举攻击面 | 端口/路径/入口/信任边界 Top-N | 列出攻击面清单 |
+| `detect` 检测 | Delivery | 漏洞检测 | fuzz/detect_vuln 假设验证 | 确认漏洞 |
+| `exploit` 利用 | Exploitation | 漏洞利用 | 拿权限/读文件/执行命令 | 拿到权限/读文件能力 |
+| `post` 后利用 | Actions on Objectives | 拿 flag | 读 /flag、config.php、环境变量 | 提交 flag / finalize |
 
-| 阶段 | 目标 | 焦点 |
-|---|---|---|
-| `recon` | 摸清指纹与技术栈 | 非破坏侦察：HTTP头/banner/端口/路径 |
-| `enumerate` | 枚举攻击面 | 端口/路径/入口/信任边界 Top-N |
-| `detect` | 漏洞检测 | 假设验证：认证绕过/注入/配置暴露 |
-| `exploit` | 漏洞利用 | 拿权限/读文件/执行命令 |
-| `post` | 后利用拿 flag | 读 /flag、includes/config.php、环境变量 |
-
-### 7.3 合法转移图
+### 7.2 合法转移图
 
 ```
 recon     → enumerate / post
@@ -299,6 +312,15 @@ post      → （终态）
 
 - `set_phase` 工具校验合法转移，防止乱跳
 - hooks 里 `_auto_advance_phase` 代码兜底：发现 flag 线索自动切 post，漏洞确认自动切 exploit
+- 任意阶段发现 flag 线索可直切 post（跳过中间阶段，快速收分）
+
+### 7.3 顶层流程阶段
+
+```
+legislate（立法）→ assign（派任）→ execute（执行）→ report（收尾）
+```
+
+杀伤链（recon→post）是 `execute` 阶段的内部子状态机，驱动 Executor 的 instructions 按阶段动态切换目标与焦点。
 
 ---
 

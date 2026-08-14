@@ -111,7 +111,17 @@ Executor 的 instructions 是**动态函数**，每轮从 `TaskContext` 读取�
 
 ---
 
-## 工作流程（跑分模式）
+## 工作流程
+
+### 通用流程（所有任务共用主干）
+
+```
+任务接收 → ① 立法 → ② 规划 → ③ 按杀伤链执行 → ④ 报告 + 死路蒸馏
+```
+
+跑分模式 = 通用流程 + **调度器层**（选题/容器/换题/hint 的机械编排），杀伤链本身不变。
+
+### 跑分模式（3 槽并发）
 
 ```mermaid
 flowchart TD
@@ -168,7 +178,17 @@ start_challenge
 
 ---
 
-## 阶段状态机
+## 杀伤链（Kill-Chain）
+
+渗透执行采用 **5 阶段杀伤链**，对标经典 Cyber Kill Chain：
+
+| SECAI 阶段 | 对标标准杀伤链 | 目标 |
+|---|---|---|
+| `recon` 侦察 | Reconnaissance | 摸清指纹与技术栈 |
+| `enumerate` 枚举 | Weaponization | 枚举攻击面 |
+| `detect` 检测 | Delivery | 漏洞检测 |
+| `exploit` 利用 | Exploitation | 漏洞利用 |
+| `post` 后利用 | Actions on Objectives | 拿 flag |
 
 ```mermaid
 flowchart LR
@@ -182,6 +202,7 @@ flowchart LR
 
 - `set_phase` 校验合法转移（防止乱跳）
 - hooks 代码兜底：发现 flag 线索自动切 post，漏洞确认自动切 exploit
+- 任意阶段发现 flag 可直切 post（快速收分）
 
 ---
 
