@@ -175,6 +175,9 @@ def save_state(workdir: Path, ctx: TaskContext, turn_count: int,
         "plan": ctx.plan,
         "stuck_turns": ctx.stuck_turns,
         "replan_count": ctx.replan_count,
+        "zero_gain_turns": ctx.zero_gain_turns,
+        "current_code": ctx.current_code,
+        "fatal": ctx.fatal,
     }
     (workdir / STATE_FILE).write_text(
         json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -214,4 +217,7 @@ def build_ctx_from_state(workdir: Path, state: Dict[str, Any]) -> TaskContext:
         plan=state.get("plan", ""),
         stuck_turns=state.get("stuck_turns", 0),
         replan_count=state.get("replan_count", 0),
+        zero_gain_turns=state.get("zero_gain_turns", 0),
+        current_code=state.get("current_code", ""),
+        fatal=state.get("fatal", ""),
     )

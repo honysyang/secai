@@ -56,6 +56,8 @@ INSTALL_MAP = {
     "angr": ("pip", "angr"),
     "impacket": ("pip", "impacket"),
     "ropper": ("pip", "ropper"),
+    "slither": ("pip", "slither-analyzer"),
+    "mythril": ("pip", "mythril"),
 }
 
 

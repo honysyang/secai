@@ -10,11 +10,18 @@
 """
 from __future__ import annotations
 
+import os
+import time
 from typing import Any
 
 MAX_TURNS = 0        # 兜底：最多 LLM 回合数，如果等于0 ，则没有回合限制
 CHAR_BUDGET = 0  # 兜底：累计事件流字节预算（跑分任务要读大量响应，30KB 太小）
 EMPTY_TURN_LIMIT = 5  # 连续 N 轮无工具调用且未 finalize → 判停（0 表示不因空转判停）
+ZERO_GAIN_LIMIT = 50  # 连续 N 轮零信息增量（调了工具但无正向证据）→ 判停兜底（最后防线，宁宽勿误杀）
+
+# 比赛硬总时限（Unix 时间戳秒）。空=不限。由环境变量 TASK_DEADLINE_TS 注入。
+TASK_DEADLINE_TS = os.getenv("TASK_DEADLINE_TS", "").strip()
+DEADLINE_SAFE_MARGIN = 60  # 比赛结束前 N 秒判停，留出收尾时间
 
 EMPTY_TURN_NUDGE = (
     "你上一轮既没有调用任何工具，也没有调用 finalize 提交结论。"
@@ -28,6 +35,14 @@ def should_stop(ctx: Any, turn_count: int, total_chars: int) -> dict:
     if ctx.finalized:
         return {"stop": True, "reason": "finalized"}
 
+    # 1.5) 比赛硬总时限：接近截止时间则判停，留出收尾余量
+    if TASK_DEADLINE_TS:
+        try:
+            if time.time() >= float(TASK_DEADLINE_TS) - DEADLINE_SAFE_MARGIN:
+                return {"stop": True, "reason": "deadline_reached"}
+        except ValueError:
+            pass  # 非法时间戳按「未配置」处理，不影响判停
+
     # 2) 回合兜底（0 表示不限制）
     if MAX_TURNS > 0 and turn_count >= MAX_TURNS:
         return {"stop": True, "reason": "max_turns_backstop"}
@@ -35,6 +50,10 @@ def should_stop(ctx: Any, turn_count: int, total_chars: int) -> dict:
     # 3) 字符预算兜底（0 表示不限制）
     if CHAR_BUDGET > 0 and total_chars >= CHAR_BUDGET:
         return {"stop": True, "reason": "char_budget_exhausted"}
+
+    # 3.5) 零信息增量兜底：调了工具但长期无正向证据 → 判停（replan 用尽后的最后防线）
+    if ZERO_GAIN_LIMIT > 0 and ctx.zero_gain_turns >= ZERO_GAIN_LIMIT:
+        return {"stop": True, "reason": "zero_gain_limit"}
 
     # 4) 空转/假完成检测：本轮没有任何工具调用
     if ctx.turn_tool_count == 0:

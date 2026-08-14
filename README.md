@@ -1,0 +1,389 @@
+# SECAI — 多智能体安全攻防框架
+
+> 基于 openai-agents SDK 的 AI 自动化渗透测试系统，面向 CTF / 攻防比赛 / 靶场跑分场景。
+> 多智能体协作 + 零 LLM 跑分调度 + 声明式技能库 + 实时可视化。
+
+---
+
+## 简介
+
+SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化系统**的多智能体框架。核心思路是：
+
+> **让 LLM 做高层判断（往哪打、怎么解读），让代码做确定性动作（选题、提交、判停、换题）。**
+
+它解决传统「单 Agent 无脑循环」的三大痛点：上下文膨胀、卡在一题不会换题、拿到 flag 不提交。
+
+---
+
+## 核心特性
+
+| 特性 | 说明 |
+|---|---|
+| 多智能体协作 | Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩） |
+| 零 LLM 跑分调度 | EV 选题、容器 SOP、hint 前置、换题决策、**3 槽并发**全部代码机械执行 |
+| 信息增量判停 | 从「看阶段切换」升级为「看产出质量」，正向证据清零、零增量累计 |
+| 提交铁律 | 工具输出先全文扫 flag 再机械提交，不靠 LLM 自觉 |
+| 上下文生命周期 | 四层架构 + token 压缩 + 断点续跑 + 全局黑板 + 死路蒸馏 |
+| 渐进披露 | 技能按触发词解锁，注入带预算（同屏 3 篇 / 每篇 1200 字 / 总 8k） |
+| 声明式内容 | skills / tools / roles / vulns / pocs / payloads / knowledge 全部本地化、自包含 |
+| 题级角色派任 | 每道题按 unique_code 前缀派任对应角色皮肤 |
+| 题级独立工作区 | 每题独立 `worker_{code}/`（events/session/artifacts），并发不交错 |
+| 实时可视化 | 标准库后端 + SSE 实时流 + 双流前端 |
+
+---
+
+## 总体架构
+
+```mermaid
+flowchart TB
+    subgraph Frontend["前端 static/index.html"]
+        FE1["对话流（web）"]
+        FE2["任务流（generic）"]
+        FE3["阶段/Token/奖励 实时状态"]
+    end
+
+    subgraph Server["server.py（标准库 HTTP + SSE）"]
+        SRV["dir=web | dir=generic"]
+    end
+
+    subgraph Orchestrator["main.py（主编排）"]
+        MGR["① Manager 立法"]
+        PLN["② Planner 规划"]
+        SCH["③ 调度器循环<br/>list→EV选题→start→单题→close"]
+        RPT["④ Reporter 战报"]
+    end
+
+    subgraph Core["核心模块"]
+        AGENT["agents_def.py<br/>5 个 Agent 定义"]
+        SCHED["scheduler.py<br/>EV选题/难度分级/停滞决策"]
+        HOOKS["hooks.py<br/>事件流/渐进披露/增量打分"]
+        CTX["task_context.py<br/>执行现场+全局状态"]
+        CTXM["context_manager.py<br/>压缩+断点续跑"]
+        TOOLS["demo_tools.py<br/>执行工具+提交铁律"]
+    end
+
+    subgraph Declarative["声明式内容（本地化、可扩展）"]
+        ROLES["roles/ 9 角色"]
+        SKILLS["skills/ 62 技能"]
+        CLITOOLS["tools/ 92 CLI"]
+        VULNS["vulns/ 9 漏洞模块"]
+        POCS["pocs/ 3 POC"]
+        KNOW["knowledge/ 3 知识"]
+        PAYL["payloads/ 10 字典"]
+    end
+
+    FE1 & FE2 & FE3 --> SRV
+    SRV --> Orchestrator
+    Orchestrator --> Core
+    Core --> Declarative
+```
+
+---
+
+## 多智能体体系
+
+### Agent 一览
+
+| Agent | 角色定位 | 产物 | 触发 |
+|---|---|---|---|
+| **Manager** | 立法（为什么打） | 使命宪章（目标/原则/约束/终止判据） | 任务开始，一次 |
+| **Planner** | 深度分析（打哪里、按什么顺序） | 作战计划（任务研判/攻击面/flag 定位/分步计划） | 任务开始 + 停滞 replan |
+| **Executor** | 执行（怎么打） | 证据、黑板、flag | 每轮循环 |
+| **Reporter** | 战报 + 死路蒸馏 | 战报 + field_notes | 任务结束，一次 |
+| **Compactor** | 历史压缩 | 压缩摘要 | 上下文超阈值 |
+
+### 数据流
+
+```mermaid
+flowchart LR
+    TASK["task<br/>完整任务书"] --> MGR["Manager<br/>立法"]
+    TASK --> PLN["Planner<br/>规划"]
+    MGR -->|charter 使命宪章| PLN
+    PLN -->|plan 作战计划| EXE["Executor<br/>动态 instructions"]
+    MGR -->|charter| EXE
+    EXE -->|黑板+事件流| FB["反馈回路"]
+    FB -->|"停滞5轮→replan"| PLN
+    FB -->|"超阈值→compact"| CMP["Compactor"]
+    EXE -->|结束| RPT["Reporter<br/>战报+死路蒸馏"]
+```
+
+Executor 的 instructions 是**动态函数**，每轮从 `TaskContext` 读取最新状态重渲染，注入：角色风格 + 当前阶段 + charter + plan + 已披露技能 + 黑板摘要 + 压缩摘要 + 任务书。
+
+---
+
+## 工作流程（跑分模式）
+
+```mermaid
+flowchart TD
+    START["启动"] --> LEGISLATE["① Manager 立法 → charter"]
+    LEGISLATE --> PLAN["② Planner 规划 → global_plan"]
+    PLAN --> LOOP{"③ 调度器主循环<br/>（3 槽并发）"}
+    
+    LOOP -->|"deadline 到达 / 平台 TaskEnded"| END["终止"]
+    LOOP --> LIST["list_challenges 拉题目"]
+    LIST --> FILL["补满 3 槽（排除活跃题）<br/>EV 选题 + start 容器"]
+    FILL -->|全部完成| END
+    FILL --> WAIT["asyncio.wait<br/>FIRST_COMPLETED 等任一完成"]
+    WAIT --> DONE["close 容器 + 记录结果"]
+    DONE --> LOOP
+    
+    FILL -.-> SINGLE["单题循环 _run_single_challenge<br/>（题级独立 workdir）"]
+    SINGLE -->|"停滞按难度分级→看hint/换题<br/>网络不可达2次→换题<br/>拿到flag→机械提交<br/>finalize→solved"| DONE
+    SINGLE -->|"fatal→全局终止"| END
+    
+    END --> REPORT["④ Reporter 战报 + 死路蒸馏"]
+```
+
+---
+
+## 调度器（零 LLM）
+
+### EV 选题
+
+```
+EV = total_score × 难度系数 × 0.3^死路次数
+难度系数：easy=1.3  medium=1.0  hard=0.7
+```
+
+死路降权让同一题每放弃一次 EV 乘 0.3，避免反复撞硬题。
+
+### 单题轮次预算（按难度分级）
+
+| 难度 | 看 hint 阈值 | 换题阈值 |
+|---|---|---|
+| easy | 6 轮 | 12 轮 |
+| medium | 8 轮 | 20 轮 |
+| hard | 10 轮 | 25 轮 |
+| 未知 | 8 轮 | 16 轮 |
+
+### 容器 SOP
+
+```
+start_challenge
+  ├─ 成功 → 记录 active_codes
+  └─ ContainerBusy（达 3 上限）
+       ├─ 关闭最旧活跃容器 → 重试
+       └─ 无记录 → 关闭所有残留 → 换题
+```
+
+---
+
+## 阶段状态机
+
+```mermaid
+flowchart LR
+    RECON["recon<br/>侦察"] -->|指纹/端口/入口| ENUM["enumerate<br/>枚举"]
+    ENUM -->|攻击面清单| DETECT["detect<br/>检测"]
+    DETECT -->|漏洞确认| EXPLOIT["exploit<br/>利用"]
+    EXPLOIT -->|拿权限/读文件| POST["post<br/>后利用拿flag"]
+    DETECT -->|发现flag线索| POST
+    POST --> FINALIZE["finalize<br/>终态"]
+```
+
+- `set_phase` 校验合法转移（防止乱跳）
+- hooks 代码兜底：发现 flag 线索自动切 post，漏洞确认自动切 exploit
+
+---
+
+## 上下文生命周期管理
+
+### 四层架构
+
+| 层 | 内容 | 生命周期 |
+|---|---|---|
+| L1 稳定层 | 任务书、宪章、工具 schema | 全程不变 |
+| L2 工作记忆 | 对话历史滑动窗口 | 压缩裁剪 |
+| L3 长期记忆 | 压缩摘要 + 黑板 + 死路蒸馏 | 跨轮持久化 |
+| L4 外置存储 | artifacts/ 文件 | 按需读取 |
+
+### 关键机制
+
+| 机制 | 说明 |
+|---|---|
+| Token 压缩 | 超 30000 token 触发 Compactor 摘要，回退到回合边界避免 400 |
+| 信息增量信号 | `zero_gain_turns`：正向证据清零、零增量累计，统一驱动 replan/判停 |
+| 提交铁律 | `_spill_output` 截断前先扫全文 flag → 机械 `submit_flag` |
+| 全局黑板 | 40 字符摘要注入 + LRU 淘汰（50 条），完整值按需 `blackboard get` |
+| 死路蒸馏 | Reporter 输出死路清单 → field_notes → 下次注入接力 |
+
+---
+
+## 能力覆盖（四类题型）
+
+| 题型 | 占比 | 覆盖情况 |
+|---|---|---|
+| Web 漏洞挖掘 | 67% | 23 个漏洞技能（含业务逻辑/竞态/越权）+ 大量工具，覆盖强 |
+| 二进制漏洞挖掘 | 20% | pwn_exploitation/static_analysis 技能 + gdb/pwntools/angr/ROPgadget |
+| AI 漏洞挖掘 | 7% | prompt_injection/tool_misuse 技能 + AI 安全测试员角色 |
+| 区块链漏洞挖掘 | 6% | smart_contract_security 技能 + slither/mythril 工具 |
+
+---
+
+## 目录结构
+
+```
+SECAI/
+├── main.py                 # 主编排（立法→规划→调度→报告）
+├── agents_def.py           # 5 个 Agent 定义 + 动态 instructions
+├── scheduler.py            # 跑分调度器（EV选题/难度分级/停滞决策）
+├── hooks.py                # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
+├── stop_policy.py          # 判停器（deadline/零增益/空转）
+├── task_context.py         # TaskContext 执行现场 + 全局状态
+├── context_manager.py      # 上下文压缩 + 断点续跑
+├── demo_tools.py           # 执行工具 + 提交铁律 + 工具按需加载
+├── platform_client.py      # 平台 SDK 语义封装
+├── platform_tools.py       # 平台 API 工具（异常上抛）
+├── status.py               # 阶段状态机
+├── sec_tools.py            # 92 个 CLI 工具执行
+├── role_registry.py        # 角色加载/题级派任
+├── skill_registry.py       # 技能加载/渐进披露/注入预算
+├── vuln_registry.py        # 漏洞检测模块加载
+├── poc_registry.py         # POC 加载
+├── knowledge_registry.py   # 知识库加载
+├── server.py               # SSE 实时流服务
+├── config.py               # env 配置 + 模型
+├── roles/                  # 9 个角色定义（frontmatter + 思维风格）
+├── skills/                 # 62 个技能（含 binary/ai_security/blockchain 等子目录）
+├── tools/                  # 92 个 CLI 工具 YAML
+├── vulns/                  # 9 个漏洞检测模块 YAML
+├── pocs/                   # 3 个 POC
+├── knowledge/              # 3 个知识条目
+├── payloads/               # 10 个 payload 字典
+├── static/index.html       # 前端
+├── docs/                   # 架构设计 + 诊断报告 + 修复手册
+├── data/                   # 运行时数据（events/status/checkpoint）
+└── .env                    # 凭证配置
+```
+
+---
+
+## 快速开始
+
+### 1. 安装依赖
+
+```bash
+cd /home/kali/SECAI
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### 2. 配置 .env
+
+```bash
+cp .env.example .env
+# 编辑 .env：
+#   LLM_API_KEY=你的 DeepSeek/OpenAI 兼容 API Key
+#   LLM_BASE_URL=https://api.deepseek.com/v1
+#   LLM_MODEL=deepseek-chat
+#   BENCHMARK_TOKEN=跑分平台的 token
+#   BENCHMARK_BASE_URL=跑分平台地址
+#   VPN_CONFIG=/path/to/xxx.ovpn   # 需要走内网时
+```
+
+### 3. 运行
+
+```bash
+# 跑分模式（有 BENCHMARK_TOKEN 自动进调度器）
+.venv/bin/python main.py
+
+# 通用渗透任务
+.venv/bin/python main.py "目标描述" [角色提示]
+
+# 断点续跑
+.venv/bin/python main.py --resume
+
+# 启动实时可视化前端
+.venv/bin/python server.py
+# 浏览器打开 http://localhost:8000
+```
+
+### 4. VPN 权限（一次性，跑内网靶场必须）
+
+```bash
+sudo setcap cap_net_admin,cap_net_raw+ep /usr/sbin/openvpn
+```
+
+---
+
+## 内容资产
+
+| 资产 | 数量 | 说明 |
+|---|---|---|
+| 角色 roles/ | 9 | Web审计、二进制协议、沙箱逃逸、免杀、边界渗透、AI安全、提权、横向、跑分 |
+| 技能 skills/ | 62 | Web漏洞（23）+ 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
+| CLI 工具 tools/ | 92 | nmap/sqlmap/ffuf/gdb/pwntools/angr/slither/mythril 等 |
+| 漏洞模块 vulns/ | 9 | SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD |
+| POC pocs/ | 3 | 精选有效 POC |
+| 知识 knowledge/ | 3 | get_flag/post_exploit/waf_bypass |
+| Payload payloads/ | 10 | sqli/lfi/path/xss/ssti/rce/idor/ssrf/upload/xxe |
+
+---
+
+## 前端可视化
+
+双流实时展示：
+
+- **左对话流**（`dir=web`）：多轮对话
+- **右任务流**（`dir=generic`）：实时展示哪个 Agent 在思考/执行、执行了什么
+
+事件类型：`llm_call / thought / tool / tool_result / reward / phase_changed / net_unreachable / compact / token_estimate / skill_disclosed`
+
+文本不截断，实时展示阶段切换、token 预算、信息增量、网络不可达。
+
+### 启动界面
+
+![启动界面](docs/img/启动.png)
+
+### 实时流界面
+
+![实时流](docs/img/实时流.png)
+
+---
+
+## 下一步拓展（Roadmap）
+
+### 沙箱（执行隔离）
+
+当前 `shell` / `run_tool` 直接在宿主执行，缺少隔离。计划：
+
+- **执行沙箱**：危险命令在 Docker 隔离容器内执行，限制网络/文件系统
+- **命令白名单**：高危操作（`rm -rf /`、提权、横向移动）拦截或告警
+- **代码沙箱**：二进制/Python 执行题的 payload 在受限环境验证（复用现有 `sandbox_escape` 技能反向加固）
+
+### 审批（Human-in-the-loop）
+
+当前 Agent 全自动执行。计划引入 HITL 中间件：
+
+- **高危操作审批**：真实 exploit、破坏性命令、对外请求，先暂停等人工确认
+- **分级审批**：侦察/探测自动放行，利用/后利用需审批
+- **审批回调**：审批通过/拒绝后继续或改向
+
+### 资产管理
+
+当前发现记录在黑板上，缺少结构化关联。计划：
+
+- **资产图谱**：域名/IP/端口/服务/漏洞 结构化沉淀，支持跨题复用
+- **侦察结果结构化**：复用 `field_notes` 的按题检索，升级为可查询的资产库
+- **知识图谱**：漏洞 → 攻击面 → 资产 的关联关系（远期）
+
+### 其它
+
+- **工具安装自愈**：启动时 `shutil.which` 普查，缺失工具自动 pip/apt 安装
+- **披露预算细化**：技能按阶段差异化开启（detect 阶段才挂 fuzz，exploit 阶段才挂 get_poc）
+
+---
+
+## 文档
+
+| 文档 | 内容 |
+|---|---|
+| [SECAI架构设计文档](docs/SECAI架构设计文档.md) | 完整架构、Agent、工作流程、工具、技能、角色、漏洞 |
+| [SecAI新仓库问题诊断报告](docs/SecAI新仓库问题诊断报告.md) | 代码审查 + 五条公理对照 |
+| [SecAI新仓库修复实施手册](docs/SecAI新仓库修复实施手册.md) | 六条修复的具体落地 |
+| [SecAI三智能体Demo实施手册](docs/SecAI三智能体Demo_OpenAI_Agents_SDK实施手册.md) | 早期 Demo 手册 |
+
+---
+
+## 免责声明
+
+本框架仅用于**授权的安全测试、CTF 竞赛与靶场练习**。禁止用于任何未授权的渗透测试或攻击行为。使用者需自行承担合规责任，并遵守目标系统所在司法辖区的法律法规。

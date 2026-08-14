@@ -41,7 +41,7 @@ PHASE_DEFS = {
     },
     "post": {
         "goal": "后利用拿 flag",
-        "focus": "目标导向：读 flag 文件/环境变量、提交 flag、释放资源（close）。",
+        "focus": "目标导向：先读 /flag、/flag.txt、/etc/passwd、已知真实文件名；读不到则深入 includes/config.php 拿数据库配置连库查、读合同/文档内容、环境变量。拿到 flag 后 submit_flag，通关 close。",
         "next": "（终态，达成后 finalize）",
     },
 }

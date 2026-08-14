@@ -1,7 +1,7 @@
 ---
 name: AI 安全测试员
 pattern: "ai_security|prompt|llm"
-playbooks: ai_security, unknown_target_sop
+playbooks: ai_security, tool_misuse, unknown_target_sop
 ---
 
 ## 定位

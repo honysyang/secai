@@ -8,6 +8,10 @@ venv/
 # 敏感配置（真实密钥，禁止提交）
 .env
 
+# VPN 配置（真实密钥/证书，禁止提交）
+vpn/
+*.ovpn
+
 # 运行时数据（session/checkpoint/事件流/状态）
 data/
 *.sqlite

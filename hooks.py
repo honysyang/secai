@@ -7,6 +7,7 @@ context.context 才是我们的 TaskContext。
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -74,6 +75,48 @@ def _auto_advance_phase(task_ctx, text: str) -> bool:
     return False
 
 
+_HTTP_STATUS_RE = re.compile(r"\b(?:200|201|204|301|302|307|308|401|403|405|500)\b")
+_PORT_OPEN_RE = re.compile(r"\b\d{1,5}/(?:tcp|udp)\s+open\b", re.IGNORECASE)
+
+
+def _score_tool_result(tool: str, text: str) -> int:
+    """把工具输出量化为「信息增量」：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
+
+    对齐 sec-agent-v2 的 default-soft 原则：工具失败/网络错误不是「死路」而是「信息」，
+    一律判 0 交给 LLM 自行决策（换工具/改参数），只识别明确的「新认知」作为正向增量，
+    避免把正常侦察（目录枚举发现路径、端口扫描发现开放端口）误判成死路导致误停。
+    正向 = flag/漏洞确认/登录/响应差异/新路径入口（HTTP 状态码）/开放端口。
+    """
+    low = text.lower()
+    # 明确的关键证据（flag/提交成功/漏洞确认/登录/响应差异）
+    if any(k in low for k in (
+            "flag{", '"correct": true', '"correct":true',
+            '"vulnerable": true', '"vulnerable":"true"',
+            '"differentiated": true', '"vuln": true', '"vuln":"true"',
+            "login success", "logged in", "session=", "响应存在差异")):
+        return 1
+    # 新路径/入口发现（目录枚举、HTTP 探测有状态码响应）或开放端口（nmap/masscan）
+    if _HTTP_STATUS_RE.search(text) or _PORT_OPEN_RE.search(text) or "open port" in low:
+        return 1
+    return 0
+
+
+_NET_UNREACHABLE_HINTS = (
+    "connection refused", "no route to host", "timed out", "timeout",
+    "name or service not known", "network is unreachable",
+    "could not resolve host", "连接超时", "网络不可达",
+)
+
+
+def _is_network_unreachable(text: str) -> bool:
+    """检测工具输出是否命中「网络不可达」信号（连接拒绝/超时/无路由）。
+
+    用于快速换题：同一目标连续命中 ≥2 次即判定不可达，避免 VPN 断开后死磕。
+    """
+    low = text.lower()
+    return any(k in low for k in _NET_UNREACHABLE_HINTS)
+
+
 class EventStreamHooks(RunHooks):
     def __init__(self, workdir: Path, code: str):
         self.workdir = workdir
@@ -135,6 +178,17 @@ class EventStreamHooks(RunHooks):
         if _auto_advance_phase(task_ctx, str(result)):
             self._emit("phase_changed", agent=agent.name,
                        phase=task_ctx.phase, trigger=tool.name)
+
+        # ---- 信息增量打分：正向证据置位 turn_gain，供判停/replan 复用 ----
+        score = _score_tool_result(tool.name, str(result))
+        if score > 0:
+            task_ctx.turn_gain = True
+        self._emit("reward", tool=tool.name, score=score)
+
+        # ---- 网络不可达检测：本轮命中即置位，供单题循环快速换题（防 VPN 死磕）----
+        if _is_network_unreachable(str(result)):
+            task_ctx.turn_net_fail = True
+            self._emit("net_unreachable", tool=tool.name)
 
     async def on_agent_start(self, context, agent):
         self._emit("agent_start", agent=agent.name)

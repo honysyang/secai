@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import json
 
-from agents import function_tool
+from agents import function_tool, RunContextWrapper
 
 from config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
-from platform_client import PlatformClient
+from platform_client import PlatformClient, TaskNotFound, TaskEnded
+from task_context import TaskContext
 
 # 单次工具返回的字符上限，避免塞爆上下文
 _PREVIEW = 6000
@@ -25,7 +26,15 @@ def _ok(data) -> str:
     return json.dumps(data, ensure_ascii=False)[:_PREVIEW]
 
 
-def _err(e: Exception) -> str:
+def _err(ctx: RunContextWrapper[TaskContext], e: Exception) -> str:
+    """平台错误处置：TaskEnded/TaskNotFound 是致命错误，标记 ctx.fatal 让主循环终止；
+    其余错误降级为文本返回给 LLM 自行判断（不吞致命错误，避免无限空转）。"""
+    if isinstance(e, TaskEnded):
+        ctx.context.fatal = "task_ended"
+        return json.dumps({"fatal": "task_ended", "message": str(e)[:200]}, ensure_ascii=False)
+    if isinstance(e, TaskNotFound):
+        ctx.context.fatal = "task_not_found"
+        return json.dumps({"fatal": "task_not_found", "message": str(e)[:200]}, ensure_ascii=False)
     return json.dumps({"error": str(e)[:300]}, ensure_ascii=False)
 
 
@@ -43,36 +52,37 @@ def check_vpn() -> str:
 
 
 @function_tool
-def list_challenges() -> str:
+def list_challenges(ctx: RunContextWrapper[TaskContext]) -> str:
     """获取题目列表及每题作答进度（unique_code/难度/总分/flag 数/是否通关/容器状态等）。"""
     try:
         return _ok(_client().list_challenges())
     except Exception as e:
-        return _err(e)
+        return _err(ctx, e)
 
 
 @function_tool
-def start_challenge(unique_code: str) -> str:
+def start_challenge(ctx: RunContextWrapper[TaskContext], unique_code: str) -> str:
     """启动一道题的靶场容器，返回 container_addr（IP:端口），用于后续渗透。"""
     try:
         addrs = _client().start_challenge(unique_code)
+        ctx.context.current_code = unique_code  # 记录当前题，供提交铁律机械提交
         return _ok({"unique_code": unique_code, "container_addr": addrs})
     except Exception as e:
-        return _err(e)
+        return _err(ctx, e)
 
 
 @function_tool
-def get_hint(unique_code: str) -> str:
+def get_hint(ctx: RunContextWrapper[TaskContext], unique_code: str) -> str:
     """获取某题提示（注意：查看提示后该题 flag 得分会按比例扣减）。"""
     try:
         hint = _client().get_hint(unique_code)
         return _ok({"unique_code": unique_code, "hint": hint})
     except Exception as e:
-        return _err(e)
+        return _err(ctx, e)
 
 
 @function_tool
-def submit_flag(unique_code: str, flag: str) -> str:
+def submit_flag(ctx: RunContextWrapper[TaskContext], unique_code: str, flag: str) -> str:
     """提交 flag。返回 correct（是否正确）/awarded（得分）/cumulative_score 等。
 
     重复提交同一正确 flag 返回 duplicate（幂等，跳过即可）。
@@ -80,17 +90,19 @@ def submit_flag(unique_code: str, flag: str) -> str:
     try:
         return _ok(_client().submit_flag(unique_code, flag))
     except Exception as e:
-        return _err(e)
+        return _err(ctx, e)
 
 
 @function_tool
-def close_challenge(unique_code: str) -> str:
+def close_challenge(ctx: RunContextWrapper[TaskContext], unique_code: str) -> str:
     """关闭某题容器、释放活跃名额。通关或放弃后务必调用。"""
     try:
         closed = _client().close_challenge(unique_code)
+        if ctx.context.current_code == unique_code:
+            ctx.context.current_code = ""  # 关闭后清空当前题标记
         return _ok({"unique_code": unique_code, "closed": closed})
     except Exception as e:
-        return _err(e)
+        return _err(ctx, e)
 
 
 PLATFORM_TOOLS = [check_vpn, list_challenges, start_challenge,

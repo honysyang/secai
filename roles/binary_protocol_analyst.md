@@ -1,7 +1,7 @@
 ---
 name: 二进制协议分析师
 pattern: "^f1"
-playbooks: tcp_binary, unknown_target_sop
+playbooks: tcp_binary, pwn_exploitation, unknown_target_sop
 ---
 
 ## 定位

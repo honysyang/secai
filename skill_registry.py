@@ -128,15 +128,39 @@ def find_skills(query: str, limit: int = 5) -> List[Dict[str, object]]:
     return matches
 
 
+# 渐进披露注入预算（对齐 SecAI/secai 的 to_prompt 整粒度截断）：
+# 防止技能全文无限膨胀系统提示——单轮 input 曾达 2.5 万 token。
+SKILL_MAX_PER_BODY = 1200    # 单篇技能正文上限（字符），超长截断
+SKILL_MAX_COUNT = 3          # 同屏最多注入的技能篇数（最新披露优先）
+SKILL_MAX_TOTAL = 8000       # 技能注入总预算（字符），整粒度截断
+
+
 def load_skill_bodies(names: List[str]) -> str:
-    """把若干技能名拼成一段注入文本（用于执行者系统提示）。"""
+    """把若干技能名拼成一段注入文本（用于执行者系统提示），带预算。
+
+    预算策略：同屏最多 SKILL_MAX_COUNT 篇、每篇最多 SKILL_MAX_PER_BODY 字、
+    总预算 SKILL_MAX_TOTAL 字符；最新披露的优先；装不下整个技能就跳过，
+    不从中途切半篇（避免把打法切成无法执行的半截）。
+    """
     parts = []
-    for name in names:
+    char_count = 0
+    for name in list(names)[-SKILL_MAX_COUNT:]:  # 最新披露的优先
         s = get_skill(name)
-        if s is not None and s.body:
-            title = f"{s.name}" + (f"（{s.category}）" if s.category else "")
-            parts.append(f"## 打法《{title}》\n{s.body}")
-    return "\n\n".join(parts)
+        if s is None or not s.body:
+            continue
+        body = s.body
+        if len(body) > SKILL_MAX_PER_BODY:
+            body = body[:SKILL_MAX_PER_BODY] + "\n…[截断，完整打法用 find_skills 按需取]"
+        title = f"{s.name}" + (f"（{s.category}）" if s.category else "")
+        block = f"## 打法《{title}》\n{body}"
+        if char_count + len(block) > SKILL_MAX_TOTAL:
+            break  # 整粒度截断：装不下就跳过，不从中间切
+        parts.append(block)
+        char_count += len(block) + 2
+    result = "\n\n".join(parts)
+    if parts and len(names) > len(parts):
+        result += "\n\n[技能上下文已截断：更多打法用 find_skills 按需检索]"
+    return result
 
 
 def create_skill(name: str, description: str, triggers: List[str], body: str = "") -> Path:

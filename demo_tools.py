@@ -3,11 +3,13 @@
 TaskContext 通过 Runner.run(context=...) 注入；disclosed_skills 是「多 Skills 渐进披露」
 的技能缓冲，初始包在派任时写入，运行中由 hooks.py 按事件证据逐步追加。
 
-（提交铁律 / flag 扫描 / submit_flag 属于 CTF 靶场层，后续单独接入，不进通用流程。）
+（提交铁律：shell/http_request 等工具返回前机械扫描 flag 并自动提交，见 _spill_output。）
 """
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import subprocess
 import time
 import uuid
@@ -26,29 +28,68 @@ import vuln_registry
 import knowledge_registry
 import platform_tools
 from skill_registry import find_skills as search_skills
-from config import VPN_CMD, VPN_CONFIG, VPN_AUTH
+from config import VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL, BENCHMARK_TOKEN
+from platform_client import PlatformClient
 
 PREVIEW = 4000
 ARTIFACT_SPILL_THRESHOLD = 800  # 工具输出超过此字符数就外置到 artifacts/
 BLACKBOARD_MAX_ENTRIES = 50     # 黑板容量上限，超出淘汰最旧条目（优先淘汰 done/failed）
 
 
+FLAG_RE = re.compile(r"flag\{[^}\s]{1,200}\}", re.IGNORECASE)
+
+
+def _scan_flags(text: str) -> List[str]:
+    """扫描文本中的 flag{...}（去重保序，最多 10 个）。"""
+    return list(dict.fromkeys(m.group(0) for m in FLAG_RE.finditer(text)))[:10]
+
+
+def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
+    """提交铁律：扫描完整输出中的 flag，若已知当前题 code 则机械提交，回执拼在返回文本尾部。
+
+    必须在 _spill_output 截断前调用（全文扫描），否则 flag 落在截断点之后会被埋没。
+    """
+    flags = _scan_flags(text)
+    if not flags:
+        return ""
+    c = ctx.context
+    code = c.current_code
+    notes = [f"[系统·检测到flag] {f}" for f in flags]
+    if not code:
+        notes.append("[系统] 当前题 unique_code 未知，请调用 submit_flag 手动提交")
+        return "\n".join(notes)
+    if not (BENCHMARK_BASE_URL and BENCHMARK_TOKEN):
+        notes.append("[系统] 未配置平台凭证（BENCHMARK_BASE_URL/BENCHMARK_TOKEN），无法机械提交")
+        return "\n".join(notes)
+    try:
+        client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
+        for f in flags:
+            r = client.submit_flag(code, f)
+            notes.append(f"[系统·提交铁律] {f} → {json.dumps(r, ensure_ascii=False)[:200]}")
+    except Exception as e:
+        notes.append(f"[系统·提交异常] {str(e)[:120]}")
+    return "\n".join(notes)
+
+
 def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     """工具输出超长时写入 artifacts/ 文件，只返回预览 + 引用，避免撑爆会话上下文。
 
     大段源码/扫描结果不再整段塞进 session，改为落盘 + 摘要，需要全文时用
-    read_artifact 按需读取。
+    read_artifact 按需读取。截断前先扫描全文 flag 并机械提交（提交铁律）。
     """
+    submit_note = _submit_flags_if_any(ctx, text)  # 先扫全文 flag 再截断
     if len(text) <= ARTIFACT_SPILL_THRESHOLD:
-        return text
+        return text + (f"\n{submit_note}" if submit_note else "")
     c = ctx.context
     art_dir = c.workdir / "artifacts"
     art_dir.mkdir(exist_ok=True)
     art_id = uuid.uuid4().hex[:8]
     (art_dir / f"{art_id}.txt").write_text(text, encoding="utf-8")
-    return (text[:ARTIFACT_SPILL_THRESHOLD]
-            + f"\n...[已截断，全文 {len(text)} 字符保存到 artifacts/{art_id}.txt]"
+    tail = (f"\n...[已截断，全文 {len(text)} 字符保存到 artifacts/{art_id}.txt]"
             + f"\n[用 read_artifact {art_id} 读取全文]")
+    if submit_note:
+        tail += f"\n{submit_note}"
+    return text[:ARTIFACT_SPILL_THRESHOLD] + tail
 
 
 @function_tool
@@ -288,10 +329,11 @@ def checkpoint(ctx: RunContextWrapper[TaskContext], reason: str = "") -> str:
 
 @function_tool
 def connect_vpn(ctx: RunContextWrapper[TaskContext]) -> str:
-    """当任务目标需要走 VPN/内网（如远程靶场、需特定网络出口）时调用，后台启用 OpenVPN。
+    """当任务目标需要走 VPN/内网（如远程靶场）时调用，后台启用 OpenVPN 并验证隧道真正建立。
 
-    读取 .env 里的 VPN_CONFIG（.ovpn 绝对路径，可选 VPN_AUTH / VPN_CMD），
-    用 --daemon 后台连接；已连接则直接返回，重复调用安全。
+    读取 .env 里的 VPN_CONFIG（.ovpn 绝对路径，可选 VPN_AUTH / VPN_CMD）。
+    openvpn 创建 tun0 需要 CAP_NET_ADMIN：优先 sudo -n（免密），否则依赖已 setcap 的 openvpn；
+    跑完后验证 tun0，未创建则报错（避免 --daemon 后台 fork 成功但隧道未建立时误报 connected）。
     """
     c = ctx.context
     if c.vpn_connected:
@@ -303,23 +345,52 @@ def connect_vpn(ctx: RunContextWrapper[TaskContext]) -> str:
     if not Path(VPN_CONFIG).exists():
         return json.dumps({"error": f"VPN 配置文件不存在：{VPN_CONFIG}"}, ensure_ascii=False)
 
-    cmd = [VPN_CMD, "--config", VPN_CONFIG]
+    base = [VPN_CMD, "--config", VPN_CONFIG]
     if VPN_AUTH:
-        cmd += ["--auth-user-pass", VPN_AUTH]
-    cmd += ["--daemon"]
+        base += ["--auth-user-pass", VPN_AUTH]
 
+    # 探测是否可免密 sudo（openvpn 创建 tun0 需要 root / CAP_NET_ADMIN）
+    use_sudo = False
+    if shutil.which("sudo"):
+        try:
+            probe = subprocess.run(["sudo", "-n", "true"], capture_output=True,
+                                   text=True, timeout=5)
+            use_sudo = (probe.returncode == 0)
+        except Exception:
+            use_sudo = False
+
+    cmd = (["sudo", "-n"] if use_sudo else []) + base + ["--daemon"]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except Exception as e:
         return json.dumps({"error": f"VPN 启动异常：{str(e)[:200]}"}, ensure_ascii=False)
 
     if p.returncode != 0:
-        return json.dumps({"error": f"VPN 启动失败（rc={p.returncode}）：{p.stderr[:300]}"},
-                          ensure_ascii=False)
+        return json.dumps({
+            "error": f"VPN 启动失败（rc={p.returncode}）：{p.stderr[:300]}",
+            "hint": "openvpn 创建 tun0 需要 root 权限，请执行：sudo setcap cap_net_admin,cap_net_raw+ep /usr/sbin/openvpn",
+        }, ensure_ascii=False)
+
+    # 验证 tun0 隧道真正建立（--daemon 后台 fork 成功不代表 tun0 创建成功）
+    time.sleep(2)
+    tun_ok = False
+    try:
+        r = subprocess.run(["ip", "addr", "show", "tun0"], capture_output=True,
+                           text=True, timeout=5)
+        tun_ok = (r.returncode == 0 and "tun0" in r.stdout)
+    except Exception:
+        tun_ok = False
+
+    if not tun_ok:
+        return json.dumps({
+            "error": "openvpn 进程已启动但 tun0 未创建（无权限创建 TUN 设备）。",
+            "hint": "请执行：sudo setcap cap_net_admin,cap_net_raw+ep /usr/sbin/openvpn，然后重试",
+            "sudo_used": use_sudo,
+        }, ensure_ascii=False)
 
     c.vpn_connected = True
-    return json.dumps({"connected": True, "command": " ".join(cmd), "config": VPN_CONFIG},
-                      ensure_ascii=False)
+    return json.dumps({"connected": True, "command": " ".join(cmd),
+                       "config": VPN_CONFIG, "tun": "tun0"}, ensure_ascii=False)
 
 
 @function_tool
@@ -586,13 +657,15 @@ def fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
 
     rows = [{"payloads": v, "response": k} for k, v in groups.items()]
     diff = len(groups) > 1
-    return json.dumps({
+    result_text = json.dumps({
         "tested": len(pl),
         "groups": rows,
         "differentiated": diff,
         "verdict": ("响应存在差异 → 攻击面有效，聚焦差异组深入" if diff
                     else "所有载荷响应一致 → 该位置/参数无差异，换攻击面"),
     }, ensure_ascii=False)
+    note = _submit_flags_if_any(ctx, result_text)  # 提交铁律：扫描 fuzz 响应中的 flag
+    return result_text + (f"\n{note}" if note else "")
 
 
 # ================= 工具按需加载（分桶） =================

@@ -36,3 +36,9 @@ class TaskContext:
     plan: str = ""                            # 作战计划（Planner 深度分析产出，注入执行者系统提示）
     stuck_turns: int = 0                      # 当前阶段连续未切换的轮数（replan 触发用）
     replan_count: int = 0                     # 已执行 replan 次数（防止无限重规划）
+    turn_gain: bool = False                   # 本轮是否产出正向信息增量（hooks 打分，main 每轮清零）
+    zero_gain_turns: int = 0                  # 连续零信息增量轮数（判停/replan 共用，>0 的正向增量才清零）
+    current_code: str = ""                    # 当前正在攻打的题目 unique_code（提交铁律机械提交用）
+    fatal: str = ""                           # 致命错误标记（task_ended/task_not_found），主循环检测后终止
+    turn_net_fail: bool = False               # 本轮是否命中网络不可达（hooks 检测，main 每轮清零）
+    net_fail_turns: int = 0                   # 连续网络不可达轮数（≥2 快速换题，防 VPN 死磕）

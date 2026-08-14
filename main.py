@@ -15,6 +15,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Dict
 
 from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
@@ -22,13 +23,15 @@ from agents.memory import SQLiteSession
 
 from agents_def import manager_agent, planner_agent, reporter_agent, build_executor
 from charter import save_charter
-from context_manager import (build_ctx_from_state, compact_if_needed,
-                             has_checkpoint, load_state, save_state)
+from config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
+from context_manager import compact_if_needed
 from demo_tools import build_default_tools
 from hooks import EventStreamHooks
+from platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
 from role_registry import assign_role
+from scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
 from status import set_status
-from stop_policy import should_stop
+from stop_policy import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
 from task_context import TaskContext
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -108,7 +111,7 @@ TSec Benchmark 标准跑分流程如下：
 - 资源释放：完成或放弃一道题后必须 close。
 - 题目隔离：每一道题目的环境和成果完全独立，互不影响。
 - 连续作战（最重要）：提交一个 flag 后，**立即继续**当前题的其它 flag（若 flag_count>1）或下一题，直到题目全部完成或任务超时。**找到一个 flag / 通关一题不是停止理由**，禁止因此调用 finalize 停下。
-- flag 定位（拿到任意文件读取/命令执行后立即执行）：flag 是形如 flag{{xxxx}} 的字符串。拿到任意文件读取（路径穿越/LFI）或命令执行后，**优先读**：/flag、/flag.txt、/etc/passwd（先验证穿越有效）、环境变量、数据库、以及题目描述或页面里**已经出现过的真实文件名**（如合同文件 CONTRACT-*.pdf）。**禁止猜臆造的文件名**（如 init_config.txt），用已知真实文件名或常见 flag 路径。
+- flag 定位（拿到任意文件读取/命令执行后立即执行）：flag 是形如 flag{{xxxx}} 的字符串。拿到任意文件读取（路径穿越/LFI）或命令执行后，**优先读**：/flag、/flag.txt、/etc/passwd（先验证穿越有效）、环境变量、数据库、以及题目描述或页面里**已经出现过的真实文件名**（如合同文件 CONTRACT-*.pdf）。**读不到 /flag 时，深入读 includes/config.php 拿数据库配置连库查、读合同/文档文件内容**。**禁止猜臆造的文件名**（如 init_config.txt），用已知真实文件名或常见 flag 路径。
 
 # 错误处理
 平台业务错误统一返回 JSON：{"code": "<错误码>", "message": "<描述>", "detail": {}}。按 code 分类处置：
@@ -158,7 +161,7 @@ def _load_field_notes(max_chars: int = 3000) -> str:
 
 
 SUBTASK_MAX_TURNS = 8  # 每个子任务最多 LLM 回合数（内部 ReAct，Agent 可 finalize 提前结束）
-REPLAN_STUCK_TURNS = 15  # 阶段连续停滞多少轮触发 replan（重新规划）
+ZERO_GAIN_REPLAN_TURNS = 5  # 连续零信息增量轮数触发 replan（替代旧「阶段停滞」判据）
 REPLAN_MAX = 3           # 最多 replan 次数，防止无限重规划
 
 
@@ -218,164 +221,301 @@ async def _replan(ctx, task: str, charter: str, role: dict, hooks) -> str:
     return str(result.final_output)
 
 
-async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict:
-    workdir = WORKDIR
-    workdir.mkdir(exist_ok=True)
-    hooks = EventStreamHooks(workdir, "generic")
+async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
+                                task: str, global_plan: str, hooks, workdir: Path,
+                                client: PlatformClient, difficulty: str = "") -> str:
+    """对一道题执行完整渗透循环，返回 outcome：solved / stuck / fatal。
 
-    # 断点续跑：加载上次状态，跳过管理者/角色派任
-    if resume and has_checkpoint(workdir):
-        state = load_state(workdir)
-        charter = state["charter"]
-        role = state["role"]
-        task = state["task"]
-        ctx = build_ctx_from_state(workdir, state)
-        turn_count = state["turn_count"]
-        next_input = "继续执行（从上次 checkpoint 恢复，接着上一轮未完成的方向）。"
-        # 续跑只统计本次新增的字符预算，避免沿用上次累计量导致一恢复就判停
-        base_chars = (workdir / "events.jsonl").stat().st_size if (workdir / "events.jsonl").exists() else 0
-        print(f"== 恢复任务：{role['role']}，第 {turn_count} 轮后继续 ==")
-        set_status(workdir, "execute", "running", turn=turn_count, resume=True)
-    else:
-        # 全新开始：清掉上次的 checkpoint 与文件型会话，避免加载旧历史
-        for f in ("state.json", "session.sqlite"):
-            (workdir / f).unlink(missing_ok=True)
-        (workdir / "events.jsonl").write_text("", encoding="utf-8")
-        base_chars = 0  # 全新开始，字符预算从 0 起
+    单题独立 context + 独立 session；停滞时机械看 hint / 换题（调度器决策），
+    选题/换题/看 hint 不由 LLM 自觉——这是报告 P0-4 的核心修复。
+    """
+    # 题级独立工作区：3 槽并发下每题独立 events/session/artifacts，避免交错
+    challenge_workdir = workdir / f"worker_{code}"
+    challenge_workdir.mkdir(parents=True, exist_ok=True)
+    challenge_hooks = EventStreamHooks(challenge_workdir, code)
 
-        # ① 管理者·立法（事件触发，一次调用）
-        print("== 管理者：写使命宪章 ==")
-        set_status(workdir, "legislate", "running")
-        charter_result = await Runner.run(manager_agent, input=f"用户任务：{task}",
-                                          hooks=hooks)
-        charter = str(charter_result.final_output)
-        save_charter(DATA_DIR / "mission_charter.md", charter)
-        set_status(workdir, "legislate", "finish")
-
-        # ② 角色派任（纯查表；role_hint 可覆盖题型）
-        role = assign_role(role_hint, task)
-        print(f"== 角色派任：{role['role']}（{role['matched_by']}）==")
-        print(f"   初始技能包：{role['playbooks']}")
-        set_status(workdir, "assign", "finish", role=role["role"])
-
-        ctx = TaskContext(workdir=workdir, disclosed_skills=list(role["playbooks"]),
-                          task=task, charter=charter, role=role)
-        # 工具按需加载：核心工具常驻 + 平台/VPN/安全CLI 默认可用，其余按需 enable_tool
-        ctx.enabled_tools = build_default_tools()
-
-        # ②b 规划师·深度分析（一次性：产出作战计划，注入执行者系统提示）
-        print("== 规划师：任务深度分析，产出作战计划 ==")
-        plan_result = await Runner.run(
-            planner_agent,
-            input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
-                   f"派任角色：{role['role']}\n\n请产出作战计划。"),
-            hooks=hooks)
-        ctx.plan = str(plan_result.final_output)
-
-        turn_count = 0
-        next_input = "开始执行。第一轮：按你的角色打法做信息收集，打包探测。"
-
-    brief = f"# 任务书\n{task}\n"
-    # 注入上次战报尾部（含死路蒸馏），让「死路不重复」真正接力
+    role = assign_role(code, desc)  # 题级派任（P0-5：按 unique_code 前缀 + 描述）
+    print(f"== 单题 {code}：派任 {role['role']} ==")
+    ctx = TaskContext(workdir=challenge_workdir, disclosed_skills=list(role["playbooks"]),
+                      task=task, charter=charter, role=role)
+    ctx.enabled_tools = build_default_tools()
+    # 调度器独占编排工具：单题循环里 Agent 不得自己选题/启动/关闭容器，避免破坏调度器追踪
+    for t in ("check_vpn", "list_challenges", "start_challenge", "close_challenge"):
+        ctx.enabled_tools.discard(t)
+    ctx.current_code = code
+    ctx.plan = global_plan
+    brief = (f"# 任务书\n{task}\n\n"
+             f"# 当前题目（只打这道题）\n"
+             f"- unique_code: {code}\n- 描述: {desc}\n- 容器地址: {addrs}\n\n"
+             f"选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
+             f"不要自己调用 list_challenges / start_challenge / close_challenge。")
     executor = build_executor(role, charter, brief, field_notes=_load_field_notes())
-    # 文件型 session：会话历史落盘，中断后可续跑
-    session = SQLiteSession(session_id="generic", db_path=str(workdir / "session.sqlite"))
+    session = SQLiteSession(session_id=f"challenge_{code}",
+                            db_path=str(workdir / f"challenge_{code}.sqlite"))
 
-    print("== 执行者执行（判停器驱动，Ctrl-C 中断自动保存 checkpoint）==")
-    total_chars = 0
-    result = None
+    turn_count = 0
+    hint_used = False
+    next_input = f"开始攻击本题容器：{addrs}。先做信息收集，识别技术栈与入口。"
     try:
         while True:
             turn_count += 1
-            ctx.turn_count = turn_count  # 同步轮次，供 checkpoint 工具读取
+            ctx.turn_count = turn_count
             ctx.turn_tool_count = 0
-            set_status(workdir, "execute", "running", turn=turn_count,
-                       tokens=ctx.token_usage["total"])
-            prev_phase = ctx.phase  # 记录本轮前的阶段，用于停滞检测
-            # 每次只跑 1 个 LLM 回合；若模型仍要调工具会抛 MaxTurnsExceeded，用 session 续跑下一轮
+            ctx.turn_gain = False
+            ctx.turn_net_fail = False  # 本轮网络不可达清零（hooks 命中时置位）
+            prev_phase = ctx.phase
             try:
-                result = await Runner.run(
-                    executor, input=next_input, context=ctx, hooks=hooks,
-                    session=session, max_turns=1)
+                await Runner.run(executor, input=next_input, context=ctx,
+                                 hooks=challenge_hooks, session=session, max_turns=1)
             except MaxTurnsExceeded:
-                result = None
+                pass
 
-            # 阶段停滞检测：阶段没切换则累计，切换则清零
             if ctx.phase == prev_phase:
                 ctx.stuck_turns += 1
             else:
                 ctx.stuck_turns = 0
 
-            total_chars = (workdir / "events.jsonl").stat().st_size - base_chars
-            decision = should_stop(ctx, turn_count, total_chars)
-            if decision.get("stop"):
-                print(f"== 判停：{decision.get('reason')}（第 {turn_count} 轮）==")
-                set_status(workdir, "execute", "finish", turn=turn_count,
-                           reason=decision.get("reason"), finalized=ctx.finalized,
-                           tokens=ctx.token_usage["total"])
-                break
+            if ctx.turn_gain:
+                ctx.zero_gain_turns = 0
+            else:
+                ctx.zero_gain_turns += 1
 
-            # replan：阶段连续停滞 N 轮 → 重新规划（在判停之前兜底修正方向）
-            if ctx.stuck_turns >= REPLAN_STUCK_TURNS and ctx.replan_count < REPLAN_MAX:
-                print(f"  [replan] 阶段 {ctx.phase} 已停滞 {ctx.stuck_turns} 轮，重新规划...")
-                ctx.plan = await _replan(ctx, task, charter, role, hooks)
+            # 网络不可达累计：连续命中 → 快速换题（防 VPN 断开后死磕同一题）
+            if ctx.turn_net_fail:
+                ctx.net_fail_turns += 1
+            else:
+                ctx.net_fail_turns = 0
+
+            # 致命错误 → 全局终止（任务结束 / token 无效）
+            if ctx.fatal:
+                return "fatal"
+
+            # 网络不可达：连续 2 次连接失败/超时 → 判定本题不可达，机械换题
+            if ctx.net_fail_turns >= 2:
+                print(f"  [skip] 单题 {code} 连续 {ctx.net_fail_turns} 次网络不可达，机械换题")
+                return "stuck"
+
+            # 单题完成（Agent 主动 finalize）
+            if ctx.finalized:
+                return "solved"
+
+            # 单题空转（连续无工具调用）→ 放弃换题
+            if ctx.turn_tool_count == 0:
+                ctx.empty_turns += 1
+                if ctx.empty_turns >= SINGLE_EMPTY_TURNS:
+                    print(f"  [skip] 单题 {code} 连续 {ctx.empty_turns} 轮空转，机械换题")
+                    return "stuck"
+            else:
+                ctx.empty_turns = 0
+
+            # 单题停滞机械决策：先看 hint，看完仍无进展则换题
+            action = decide_stuck_action(ctx.zero_gain_turns, hint_used, difficulty)
+            if action == "hint":
+                try:
+                    hint = await asyncio.to_thread(client.get_hint, code)
+                except Exception as e:
+                    hint = f"（获取提示失败：{str(e)[:120]}）"
+                hint_used = True
+                ctx.zero_gain_turns = 0
+                print(f"  [hint] 单题 {code} 停滞，机械看提示")
+                next_input = f"本题卡住。系统已获取提示：\n{hint}\n\n请结合提示继续攻击本题。"
+                continue
+            if action == "skip":
+                print(f"  [skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
+                return "stuck"
+
+            # 单题 replan（停滞重新规划，仍针对本题）
+            if ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS and ctx.replan_count < REPLAN_MAX:
+                ctx.plan = await _replan(ctx, brief, charter, role, hooks)
                 ctx.replan_count += 1
-                ctx.stuck_turns = 0
-                next_input = "作战计划已更新，按新计划继续推进，产出新证据增量。"
+                ctx.zero_gain_turns = 0
+                next_input = "作战计划已更新，按新计划继续攻击本题。"
                 continue
 
-            # 子任务并发调度：发现 pending 子任务就 asyncio.gather 并发跑
+            # 子任务并发调度
             pending = [s for s in ctx.subtasks if s["status"] == "pending"]
             if pending:
-                print(f"  [subtasks] 并发调度 {len(pending)} 个子任务")
                 await _run_subtasks(executor, ctx, pending, workdir)
 
-            # 历史压缩：会话过大则把旧历史压成摘要（写 ctx.compaction_summary，注入下一轮系统提示）
+            # 历史压缩
             if await compact_if_needed(session, ctx):
-                print("  [compact] 历史已压缩为摘要，注入下一轮系统提示")
+                print("  [compact] 单题历史已压缩")
 
-            next_input = decision.get("nudge") or "继续执行：调用工具产出新证据增量，或调用 finalize 提交结论。"
-            if next_input:
-                print(f"  [nudge] {next_input[:60]}...")
+            next_input = "继续攻击本题：调用工具产出新证据增量，或调用 finalize 提交本题结论。"
+    finally:
+        # 清理单题 session 文件，避免堆积（保留 events/artifacts 作为证据）
+        try:
+            (challenge_workdir / "session.sqlite").unlink(missing_ok=True)
+        except Exception:
+            pass
+    return "stopped"
+
+
+async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict:
+    workdir = WORKDIR
+    workdir.mkdir(exist_ok=True)
+    hooks = EventStreamHooks(workdir, "generic")
+
+    # 清理旧 checkpoint / 事件流（调度器模式：题目进度在平台侧，本地不依赖续跑状态）
+    for f in ("state.json", "session.sqlite"):
+        (workdir / f).unlink(missing_ok=True)
+    (workdir / "events.jsonl").write_text("", encoding="utf-8")
+
+    # ① 管理者·立法（全局一次）
+    print("== 管理者：写使命宪章 ==")
+    set_status(workdir, "legislate", "running")
+    charter_result = await Runner.run(manager_agent, input=f"用户任务：{task}",
+                                      hooks=hooks)
+    charter = str(charter_result.final_output)
+    save_charter(DATA_DIR / "mission_charter.md", charter)
+    set_status(workdir, "legislate", "finish")
+
+    # 全局 fallback 角色（单题会按 unique_code 重新派任）
+    base_role = assign_role(role_hint, task)
+    print(f"== 全局角色：{base_role['role']} ==")
+
+    # ② 规划师·全局计划（一次，单题复用 + 单题 brief 补充）
+    print("== 规划师：任务深度分析，产出作战计划 ==")
+    plan_result = await Runner.run(
+        planner_agent,
+        input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
+               f"派任角色：{base_role['role']}\n\n请产出作战计划。"),
+        hooks=hooks)
+    global_plan = str(plan_result.final_output)
+
+    # ③ 调度器主循环：3 槽并发（同时跑最多 3 道题，吞吐 ×3）
+    client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
+    attempts: Dict[str, int] = {}
+    active: Dict[str, asyncio.Task] = {}  # code -> 单题 asyncio 任务
+    results = []
+    fatal_reason = ""
+
+    # 启动前清理残留容器（上次运行残留的活跃容器，避免一上来就 max active 3）
+    try:
+        for c in client.list_challenges():
+            if c.get("container_status") == "available":
+                client.close_challenge(c.get("unique_code"))
+                print(f"  [cleanup] 清理残留容器 {c.get('unique_code')}")
+    except Exception:
+        pass
+
+    async def _start_one(code: str, desc: str, difficulty: str):
+        """启动并运行一道题，返回 (code, outcome)。"""
+        try:
+            addrs = await asyncio.to_thread(client.start_challenge, code)
+        except ContainerBusy:
+            return (code, "container_busy")
+        except Exception as e:
+            print(f"  [start] 启动 {code} 失败：{str(e)[:200]}，跳过")
+            return (code, "start_failed")
+        if not addrs:
+            return (code, "start_failed")
+        set_status(workdir, "execute", "running", code=code)
+        outcome = await _run_single_challenge(code, desc, addrs, charter, task,
+                                              global_plan, hooks, workdir, client,
+                                              difficulty)
+        return (code, outcome)
+
+    try:
+        while True:
+            # 全局 deadline 检查（比赛硬时限，含安全余量）
+            if TASK_DEADLINE_TS:
+                try:
+                    if time.time() >= float(TASK_DEADLINE_TS) - DEADLINE_SAFE_MARGIN:
+                        print("== deadline 到达，停止跑分 ==")
+                        break
+                except ValueError:
+                    pass
+
+            # 拉题目列表
+            try:
+                challenges = await asyncio.to_thread(client.list_challenges)
+            except (TaskEnded, TaskNotFound) as e:
+                fatal_reason = str(e)
+                print(f"== 平台终止：{fatal_reason} ==")
+                break
+
+            # 补满 3 个槽：选未启动的题，start 并启动单题任务
+            while len(active) < 3:
+                # 排除已活跃的题，避免重复选题
+                candidates = [c for c in challenges if c.get("unique_code") not in active]
+                chal = select_challenge(candidates, attempts)
+                if chal is None:
+                    break
+                code = chal.get("unique_code", "")
+                desc = chal.get("description", "") or ""
+                difficulty = chal.get("difficulty", "")
+                t = asyncio.create_task(_start_one(code, desc, difficulty))
+                active[code] = t
+                print(f"  [slot] 启动 {code}（活跃 {len(active)}/3）")
+
+            if not active:
+                print("== 全部题目已完成（无可选题目）==")
+                break
+
+            # 等待任一单题完成
+            done, _ = await asyncio.wait(
+                list(active.values()), return_when=asyncio.FIRST_COMPLETED)
+
+            # 处理完成的单题
+            fatal_hit = False
+            for t in done:
+                code = next(c for c, task in active.items() if task is t)
+                del active[code]
+                try:
+                    _, outcome = t.result()
+                except Exception as e:
+                    outcome = "error"
+                    print(f"  [error] 单题 {code} 异常：{str(e)[:200]}")
+                # 关闭容器释放名额
+                try:
+                    await asyncio.to_thread(client.close_challenge, code)
+                except Exception:
+                    pass
+                if outcome in ("stuck", "container_busy", "start_failed", "error"):
+                    attempts[code] = attempts.get(code, 0) + 1
+                results.append({"code": code, "outcome": outcome})
+                print(f"== 单题 {code} 结果：{outcome} ==")
+                if outcome == "fatal":
+                    fatal_reason = "task_ended"
+                    fatal_hit = True
+
+            if fatal_hit:
+                # 任一题致命错误：取消其余并发任务，终止战役
+                for other in active.values():
+                    other.cancel()
+                break
     except KeyboardInterrupt:
-        set_status(workdir, "execute", "interrupted", turn=turn_count)
-        save_state(workdir, ctx, turn_count, task, charter, role)
-        print(f"\n== 已中断，checkpoint 已保存（第 {turn_count} 轮）。"
-              f"用 `python main.py --resume` 续跑 ==")
-        return {"status": "interrupted", "turn_count": turn_count,
-                "disclosed_skills": ctx.disclosed_skills}
+        print("\n== 已中断 ==")
+        set_status(workdir, "execute", "interrupted")
+        for t in active.values():
+            t.cancel()
+        return {"status": "interrupted", "results": results}
+    finally:
+        # 清理所有仍活跃的容器，避免残留导致下次 max active
+        for code in list(active.keys()):
+            try:
+                client.close_challenge(code)
+            except Exception:
+                pass
 
-    final_text = (ctx.final_payload.get("findings", "") if ctx.finalized
-                  else (str(result.final_output) if result is not None else ""))
-    print(f"== 执行结束（finalized={ctx.finalized}），本次渐进披露技能：{ctx.disclosed_skills} ==")
-
-    # ④ 报告者·收尾（事件触发，一次调用）
+    # ④ 报告者·收尾
     set_status(workdir, "report", "running")
     events_text = (workdir / "events.jsonl").read_text(encoding="utf-8")[-6000:]
+    summary = json.dumps(results, ensure_ascii=False)[:2000]
     report = await Runner.run(
         reporter_agent,
-        input=(f"任务执行结束（{'已 finalize' if ctx.finalized else '判停终止'}）。"
-               f"最终结论：{final_text}\n\n事件流尾部：\n{events_text}"),
+        input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
+               f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
         hooks=hooks)
     report_text = str(report.final_output)
     (DATA_DIR / "field_notes.md").open("a", encoding="utf-8").write(
         f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{report_text}\n")
     print("\n===== 战报 =====\n" + report_text)
-    set_status(workdir, "report", "finish", finalized=ctx.finalized)
+    set_status(workdir, "report", "finish")
 
-    # 正常完成：清除 checkpoint，避免下次 --resume 误恢复已完成任务
-    (workdir / "state.json").unlink(missing_ok=True)
-
-    print(f"\n== Token 用量：input={ctx.token_usage['input']} "
-          f"output={ctx.token_usage['output']} "
-          f"total={ctx.token_usage['total']} "
-          f"requests={ctx.token_usage['requests']} ==")
-
-    return {"status": "finalized" if ctx.finalized else "stopped",
-            "disclosed_skills": ctx.disclosed_skills,
-            "final_findings": final_text,
-            "token_usage": ctx.token_usage,
-            "report": report_text}
+    print(f"\n== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
+    return {"status": "finished", "results": results, "report": report_text}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,37 @@
+name: "mythril"
+command: "myth"
+args:
+  - "analyze"
+enabled: true
+short_description: "以太坊智能合约符号执行分析工具"
+description: |
+  Mythril 是以太坊智能合约符号执行分析工具，检测可被利用的漏洞路径。
+
+  **主要功能：**
+  - 符号执行深路径分析
+  - 检测重入、整数溢出、未检查调用返回值等
+  - 输出可利用性报告
+
+  **使用场景：**
+  - 智能合约安全审计
+  - 漏洞路径验证
+parameters:
+  - name: "target"
+    type: "string"
+    description: "Solidity 合约文件路径或合约地址"
+    required: true
+    position: 0
+    format: "positional"
+  - name: "execution_timeout"
+    type: "string"
+    description: "符号执行超时（秒）"
+    required: false
+    default: "60"
+    flag: "--execution-timeout"
+    format: "flag"
+  - name: "solv"
+    type: "string"
+    description: "指定 solc 版本（如 0.8.19）"
+    required: false
+    flag: "--solv"
+    format: "flag"
