@@ -597,6 +597,24 @@ SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
 - 文本不截断，实时展示阶段切换、token 预算、信息增量、网络不可达
 - 事件经 `events.py` 总线 → `db.py` 落库（tasks/events 表），监控页经 `/api/tasks` / `/api/events` / `/api/stream-db` 追溯历史
 
+### 界面截图
+
+**启动界面（对话 / 任务流）**
+
+![启动界面](img/启动.png)
+
+**实时流界面**
+
+![实时流](img/实时流.png)
+
+**监控界面**
+
+![监控](img/监控.png)
+
+**智能体界面（kill-chain）**
+
+![智能体](img/智能体.png)
+
 ---
 
 ## 15. 目录结构

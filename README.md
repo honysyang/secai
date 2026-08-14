@@ -410,6 +410,14 @@ sudo setcap cap_net_admin,cap_net_raw+ep /usr/sbin/openvpn
 
 ![实时流](docs/img/实时流.png)
 
+### 监控界面
+
+![监控](docs/img/监控.png)
+
+### 智能体界面
+
+![智能体](docs/img/智能体.png)
+
 ---
 
 ## 下一步拓展（Roadmap）
