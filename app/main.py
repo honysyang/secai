@@ -26,6 +26,7 @@ from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
 from runtime.model_pool import ModelPool, ModelExhaustedError, is_model_failure
+from runtime.stuck import StuckActionType, StuckDetector
 from core.charter import save_charter
 from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
 from core.context_manager import compact_if_needed
@@ -284,6 +285,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     turn_count = 0
     hint_used = False
     coach_used = False  # 软干预教练：每题目仅触发 1 次
+    stuck_detector = StuckDetector()  # 模型惰性检测器（多模型切换 / 单模型自救）
     outcome = "stopped"
     # 成本治理：本尝试的 token/时钟起点 + 换脑/挂起档
     cost_limit = COST_LIMITS.get(str(difficulty).lower(), COST_LIMITS.get("medium", {}))
@@ -388,6 +390,29 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     break
             else:
                 ctx.empty_turns = 0
+
+            # 模型惰性治理：连续无进展时切换模型 or 单模型自救
+            stuck_action = stuck_detector.check(
+                ctx, model_pool.has_alternative,
+                current_model_name=getattr(executor.model, "model", "?"))
+            if stuck_action.action == StuckActionType.SWITCH_MODEL:
+                current_name = getattr(executor.model, "model", "?")
+                entry = model_pool.next(current_name=current_name,
+                                        reason=f"stuck:{stuck_action.reason}")
+                if entry is not None and entry.name != current_name:
+                    executor.model = entry.model
+                    print(f"  [model-switch] 单题 {code} {stuck_action.reason}，"
+                          f"{current_name} -> {entry.name} 接管会话")
+                    next_input = switch_model_prompt(ctx, current_name, entry.name)
+                    ctx.zero_gain_turns = 0
+                    continue
+                # 无可用候选时落回 scheduler 决策
+            elif stuck_action.action == StuckActionType.SELF_RESCUE:
+                print(f"  [self-rescue] 单题 {code} {stuck_action.reason}"
+                      f"，解锁技能 {stuck_action.extra_skills}，阶段重置")
+                next_input = stuck_action.next_input
+                ctx.zero_gain_turns = 0
+                continue
 
             # 单题停滞机械决策：先看 hint，看完仍无进展则换题
             action = decide_stuck_action(ctx.zero_gain_turns, hint_used, difficulty)
