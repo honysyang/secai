@@ -6,12 +6,18 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from arsenal.registries.skill_registry import load_skills
 from core.task_context import TaskContext
+
+
+# 模型惰性检测阈值（可通过环境变量覆盖）
+MODEL_SWITCH_TURNS = int(os.getenv("MODEL_SWITCH_TURNS", "6"))
+MODEL_SELF_RESCUE_MAX = int(os.getenv("MODEL_SELF_RESCUE_MAX", "2"))
 
 
 class StuckActionType(Enum):
@@ -36,9 +42,9 @@ class StuckDetector:
     多模型可用 → 优先换模型；单模型 → 自救换思路。
     """
 
-    def __init__(self, *, switch_turns: int = 6, max_self_rescue: int = 2):
-        self.switch_turns = switch_turns
-        self.max_self_rescue = max_self_rescue
+    def __init__(self, *, switch_turns: int = None, max_self_rescue: int = None):
+        self.switch_turns = switch_turns if switch_turns is not None else MODEL_SWITCH_TURNS
+        self.max_self_rescue = max_self_rescue if max_self_rescue is not None else MODEL_SELF_RESCUE_MAX
         self.self_rescue_count = 0
 
     def check(self, ctx: TaskContext, has_alternative: bool,
