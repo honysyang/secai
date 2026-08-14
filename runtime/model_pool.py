@@ -37,15 +37,35 @@ class ModelExhaustedError(RuntimeError):
 def is_model_failure(exc: Exception) -> bool:
     """判断异常是否属于「模型服务端失败/额度/限流/鉴权」类，应触发灾备切换。
 
-    包含：openai 各类 APIError、RateLimitError、AuthenticationError、超时，
-    以及百度等兼容网关常见的鉴权/限流/余额/服务不可用错误提示。
+    判断维度：
+    1. OpenAI SDK 标准异常类型（APIError / RateLimitError / AuthenticationError 等）
+    2. 异常对象携带的 HTTP 状态码（401/403/404/429/5xx）
+    3. 异常文本中的常见错误关键词（覆盖百度等兼容网关）
+
     不包含：MaxTurnsExceeded（回合上限，不是模型问题）。
     """
+    # 维度 1：OpenAI SDK 标准异常
     if isinstance(exc, (APIError, RateLimitError, AuthenticationError,
                         APIStatusError, APITimeoutError)):
         return True
-    # 兼容某些后端返回的通用异常提示（覆盖百度/智谱/通义等兼容网关）
+
     msg = str(exc).lower()
+
+    # 维度 2：HTTP 状态码（兼容百度等网关直接返回 401/403/404/429/5xx 的场景）
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        # 尝试从 body / response 里取
+        response = getattr(exc, "response", None) or getattr(exc, "body", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and (status_code in (401, 403, 404, 429)
+                                           or 500 <= status_code < 600):
+        return True
+    # 异常 message 里也可能直接出现 "401" / "429" 等状态码
+    if any(f" {code}" in msg or f"{code}:" in msg for code in (401, 403, 404, 429, 500, 502, 503, 504)):
+        return True
+
+    # 维度 3：错误文本关键词（覆盖百度/智谱/通义等兼容网关）
     keywords = (
         # 额度 / 余额 / 配额
         "insufficient_quota", "quota", "insufficient balance",
@@ -54,15 +74,15 @@ def is_model_failure(exc: Exception) -> bool:
         "rate limit", "too many requests", "throttled", "request rate",
         # 鉴权
         "invalid api key", "unauthorized", "authentication", "token invalid",
-        "api key invalid", "invalid token", "鉴权",
+        "api key invalid", "invalid token", "鉴权", "key 无效", "被禁用",
         # 超时
         "timeout", "timed out",
         # 服务端不可用
         "service unavailable", "internal server error", "bad gateway",
         "gateway timeout", " temporarily unavailable",
-        # 模型不可用
+        # 模型/请求不可用
         "model not found", "model is not available", "invalid model",
-        "model not supported",
+        "model not supported", "请求体不合协议",
     )
     if any(k in msg for k in keywords):
         return True
