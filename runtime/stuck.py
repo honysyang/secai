@@ -39,13 +39,14 @@ class StuckDetector:
     """检测单题执行是否陷入模型惰性，并决定下一步动作。
 
     触发阈值：连续 zero_gain 达到 MODEL_SWITCH_TURNS 时触发。
-    多模型可用 → 优先换模型；单模型 → 自救换思路。
+    策略：优先自救换思路；自救次数用尽后，若仍有候选模型，则切换模型接管。
     """
 
     def __init__(self, *, switch_turns: int = None, max_self_rescue: int = None):
         self.switch_turns = switch_turns if switch_turns is not None else MODEL_SWITCH_TURNS
         self.max_self_rescue = max_self_rescue if max_self_rescue is not None else MODEL_SELF_RESCUE_MAX
         self.self_rescue_count = 0
+        self.switched = False  # 是否已尝试过模型切换
 
     def check(self, ctx: TaskContext, has_alternative: bool,
               current_model_name: str = "") -> StuckAction:
@@ -53,13 +54,7 @@ class StuckDetector:
         if ctx.zero_gain_turns < self.switch_turns:
             return StuckAction(action=StuckActionType.CONTINUE)
 
-        if has_alternative:
-            return StuckAction(
-                action=StuckActionType.SWITCH_MODEL,
-                reason=f"连续 {ctx.zero_gain_turns} 轮零增量，切换到候选模型接管",
-            )
-
-        # 单模型场景：自救次数未超限时自救
+        # 优先自救：次数未超限时，不管是否有候选模型都先换思路
         if self.self_rescue_count < self.max_self_rescue:
             self.self_rescue_count += 1
             extra_skills = _pick_unseen_skills(ctx)
@@ -71,16 +66,30 @@ class StuckDetector:
             ctx.phase = "recon"
             return StuckAction(
                 action=StuckActionType.SELF_RESCUE,
-                reason=f"连续 {ctx.zero_gain_turns} 轮零增量且仅有一个模型，第 {self.self_rescue_count} 次自救换思路",
+                reason=f"连续 {ctx.zero_gain_turns} 轮零增量，第 {self.self_rescue_count} 次自救换思路"
+                        + ("（仍有候选模型，自救无效后将切换）" if has_alternative else "（仅有一个模型）"),
                 extra_skills=extra_skills,
                 reset_phase=True,
                 next_input=_self_rescue_prompt(ctx, old_phase, extra_skills),
             )
 
-        # 自救次数用尽：返回 CONTINUE，让外层 scheduler 正常走 hint/skip
+        # 自救次数用尽后，若存在未尝试过的候选模型，则切换模型接管
+        if has_alternative and not self.switched:
+            self.switched = True
+            return StuckAction(
+                action=StuckActionType.SWITCH_MODEL,
+                reason=f"连续 {ctx.zero_gain_turns} 轮零增量，自救 {self.max_self_rescue} 次无效，切换到候选模型接管",
+            )
+
+        # 自救用尽且已切过模型（或无候选）：返回 CONTINUE，让外层 scheduler 走 hint/skip
+        suffix = ""
+        if self.switched:
+            suffix = "且已切换过模型"
+        elif not has_alternative:
+            suffix = "且无候选模型"
         return StuckAction(
             action=StuckActionType.CONTINUE,
-            reason=f"连续 {ctx.zero_gain_turns} 轮零增量，单模型自救次数已用尽，交由调度器决策",
+            reason=f"连续 {ctx.zero_gain_turns} 轮零增量，自救次数用尽{suffix}，交由调度器决策",
         )
 
 

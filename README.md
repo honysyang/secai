@@ -378,8 +378,8 @@ cp .env.example .env
 #   BRUTEFORCE_MAX_CALLS=20       # 每题爆破/枚举调用硬上限，0=关闭
 #   HINT_BUDGET_RATIO=0.35        # 卡题且 token 达挂起档该比例时拉 hint，0=关闭
 #   SUSPEND_SECONDS=2700          # 墙上时钟挂起档（秒），0=关闭
-#   MODEL_SWITCH_TURNS=6        # 连续多少轮 zero_gain 触发模型切换/自救
-#   MODEL_SELF_RESCUE_MAX=2     # 单模型场景下最多自救几次
+#   MODEL_SWITCH_TURNS=6          # 连续多少轮 zero_gain 触发模型切换/自救
+#   MODEL_SELF_RESCUE_MAX=2       # 连续无进展时优先单模型自救的次数；自救无效后切换灾备模型
 ```
 
 ### 3. 运行
