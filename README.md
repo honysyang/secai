@@ -39,6 +39,9 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 | 题级角色派任 | 每道题按 unique_code 前缀派任对应角色皮肤 |
 | 题级独立工作区 | 每题独立 `worker_{code}/`（events/session/artifacts），并发不交错 |
 | 实时可视化 | 标准库后端 + SSE 实时流 + 三页前端（对话/监控/智能体 kill-chain） |
+| 多模型灾备池 | 额度/限流/鉴权/状态码失败自动切换候选模型，保持同一 session 继续作答 |
+| 模型惰性治理 | 连续无进展优先自救换思路，自救无效切换模型接管；自救时压缩上下文防污染历史 |
+| 统一日志系统 | 终端 + 文件双写，时间戳/级别/颜色分级；黑板、flag、漏洞、证据等关键结论醒目打印 |
 
 ---
 
@@ -82,10 +85,13 @@ flowchart TB
         DB["db.py<br/>SQLite 落库 tasks/events"]
     end
 
-    subgraph Budget["runtime/ 成本治理"]
+    subgraph Runtime["runtime/ 治理与模型"]
         BGT["budget.py<br/>爆破/hint 预算 + 换脑/挂起"]
-        STP["stop_policy.py<br/>停止策略"]
         STA["status.py<br/>阶段状态机"]
+        MPL["model_pool.py<br/>多模型灾备池"]
+        STK["stuck.py<br/>惰性检测 + 自救/切换"]
+        LOG["log.py<br/>统一日志"]
+        DDL["deadline.py<br/>比赛时限"]
     end
 
     subgraph Declarative["arsenal/ 声明式内容（本地化、可扩展）"]
@@ -102,7 +108,7 @@ flowchart TB
     FE1 & FE2 & FE3 --> SRV
     SRV --> Orchestrator
     Orchestrator --> Core
-    Orchestrator --> Budget
+    Orchestrator --> Runtime
     Orchestrator --> Observability
     Core --> Declarative
     HOOKS --> BUS --> DB
@@ -311,7 +317,10 @@ SECAI/
 ├── runtime/
 │   ├── budget.py           # 成本治理（爆破/hint 预算 + 换脑/挂起）
 │   ├── status.py           # 阶段状态机
-│   └── stop_policy.py      # 判停器（deadline/零增益/空转）
+│   ├── deadline.py         # 比赛硬总时限
+│   ├── model_pool.py       # 多模型灾备池（额度/失败自动切换）
+│   ├── stuck.py            # 模型惰性治理（自救优先 + 切换接管 + 上下文压缩）
+│   └── log.py              # 统一日志（终端+文件双写，级别/颜色）
 ├── adapters/
 │   ├── config.py           # env 配置 + 模型
 │   └── db.py               # SQLite 落库（tasks/events 表，WAL，线程安全）

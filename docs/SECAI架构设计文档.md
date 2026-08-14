@@ -1,7 +1,7 @@
 # SECAI 架构设计文档
 
 > 多智能体安全攻防框架（AutoPentest）技术架构与工程设计说明
-> 版本：v1.1 ｜ 更新：2026-08-14
+> 版本：v1.2 ｜ 更新：2026-08-15
 
 ---
 
@@ -51,6 +51,9 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 - **渐进披露 + 技能预算**：技能按触发词解锁，注入带预算（同屏 3 篇 / 每篇 1200 字 / 总 8k）
 - **声明式内容**：skills / tools / roles / vulns / pocs / payloads / knowledge 全部本地化、自包含、可扩展
 - **实时可视化**：标准库后端 + SSE 实时流 + 三页前端（对话/监控/智能体 kill-chain）
+- **多模型灾备池**：额度/限流/鉴权/状态码失败自动切换候选模型，保持同一 session 继续作答
+- **模型惰性治理**：连续无进展优先自救换思路，自救无效切换模型接管；自救时压缩上下文防污染历史
+- **统一日志系统**：终端 + 文件双写，时间戳/级别/颜色分级；黑板、flag、漏洞、证据等关键结论醒目打印
 
 技术栈约束（硬性）：
 
@@ -104,9 +107,9 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
                             │          │          │           │
                    ┌────────▼───┐ ┌────▼────┐ ┌───▼────┐ ┌────▼─────┐
                    │ core/      │ │platform/│ │ core/  │ │ runtime/ │
-                   │ agents_def │ │scheduler│ │ hooks  │ │ stop_    │
-                   │ Agent 定义  │ │ EV选题/ │ │ 事件流 │ │ policy   │
-                   │ +子任务协议  │ │ 停滞决策 │ │ 增量打分│ │ 判停     │
+                   │ agents_def │ │scheduler│ │ hooks  │ │ model_   │
+                   │ Agent 定义  │ │ EV选题/ │ │ 事件流 │ │ pool/    │
+                   │ +子任务协议  │ │ 停滞决策 │ │ 增量打分│ │ stuck/log│
                    └────────────┘ └─────────┘ └───┬────┘ └──────────┘
                             │                     │ BUS.emit
         ┌───────────────────┼─────────────────────┼──────────────┐
@@ -138,7 +141,10 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 | `hooks.py` | `core/` | RunHooks 事件流 + 渐进披露 + 信息增量打分 + 网络不可达检测 |
 | `events.py` | `core/` | 进程级事件总线（内存历史 + 订阅者分发） |
 | `db.py` | `adapters/` | SQLite 落库（tasks/events 表，WAL，线程安全） |
-| `stop_policy.py` | `runtime/` | 判停器（deadline / 零增益 / 空转 / 回合兜底） |
+| `model_pool.py` | `runtime/` | 多模型灾备池（额度/限流/鉴权/状态码失败自动切换，保持同一 session） |
+| `stuck.py` | `runtime/` | 模型惰性治理（自救优先 + 切换接管 + 上下文压缩） |
+| `deadline.py` | `runtime/` | 比赛硬总时限常量 |
+| `log.py` | `runtime/` | 统一日志（终端+文件双写，级别/颜色） |
 | `status.py` | `runtime/` | 阶段状态机（PHASE_DEFS + PHASE_TRANSITIONS） |
 | `task_context.py` | `core/` | TaskContext：执行现场 + 全局状态 |
 | `context_manager.py` | `core/` | 上下文压缩 + 断点续跑（state/session） |
@@ -648,7 +654,10 @@ SECAI/
 ├── runtime/
 │   ├── budget.py           # 成本治理（爆破/hint 预算 + 换脑/挂起）
 │   ├── status.py           # 阶段状态机
-│   └── stop_policy.py      # 判停器
+│   ├── deadline.py         # 比赛硬总时限
+│   ├── model_pool.py       # 多模型灾备池（额度/失败切换）
+│   ├── stuck.py            # 模型惰性治理（自救 + 切换 + 压缩）
+│   └── log.py              # 统一日志（终端+文件双写，级别/颜色）
 ├── adapters/
 │   ├── config.py           # env 配置 + 模型
 │   └── db.py               # SQLite 落库（tasks/events 表，WAL，线程安全）
@@ -704,6 +713,9 @@ SECAI/
 15. **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出不等 LLM finalize；多 flag 题明确告知剩余面数。
 16. **解法模板化（正向复用）**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式；与 field_notes（负向死路）分工，形成正负双向跨题复用。
 17. **软干预教练（Coach）**：hint 后仍卡壳触发 Coach 给 1~2 条具体方向，写题级黑板半持久（verified=False），不重规划不换题，只做轻量纠偏。
+18. **多模型灾备池（ModelPool）**：主模型 + `ESCALATION_MODELS` 候选池，额度/限流/鉴权/状态码失败时自动 `next()` 切换，保持同一 `SQLiteSession` 继续作答；所有模型耗尽抛 `ModelExhaustedError` 交外层调度器。
+19. **模型惰性治理（自救优先）**：连续 `MODEL_SWITCH_TURNS` 轮零增量先自救（解锁新技能 + 阶段重置 + 上下文压缩），自救 `MODEL_SELF_RESCUE_MAX` 次无效再切换候选模型接管；阈值均可环境变量配置。
+20. **统一日志系统**：终端 + `data/logs/secai-YYYYMMDD.log` 双写，级别分级（INFO/WARN/ERROR）带颜色；黑板、flag、漏洞、证据等关键结论醒目打印，DEBUG 细节只落盘不刷屏。
 
 ### 16.2 实战教训
 
