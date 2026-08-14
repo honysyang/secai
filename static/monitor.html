@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecAI 任务监控</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", monospace;
+    background: #0f1115; color: #e6e6e6; height: 100vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 20px;
+    padding: 12px 16px; border-bottom: 1px solid #23262d;
+    font-size: 15px; font-weight: 600; color: #fff;
+  }
+  header nav { display: flex; gap: 6px; }
+  header nav a {
+    color: #8b919d; text-decoration: none; font-size: 13px; font-weight: 500;
+    padding: 5px 12px; border-radius: 6px;
+  }
+  header nav a.active { background: #2563eb; color: #fff; }
+  header nav a:hover { color: #fff; }
+  #main { flex: 1; display: flex; min-height: 0; }
+  /* 左：任务列表 */
+  #tasks-pane { width: 240px; border-right: 1px solid #23262d; display: flex; flex-direction: column; }
+  #tasks-pane h2 {
+    padding: 10px 14px; font-size: 12px; color: #8b919d;
+    border-bottom: 1px solid #23262d; font-weight: 500;
+  }
+  #tasks { flex: 1; overflow-y: auto; padding: 8px; }
+  .task {
+    padding: 10px 12px; border-radius: 8px; margin-bottom: 6px; cursor: pointer;
+    background: #15181e; border: 1px solid #23262d;
+  }
+  .task:hover { border-color: #2563eb; }
+  .task.active { border-color: #2563eb; background: #1b1e24; }
+  .task .id { font-size: 13px; font-weight: 600; color: #e6e6e6; word-break: break-all; }
+  .task .meta { font-size: 11px; color: #8b919d; margin-top: 4px; }
+  .task .status { display: inline-block; margin-top: 5px; padding: 1px 8px; border-radius: 10px; font-size: 11px; }
+  .task .answer { font-size: 11px; color: #9aa1ad; margin-top: 4px; word-break: break-all; }
+  .task .flag { color: #fbbf24; margin-left: 6px; }
+  /* 右：事件时间线 */
+  #stream-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #active {
+    padding: 8px 16px; font-size: 12px; color: #4ade80;
+    border-bottom: 1px solid #23262d; background: #14171c;
+  }
+  #stream { flex: 1; overflow-y: auto; padding: 14px 16px; }
+  .ev {
+    margin-bottom: 8px; line-height: 1.6; word-break: break-word;
+    padding: 8px 12px; border-radius: 8px; background: #15181e;
+    border-left: 3px solid #2c3038;
+  }
+  .ev .agent {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    background: #1f2937; color: #e5e7eb; font-weight: 600; margin-right: 6px;
+  }
+  .ev .badge {
+    display: inline-block; padding: 1px 8px; border-radius: 10px;
+    border: 1px solid; font-size: 11px; margin-right: 6px;
+  }
+  .ev .time { float: right; font-size: 11px; color: #5b616c; }
+  .ev .txt { color: #c7ccd6; white-space: pre-wrap; word-break: break-word; margin-top: 4px; }
+  .ev.thought { border-left-color: #a78bfa; }
+  .ev.tool { border-left-color: #60a5fa; }
+  .ev.tool_result { border-left-color: #f59e0b; }
+  .ev.token { border-left-color: #f472b6; }
+  .ev.compact { border-left-color: #f97316; }
+  .ev.agent_start, .ev.agent_end { border-left-color: #4ade80; }
+  .ev.skill_disclosed { border-left-color: #22d3ee; }
+  .ev.llm_call { border-left-color: #94a3b8; }
+  .ev.phase_changed { border-left-color: #4ade80; }
+  .ev.reward { border-left-color: #c084fc; }
+  .ev.reminder { border-left-color: #fb923c; }
+  .ev.flag { border-left-color: #fbbf24; background: #1a1508; }
+  .empty { color: #5b616c; padding: 30px; text-align: center; font-size: 13px; }
+</style>
+</head>
+<body>
+  <header>
+    SecAI 任务监控
+    <nav>
+      <a href="/">对话</a>
+      <a href="/monitor" class="active">监控</a>
+      <a href="/agents">智能体</a>
+    </nav>
+  </header>
+
+  <div id="main">
+    <div id="tasks-pane">
+      <h2>任务列表</h2>
+      <div id="tasks"><div class="empty">加载中…</div></div>
+    </div>
+    <div id="stream-pane">
+      <div id="active">选择任务查看事件流</div>
+      <div id="stream"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  var tasksBox = document.getElementById('tasks');
+  var stream = document.getElementById('stream');
+  var active = document.getElementById('active');
+  var currentTask = null;
+  var es = null;
+
+  var STATUS = {
+    llm_call:        ['思考中', '#94a3b8'],
+    thought:         ['思考',   '#a78bfa'],
+    tool:            ['执行中', '#60a5fa'],
+    tool_result:     ['执行结果','#f59e0b'],
+    agent_start:     ['Agent开始','#4ade80'],
+    agent_end:       ['Agent结束','#4ade80'],
+    token:           ['Token',  '#f472b6'],
+    compact:         ['压缩',   '#f97316'],
+    token_estimate:  ['上下文预算','#f97316'],
+    phase_changed:   ['阶段切换','#4ade80'],
+    skill_disclosed: ['技能披露','#22d3ee'],
+    reward:          ['信息增量','#c084fc'],
+    reminder:        ['系统提醒','#fb923c'],
+    flag:            ['Flag',   '#fbbf24']
+  };
+
+  function fmtTime(ts) {
+    if (!ts) return '';
+    var d = new Date(ts * 1000);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  function buildText(ev, kind) {
+    if (kind === 'token') {
+      var u = ev.usage || {};
+      var t = ev.total || {};
+      return '本次 input=' + (u.input || 0) + ' output=' + (u.output || 0) +
+             ' total=' + (u.total || 0) +
+             ' ｜ 累计 input=' + (t.input || 0) + ' output=' + (t.output || 0) +
+             ' total=' + (t.total || 0) + ' requests=' + (t.requests || 0);
+    }
+    if (kind === 'compact') {
+      return '上下文压缩：估算 ' + ev.estimate_before + ' token，' +
+             'item ' + ev.items_before + ' → ' + ev.items_after;
+    }
+    if (kind === 'token_estimate') {
+      return '会话 token 估算：' + (ev.estimate || 0) + ' / 阈值 ' + (ev.threshold || 0) +
+             (ev.real_tokens ? '（真实 ' + ev.real_tokens + '）' : '');
+    }
+    if (kind === 'phase_changed') {
+      return '切换到阶段 ' + (ev.phase || '') + '（触发：' + (ev.trigger || '') + '）';
+    }
+    if (kind === 'tool') return ev.tool || '';
+    if (kind === 'tool_result') return ev.text || ev.preview || '';
+    if (kind === 'skill_disclosed') return '披露技能 ' + ev.skill + '（触发工具 ' + ev.tool + '）';
+    if (kind === 'reward') return '工具 ' + ev.tool + ' 信息增量得分 ' + ev.score;
+    if (kind === 'reminder') return ev.text || '';
+    if (kind === 'flag') return (ev.flag || '') + (ev.evidence ? '（' + ev.evidence + '）' : '');
+    if (kind === 'agent_start') return '开始执行';
+    return ev.text || ev.preview || '';
+  }
+
+  function buildEvent(ev) {
+    var kind = ev.kind || '';
+    var agent = ev.agent || '';
+    var st = STATUS[kind] || [kind, '#9aa1ad'];
+
+    var div = document.createElement('div');
+    div.className = 'ev ' + kind;
+
+    if (ev.ts) {
+      var t = document.createElement('span');
+      t.className = 'time';
+      t.textContent = fmtTime(ev.ts);
+      div.appendChild(t);
+    }
+    var a = document.createElement('span');
+    a.className = 'agent';
+    a.textContent = agent || '系统';
+    div.appendChild(a);
+
+    var b = document.createElement('span');
+    b.className = 'badge';
+    b.style.color = st[1];
+    b.style.borderColor = st[1];
+    b.textContent = st[0];
+    div.appendChild(b);
+
+    var txt = document.createElement('div');
+    txt.className = 'txt';
+    txt.textContent = buildText(ev, kind);
+    div.appendChild(txt);
+    return div;
+  }
+
+  function addEvent(ev) {
+    stream.appendChild(buildEvent(ev));
+    stream.scrollTop = stream.scrollHeight;
+  }
+
+  var STATUS_COLOR = {
+    running: '#60a5fa', solved: '#4ade80', stuck: '#9aa1ad',
+    stopped: '#9aa1ad', fatal: '#f87171', error: '#f87171',
+    suspended: '#fbbf24', unknown: '#9aa1ad'
+  };
+
+  function loadTasks() {
+    fetch('/api/tasks')
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var tasks = data.tasks || [];
+        tasksBox.innerHTML = '';
+        if (!tasks.length) {
+          tasksBox.innerHTML = '<div class="empty">暂无任务<br>（跑分任务运行后自动出现）</div>';
+          return;
+        }
+        tasks.forEach(function (t) {
+          var div = document.createElement('div');
+          div.className = 'task';
+          if (currentTask === t.task_id) div.classList.add('active');
+
+          var id = document.createElement('div');
+          id.className = 'id';
+          id.textContent = t.task_id;
+          div.appendChild(id);
+
+          var status = document.createElement('span');
+          status.className = 'status';
+          status.textContent = t.status || 'unknown';
+          var sc = STATUS_COLOR[t.status] || '#9aa1ad';
+          status.style.color = sc;
+          status.style.border = '1px solid ' + sc;
+          div.appendChild(status);
+
+          var meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = (t.count || 0) + ' 事件 · ' + fmtTime(t.last_ts);
+          div.appendChild(meta);
+
+          if (t.answer) {
+            var ans = document.createElement('div');
+            ans.className = 'answer';
+            ans.textContent = t.answer;
+            div.appendChild(ans);
+          }
+
+          div.addEventListener('click', function () { selectTask(t.task_id); });
+          tasksBox.appendChild(div);
+        });
+      });
+  }
+
+  function selectTask(taskId) {
+    currentTask = taskId;
+    // 高亮左侧
+    var items = tasksBox.querySelectorAll('.task');
+    items.forEach(function (el) {
+      el.classList.toggle('active', el.querySelector('.id').textContent === taskId);
+    });
+    stream.innerHTML = '';
+    active.textContent = '任务：' + taskId;
+    // 关闭旧 SSE
+    if (es) { es.close(); es = null; }
+    // 先加载历史
+    fetch('/api/events?task_id=' + encodeURIComponent(taskId))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        (data.events || []).forEach(addEvent);
+      });
+    // 再建实时 SSE
+    es = new EventSource('/api/stream-db?task_id=' + encodeURIComponent(taskId));
+    es.onmessage = function (e) {
+      try { addEvent(JSON.parse(e.data)); } catch (err) { /* 忽略 */ }
+    };
+  }
+
+  // 定时刷新任务列表
+  loadTasks();
+  setInterval(loadTasks, 3000);
+})();
+</script>
+</body>
+</html>

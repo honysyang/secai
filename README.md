@@ -1,7 +1,7 @@
 # SECAI — 多智能体安全攻防框架
 
 > 基于 openai-agents SDK 的 AI 自动化渗透测试系统，面向 CTF / 攻防比赛 / 靶场跑分场景。
-> 多智能体协作 + 零 LLM 跑分调度 + 声明式技能库 + 实时可视化。
+> 多智能体协作 + 零 LLM 跑分调度 + 成本治理 + 事件总线落库 + 声明式技能库 + 实时可视化。
 
 ---
 
@@ -20,15 +20,19 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 | 特性 | 说明 |
 |---|---|
 | 多智能体协作 | Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩） |
+| 子任务并发 | `spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离 |
 | 零 LLM 跑分调度 | EV 选题、容器 SOP、hint 前置、换题决策、**3 槽并发**全部代码机械执行 |
+| 成本治理 | 爆破/hint 预算 → 无感知换脑（switch）→ 挂起（suspend），token + 时钟双档 |
 | 信息增量判停 | 从「看阶段切换」升级为「看产出质量」，正向证据清零、零增量累计 |
 | 提交铁律 | 工具输出先全文扫 flag 再机械提交，不靠 LLM 自觉 |
-| 上下文生命周期 | 四层架构 + token 压缩 + 断点续跑 + 全局黑板 + 死路蒸馏 |
+| Prompt 注入防御 | 工具输出统一检测注入特征，命中追加安全提醒，按不可信数据处理 |
+| 上下文生命周期 | 四层架构 + token 压缩 + 断点续跑 + 全局黑板（落盘持久化）+ 死路蒸馏 |
+| 事件总线 + 落库 | 进程级 EventBus → SQLite（tasks/events 表，WAL），events.jsonl 双写留痕 |
 | 渐进披露 | 技能按触发词解锁，注入带预算（同屏 3 篇 / 每篇 1200 字 / 总 8k） |
 | 声明式内容 | skills / tools / roles / vulns / pocs / payloads / knowledge 全部本地化、自包含 |
 | 题级角色派任 | 每道题按 unique_code 前缀派任对应角色皮肤 |
 | 题级独立工作区 | 每题独立 `worker_{code}/`（events/session/artifacts），并发不交错 |
-| 实时可视化 | 标准库后端 + SSE 实时流 + 双流前端 |
+| 实时可视化 | 标准库后端 + SSE 实时流 + 三页前端（对话/监控/智能体 kill-chain） |
 
 ---
 
@@ -36,14 +40,14 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 
 ```mermaid
 flowchart TB
-    subgraph Frontend["前端 static/index.html"]
-        FE1["对话流（web）"]
-        FE2["任务流（generic）"]
-        FE3["阶段/Token/奖励 实时状态"]
+    subgraph Frontend["前端 static/（三页）"]
+        FE1["index.html<br/>对话流 + 任务流"]
+        FE2["monitor.html<br/>任务生命周期监控"]
+        FE3["agents.html<br/>智能体 kill-chain 展示"]
     end
 
     subgraph Server["server.py（标准库 HTTP + SSE）"]
-        SRV["dir=web | dir=generic"]
+        SRV["/ /monitor /agents<br/>/api/meta /api/tasks /api/events /api/stream"]
     end
 
     subgraph Orchestrator["main.py（主编排）"]
@@ -54,15 +58,25 @@ flowchart TB
     end
 
     subgraph Core["核心模块"]
-        AGENT["agents_def.py<br/>5 个 Agent 定义"]
+        AGENT["agents_def.py<br/>Agent 定义 + 动态 instructions"]
         SCHED["scheduler.py<br/>EV选题/难度分级/停滞决策"]
         HOOKS["hooks.py<br/>事件流/渐进披露/增量打分"]
         CTX["task_context.py<br/>执行现场+全局状态"]
         CTXM["context_manager.py<br/>压缩+断点续跑"]
-        TOOLS["demo_tools.py<br/>执行工具+提交铁律"]
+        TOOLS["demo_tools.py<br/>执行工具+提交铁律+注入防御"]
+    end
+
+    subgraph Observability["可观测性"]
+        BUS["events.py<br/>进程级事件总线"]
+        DB["db.py<br/>SQLite 落库 tasks/events"]
+    end
+
+    subgraph Budget["成本治理"]
+        BGT["budget.py<br/>爆破/hint 预算 + 换脑/挂起"]
     end
 
     subgraph Declarative["声明式内容（本地化、可扩展）"]
+        PROMPTS["prompts/ 任务模板"]
         ROLES["roles/ 9 角色"]
         SKILLS["skills/ 62 技能"]
         CLITOOLS["tools/ 92 CLI"]
@@ -75,7 +89,10 @@ flowchart TB
     FE1 & FE2 & FE3 --> SRV
     SRV --> Orchestrator
     Orchestrator --> Core
+    Orchestrator --> Budget
+    Orchestrator --> Observability
     Core --> Declarative
+    HOOKS --> BUS --> DB
 ```
 
 ---
@@ -89,6 +106,7 @@ flowchart TB
 | **Manager** | 立法（为什么打） | 使命宪章（目标/原则/约束/终止判据） | 任务开始，一次 |
 | **Planner** | 深度分析（打哪里、按什么顺序） | 作战计划（任务研判/攻击面/flag 定位/分步计划） | 任务开始 + 停滞 replan |
 | **Executor** | 执行（怎么打） | 证据、黑板、flag | 每轮循环 |
+| **Subtask Executor** | 子任务并发执行 | `finish_subtask` 结构化结论（summary/findings/flag） | 主 Agent `spawn_subtask` 后并发调度 |
 | **Reporter** | 战报 + 死路蒸馏 | 战报 + field_notes | 任务结束，一次 |
 | **Compactor** | 历史压缩 | 压缩摘要 | 上下文超阈值 |
 
@@ -178,6 +196,25 @@ start_challenge
 
 ---
 
+## 成本治理
+
+治理规则收拢在 `budget.py`（单一事实源），避免在 config/scheduler/demo_tools/main 多处漂移。目标：让 Agent 空烧 token 时**机械止损**，而不是一路跑到超时。
+
+### 三层止损
+
+| 层 | 触发条件 | 动作 |
+|---|---|---|
+| 爆破预算 | 单题爆破/枚举调用 ≥ `BRUTEFORCE_MAX_CALLS` | 拦截后续爆破，强制转向已确认线索的定向验证 |
+| hint 预算 | 卡题（≥2 条失败路径）且 token 达挂起档 `HINT_BUDGET_RATIO` | 机械拉 hint（比继续空烧便宜） |
+| 换脑 switch | 单题 token 达 `switch_tokens`（按难度分档） | 无感知切换候选模型（`ESCALATION_MODELS`） |
+| 挂起 suspend | 单题 token 达 `suspend_tokens` 或时钟达 `SUSPEND_SECONDS` | 停止本次尝试、释放槽位，下轮 EV 重选 |
+
+### 挂起恢复
+
+挂起不是放弃：黑板已落盘 `blackboard.json`，重选该题时回注上次进度（已完成/已排除结论），不重复劳动。
+
+---
+
 ## 杀伤链（Kill-Chain）
 
 渗透执行采用 **5 阶段杀伤链**，对标经典 Cyber Kill Chain：
@@ -224,7 +261,8 @@ flowchart LR
 | Token 压缩 | 超 30000 token 触发 Compactor 摘要，回退到回合边界避免 400 |
 | 信息增量信号 | `zero_gain_turns`：正向证据清零、零增量累计，统一驱动 replan/判停 |
 | 提交铁律 | `_spill_output` 截断前先扫全文 flag → 机械 `submit_flag` |
-| 全局黑板 | 40 字符摘要注入 + LRU 淘汰（50 条），完整值按需 `blackboard get` |
+| 全局黑板 | 40 字符摘要注入 + LRU 淘汰（50 条），完整值按需 `blackboard get`；落盘 `blackboard.json` 跨尝试/挂起恢复 |
+| Prompt 注入防御 | 工具输出扫描注入特征（指令覆盖/system prompt 等），命中追加安全提醒、按不可信数据对待 |
 | 死路蒸馏 | Reporter 输出死路清单 → field_notes → 下次注入接力 |
 
 ---
@@ -244,14 +282,17 @@ flowchart LR
 
 ```
 SECAI/
-├── main.py                 # 主编排（立法→规划→调度→报告）
-├── agents_def.py           # 5 个 Agent 定义 + 动态 instructions
-├── scheduler.py            # 跑分调度器（EV选题/难度分级/停滞决策）
+├── main.py                 # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理）
+├── agents_def.py           # Agent 定义 + 动态 instructions + 子任务结束协议
+├── scheduler.py            # 跑分调度器（EV选题/难度分级/停滞决策，纯函数）
+├── budget.py               # 成本治理（爆破/hint 预算 + 换脑/挂起）
 ├── hooks.py                # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
+├── events.py               # 进程级事件总线（内存历史 + 订阅者分发）
+├── db.py                   # SQLite 落库（tasks/events 表，WAL，线程安全）
 ├── stop_policy.py          # 判停器（deadline/零增益/空转）
 ├── task_context.py         # TaskContext 执行现场 + 全局状态
 ├── context_manager.py      # 上下文压缩 + 断点续跑
-├── demo_tools.py           # 执行工具 + 提交铁律 + 工具按需加载
+├── demo_tools.py           # 执行工具 + 提交铁律 + 注入防御 + 工具按需加载
 ├── platform_client.py      # 平台 SDK 语义封装
 ├── platform_tools.py       # 平台 API 工具（异常上抛）
 ├── status.py               # 阶段状态机
@@ -261,8 +302,9 @@ SECAI/
 ├── vuln_registry.py        # 漏洞检测模块加载
 ├── poc_registry.py         # POC 加载
 ├── knowledge_registry.py   # 知识库加载
-├── server.py               # SSE 实时流服务
+├── server.py               # SSE 实时流服务（三页 + 监控 API）
 ├── config.py               # env 配置 + 模型
+├── prompts/                # 任务模板（tsec_task.txt）
 ├── roles/                  # 9 个角色定义（frontmatter + 思维风格）
 ├── skills/                 # 62 个技能（含 binary/ai_security/blockchain 等子目录）
 ├── tools/                  # 92 个 CLI 工具 YAML
@@ -270,9 +312,9 @@ SECAI/
 ├── pocs/                   # 3 个 POC
 ├── knowledge/              # 3 个知识条目
 ├── payloads/               # 10 个 payload 字典
-├── static/index.html       # 前端
+├── static/                 # 前端三页（index/monitor/agents）
 ├── docs/                   # 架构设计 + 诊断报告 + 修复手册
-├── data/                   # 运行时数据（events/status/checkpoint）
+├── data/                   # 运行时数据（events/status/checkpoint/agent.db）
 └── .env                    # 凭证配置
 ```
 
@@ -299,6 +341,12 @@ cp .env.example .env
 #   BENCHMARK_TOKEN=跑分平台的 token
 #   BENCHMARK_BASE_URL=跑分平台地址
 #   VPN_CONFIG=/path/to/xxx.ovpn   # 需要走内网时
+#
+# 成本治理（可选，均有默认值，见 budget.py）：
+#   BRUTEFORCE_MAX_CALLS=20       # 每题爆破/枚举调用硬上限，0=关闭
+#   HINT_BUDGET_RATIO=0.35        # 卡题且 token 达挂起档该比例时拉 hint，0=关闭
+#   SUSPEND_SECONDS=2700          # 墙上时钟挂起档（秒），0=关闭
+#   ESCALATION_MODELS=[...]       # 换脑候选模型 JSON 列表（缺省回退主模型）
 ```
 
 ### 3. 运行
@@ -342,14 +390,17 @@ sudo setcap cap_net_admin,cap_net_raw+ep /usr/sbin/openvpn
 
 ## 前端可视化
 
-双流实时展示：
+三页实时展示（`server.py` 标准库后端 + SSE）：
 
-- **左对话流**（`dir=web`）：多轮对话
-- **右任务流**（`dir=generic`）：实时展示哪个 Agent 在思考/执行、执行了什么
+| 页面 | 路由 | 用途 |
+|---|---|---|
+| 对话 / 任务流 | `/` | 左对话流（`dir=web`）+ 右任务流（`dir=generic`），实时展示 Agent 思考/执行 |
+| 监控页 | `/monitor` | 任务生命周期（status/answer/事件数/最新活动），按题追踪 |
+| 智能体页 | `/agents` | 按 kill-chain 展示 5 个智能体 + 各阶段对应工具/流程 |
 
-事件类型：`llm_call / thought / tool / tool_result / reward / phase_changed / net_unreachable / compact / token_estimate / skill_disclosed`
+事件类型：`llm_call / thought / tool / tool_result / reward / phase_changed / net_unreachable / token / skill_disclosed / agent_start / agent_end`
 
-文本不截断，实时展示阶段切换、token 预算、信息增量、网络不可达。
+文本不截断，实时展示阶段切换、token 预算、信息增量、网络不可达。事件经 `events.py` 总线 → `db.py` 落库，监控页直接读 SQLite 追溯历史。
 
 ### 启动界面
 

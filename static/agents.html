@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SecAI 智能体 &amp; Kill-Chain</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", monospace;
+    background: #0f1115; color: #e6e6e6; min-height: 100vh;
+    padding-bottom: 40px;
+  }
+  header {
+    display: flex; align-items: center; gap: 20px;
+    padding: 12px 16px; border-bottom: 1px solid #23262d;
+    font-size: 15px; font-weight: 600; color: #fff;
+  }
+  header nav { display: flex; gap: 6px; }
+  header nav a {
+    color: #8b919d; text-decoration: none; font-size: 13px; font-weight: 500;
+    padding: 5px 12px; border-radius: 6px;
+  }
+  header nav a.active { background: #2563eb; color: #fff; }
+  header nav a:hover { color: #fff; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 20px; }
+  section { margin-bottom: 32px; }
+  section h2 {
+    font-size: 13px; color: #8b919d; font-weight: 600; letter-spacing: 1px;
+    margin-bottom: 14px; border-left: 3px solid #2563eb; padding-left: 10px;
+  }
+  /* 智能体卡片 */
+  .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .agent-card {
+    background: #15181e; border: 1px solid #23262d; border-radius: 10px;
+    padding: 16px; border-top: 3px solid #2563eb;
+  }
+  .agent-card .name { font-size: 16px; font-weight: 700; color: #fff; }
+  .agent-card .label {
+    display: inline-block; margin: 6px 0; padding: 2px 10px; border-radius: 10px;
+    background: #1f2937; color: #93c5fd; font-size: 12px;
+  }
+  .agent-card .desc { font-size: 12px; color: #9aa1ad; line-height: 1.6; }
+  /* kill-chain 横向流程 */
+  .chain { display: flex; align-items: stretch; gap: 8px; overflow-x: auto; padding-bottom: 8px; }
+  .phase {
+    flex: 1; min-width: 160px; background: #15181e; border: 1px solid #23262d;
+    border-radius: 10px; padding: 14px; position: relative;
+  }
+  .phase .ph-name { font-size: 15px; font-weight: 700; color: #fff; }
+  .phase .ph-label {
+    display: inline-block; margin: 6px 0 10px; padding: 2px 10px; border-radius: 10px;
+    font-size: 12px; background: #1f2937; color: #4ade80;
+  }
+  .phase .ph-goal { font-size: 12px; color: #9aa1ad; line-height: 1.5; margin-bottom: 12px; min-height: 36px; }
+  .phase .tools { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tool-chip {
+    font-size: 11px; padding: 3px 8px; border-radius: 6px;
+    background: #1b1e24; border: 1px solid #2c3038; color: #c7ccd6;
+  }
+  .arrow {
+    align-self: center; color: #4ade80; font-size: 20px; flex: 0 0 auto;
+    user-select: none;
+  }
+  /* 工具分组 */
+  .groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .group {
+    background: #15181e; border: 1px solid #23262d; border-radius: 10px; padding: 14px;
+  }
+  .group .g-name { font-size: 13px; font-weight: 700; color: #93c5fd; margin-bottom: 10px; }
+  .group .g-name.core { color: #fbbf24; }
+  .group .tools { display: flex; flex-wrap: wrap; gap: 6px; }
+</style>
+</head>
+<body>
+  <header>
+    SecAI 智能体 &amp; Kill-Chain
+    <nav>
+      <a href="/">对话</a>
+      <a href="/monitor">监控</a>
+      <a href="/agents" class="active">智能体</a>
+    </nav>
+  </header>
+
+  <main>
+    <section>
+      <h2>智能体</h2>
+      <div id="agents" class="agent-grid"><div class="agent-card"><div class="name">加载中…</div></div></div>
+    </section>
+
+    <section>
+      <h2>Kill-Chain 流程</h2>
+      <div id="chain" class="chain"></div>
+    </section>
+
+    <section>
+      <h2>工具分组</h2>
+      <div id="groups" class="groups"></div>
+    </section>
+  </main>
+
+<script>
+(function () {
+  function buildAgents(agents) {
+    var box = document.getElementById('agents');
+    box.innerHTML = '';
+    (agents || []).forEach(function (a) {
+      var card = document.createElement('div');
+      card.className = 'agent-card';
+
+      var name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = a.name;
+      card.appendChild(name);
+
+      var label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = a.label;
+      card.appendChild(label);
+
+      var desc = document.createElement('div');
+      desc.className = 'desc';
+      desc.textContent = a.desc;
+      card.appendChild(desc);
+
+      box.appendChild(card);
+    });
+  }
+
+  function buildChain(phases) {
+    var box = document.getElementById('chain');
+    box.innerHTML = '';
+    (phases || []).forEach(function (p, i) {
+      if (i > 0) {
+        var arrow = document.createElement('div');
+        arrow.className = 'arrow';
+        arrow.textContent = '→';
+        box.appendChild(arrow);
+      }
+      var card = document.createElement('div');
+      card.className = 'phase';
+
+      var name = document.createElement('div');
+      name.className = 'ph-name';
+      name.textContent = p.name;
+      card.appendChild(name);
+
+      var label = document.createElement('span');
+      label.className = 'ph-label';
+      label.textContent = p.label;
+      card.appendChild(label);
+
+      var goal = document.createElement('div');
+      goal.className = 'ph-goal';
+      goal.textContent = p.goal || '';
+      card.appendChild(goal);
+
+      var tools = document.createElement('div');
+      tools.className = 'tools';
+      (p.tools || []).forEach(function (t) {
+        var chip = document.createElement('span');
+        chip.className = 'tool-chip';
+        chip.textContent = t;
+        tools.appendChild(chip);
+      });
+      card.appendChild(tools);
+
+      box.appendChild(card);
+    });
+  }
+
+  function buildGroups(groups) {
+    var box = document.getElementById('groups');
+    box.innerHTML = '';
+    Object.keys(groups || {}).forEach(function (g) {
+      var card = document.createElement('div');
+      card.className = 'group';
+
+      var name = document.createElement('div');
+      name.className = 'g-name' + (g === 'core' ? ' core' : '');
+      name.textContent = g;
+      card.appendChild(name);
+
+      var tools = document.createElement('div');
+      tools.className = 'tools';
+      (groups[g] || []).forEach(function (t) {
+        var chip = document.createElement('span');
+        chip.className = 'tool-chip';
+        chip.textContent = t;
+        tools.appendChild(chip);
+      });
+      card.appendChild(tools);
+
+      box.appendChild(card);
+    });
+  }
+
+  fetch('/api/meta')
+    .then(function (r) { return r.json(); })
+    .then(function (meta) {
+      buildAgents(meta.agents);
+      buildChain(meta.phases);
+      buildGroups(meta.tool_groups);
+    })
+    .catch(function (err) {
+      document.getElementById('agents').innerHTML =
+        '<div class="agent-card"><div class="name">加载失败</div><div class="desc">' + err + '</div></div>';
+    });
+})();
+</script>
+</body>
+</html>

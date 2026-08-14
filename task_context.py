@@ -28,8 +28,10 @@ class TaskContext:
     role: Dict[str, Any] = field(default_factory=dict)        # 派任的角色定义
     turn_count: int = 0                                       # 当前轮次（主循环每轮同步）
     vpn_connected: bool = False                               # 是否已后台启用 VPN（connect_vpn 幂等用）
-    blackboard: Dict[str, Any] = field(default_factory=dict)  # 全局黑板：已完成事项 / 全局变量（每条含 value/status/ts）
+    blackboard: Dict[str, Any] = field(default_factory=dict)  # 全局黑板：已完成事项 / 全局变量（每条含 value/status/ts/verified/evidence/supersedes）
     token_usage: Dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0, "total": 0, "requests": 0})  # 累计 token 用量
+    last_prompt_tokens: int = 0                                  # 最近一次 LLM 请求的真实 prompt_tokens（压缩观测用，SDK 返回的 input_tokens）
+    bruteforce_calls: int = 0                                    # 本题爆破/枚举类调用计数（成本治理，超 BRUTEFORCE_MAX_CALLS 拦截）
     subtasks: List[Dict[str, Any]] = field(default_factory=list)  # 子任务队列 [{id, desc, status, result}]，主循环并发调度
     enabled_tools: Optional[Set[str]] = None  # 工具按需加载：None=全部启用；否则只启用集合内的工具名（见 demo_tools.CORE_TOOL_NAMES）
     phase: str = "recon"                      # 当前阶段（recon/enumerate/detect/exploit/post），驱动 instructions 动态切换

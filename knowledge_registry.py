@@ -62,6 +62,19 @@ def get_knowledge(kid: str) -> Optional[dict]:
     return None
 
 
+def create_knowledge(kid: str, desc: str, content: str = "") -> Path:
+    """创建一个知识条目（knowledge/{kid}.txt），首行 desc + 全文。
+
+    Agent 实战沉淀新知识（打法/绕过/后利用），下次 list_knowledge/get_knowledge 直接复用。
+    """
+    KNOWLEDGE_DIR.mkdir(exist_ok=True)
+    kid = (kid or "").strip().replace("/", "_")
+    body = (desc.strip() + "\n\n" + content.strip()) if content.strip() else desc.strip()
+    path = KNOWLEDGE_DIR / f"{kid}.txt"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args or args[0] in {"list", "ls"}:

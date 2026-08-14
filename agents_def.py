@@ -12,7 +12,7 @@ import time
 from agents import Agent, ModelSettings, RunContextWrapper
 
 from config import MODEL
-from demo_tools import ALL_TOOLS
+from demo_tools import ALL_TOOLS, finish_subtask
 from skill_registry import load_skill_bodies
 from status import PHASE_DEFS
 from task_context import TaskContext
@@ -78,17 +78,18 @@ EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的
 2. 目标地址以任务书为准，禁止自猜。
 3. 禁止重复已失败的方向（历史作战档案全是已证伪死路）。
 4. 没有现成工具就自己写 Python 脚本——shell 里的 python3 是主武器库。
-5. 重要发现/已完成事项/全局变量写入 blackboard（用 blackboard set），不要依赖记忆；**登录成功（含 session/cookie 路径）、确认漏洞类型、关键文件/flag 路径 等关键进展必须写黑板**——上下文压缩后靠黑板恢复记忆，不写会忘导致重复劳动。
+5. 重要发现/已完成事项/全局变量写入 blackboard（用 blackboard set），不要依赖记忆；**登录成功（含 session/cookie 路径）、确认漏洞类型、关键文件/flag 路径 等关键进展必须写黑板**——上下文压缩后靠黑板恢复记忆，不写会忘导致重复劳动。写「失败/排除」类结论时：要判死（禁止重做）必须附 evidence，否则默认只是未验证线索；旧结论被证伪时用 supersedes 指向旧 key 取代。
 6. 当你认为任务已完成（目标达成或证据枯竭），必须调用 finalize 工具提交结论，而不是只输出一段文字。
 7. 遇到不熟悉的场景，先调用 find_skills 检索技能库，看有没有对应打法。
-8. 到达关键节点（完成一个探测阶段 / 拿到重要发现 / 计划推进一大步）时，调用 checkpoint 工具存档，便于中断后 --resume 续跑；不必每轮都存。
-9. 任务目标若指向远程内网/靶场（需走 VPN 才能访问目标），先调用 connect_vpn 启用 VPN 再开始探测；连接失败就如实报告，不要反复硬连。
-10. 互不依赖的探测（路径爆破/端口扫描/多 payload 测试）用 parallel_shell 并发执行，不要串行一个个来。
-11. 不熟悉的后利用/绕过场景，先 list_knowledge 看知识库简介，再用 get_knowledge 按 id 取全文。
-12. 根据当前进展调用 set_phase 切换阶段（recon=侦察 / enumerate=枚举 / detect=检测 / exploit=利用 / post=后利用拿flag）。阶段目标达成或方向改变时及时切换，别在旧阶段空转。
-13. 当任务同时出现多个互不依赖的探测分支（多个端口/子目标/漏洞点）时，用 spawn_subtask 分别声明子任务，让系统并发调度；不要自己一个个串行做。
-14. 部分工具默认未挂载（按需加载）。需要时先调用 list_disabled_tools 查看有哪些未挂载的工具/工具组，再用 enable_tool 启用（如 enable_tool knowledge / poc / vuln / web / seccli）；启用后即可正常调用。不要因为工具暂时不可见就判定其不存在。
-15. 做参数/路径/注入点的批量探测（fuzz）时，优先用 fuzz 工具（代码并发 + 响应差分归组），不要用 shell 手写循环逐个 curl——fuzz 一次跑完并自动按响应差异分组，又快又省上下文。request_template 用 JSON，在待测位置放 {{FUZZ}} 占位；payload_type 可用内置字典（sqli/lfi/path/xss/ssti/rce/idor/upload/xxe），或 payloads 传逗号分隔列表 / 数值范围（如 1-100）。shell 只用于 fuzz 覆盖不了的场景（登录、读单个已知文件、跑现成 CLI）；凡是「批量试多个 payload/路径」一律用 fuzz，禁止 shell 手写循环逐个试。
+8. 如果收到提示，那么要对提示进行深度分析和思考。
+9. 拿到 flag / 确认漏洞 / 形成可复用攻击链后，调用 remember 工具把「战果」沉淀为 POC（kind=poc）/ 知识（kind=knowledge）/ 技能（kind=skill），让下次遇到同类题直接复用；只在真正有价值时沉淀，不必每轮都做。
+10. 任务目标若指向远程内网/靶场（需走 VPN 才能访问目标），先调用 connect_vpn 启用 VPN 再开始探测；连接失败就如实报告，不要反复硬连。
+11. 互不依赖的探测（路径爆破/端口扫描/多 payload 测试）用 parallel_shell 并发执行，不要串行一个个来。
+12. 不熟悉的后利用/绕过场景，先 list_knowledge 看知识库简介，再用 get_knowledge 按 id 取全文。
+13. 根据当前进展调用 set_phase 切换阶段（recon=侦察 / enumerate=枚举 / detect=检测 / exploit=利用 / post=后利用拿flag）。阶段目标达成或方向改变时及时切换，别在旧阶段空转。
+14. 当任务同时出现多个互不依赖的探测分支（多个端口/子目标/漏洞点）时，用 spawn_subtask 分别声明子任务，让系统并发调度；不要自己一个个串行做。
+15. 部分工具默认未挂载（按需加载）。需要时先调用 list_disabled_tools 查看有哪些未挂载的工具/工具组，再用 enable_tool 启用（如 enable_tool knowledge / poc / vuln / web / seccli）；启用后即可正常调用。不要因为工具暂时不可见就判定其不存在。
+16. 做参数/路径/注入点的批量探测（fuzz）时，优先用 fuzz 工具（代码并发 + 响应差分归组），不要用 shell 手写循环逐个 curl——fuzz 一次跑完并自动按响应差异分组，又快又省上下文。request_template 用 JSON，在待测位置放 {{FUZZ}} 占位；payload_type 可用内置字典（sqli/lfi/path/xss/ssti/rce/idor/upload/xxe），或 payloads 传逗号分隔列表 / 数值范围（如 1-100）。shell 只用于 fuzz 覆盖不了的场景（登录、读单个已知文件、跑现成 CLI）；凡是「批量试多个 payload/路径」一律用 fuzz，禁止 shell 手写循环逐个试。
 
 # 可用打法（随战况渐进披露，当前已解锁）
 {playbooks}
@@ -108,10 +109,10 @@ EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的
 
 
 def _format_blackboard(board: dict) -> str:
-    """把黑板格式化成注入系统提示的精简摘要（只列 key/状态/时间，value 仅 40 字符）。
+    """把黑板格式化成注入系统提示的精简摘要（只列 key/状态/验证标记/时间，value 仅 40 字符）。
 
     完整值由 Agent 按需用 blackboard get <key> 查询，避免把全部黑板值塞进每轮
-    系统提示造成上下文膨胀。
+    系统提示造成上下文膨胀。未验证条目会加「·未验证」标记，判死类条目展示证据。
     """
     if not board:
         return "（空）"
@@ -122,7 +123,13 @@ def _format_blackboard(board: dict) -> str:
             status = str(v.get("status", "")).strip()
             ts = v.get("ts", 0)
             when = time.strftime("%H:%M:%S", time.localtime(ts)) if ts else ""
+            verified = bool(v.get("verified", True))
+            evidence = str(v.get("evidence", "")).strip()
             suffix = f" [{status}]" if status else ""
+            if not verified:
+                suffix += "·未验证"
+            if evidence:
+                suffix += f"（证据:{evidence[:30]}）"
             if when:
                 suffix += f" ({when})"
             lines.append(f"- {k}: {value}{suffix}")
@@ -132,32 +139,63 @@ def _format_blackboard(board: dict) -> str:
     return "\n".join(lines) + "\n（黑板仅列摘要；取完整值用 blackboard get <key>）"
 
 
+def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
+                                  role: dict, charter: str, brief: str,
+                                  field_notes: str) -> str:
+    """渲染执行者系统提示（主 / 子任务共用）。"""
+    c = ctx.context
+    playbooks_text = load_skill_bodies(c.disclosed_skills)
+    phase = PHASE_DEFS.get(c.phase, PHASE_DEFS["recon"])
+    return EXECUTOR_TEMPLATE.format(
+        role_name=role["role"],
+        role_style=role["style"],
+        phase_name=c.phase,
+        phase_goal=phase["goal"],
+        phase_focus=phase["focus"],
+        phase_next=phase.get("next", ""),
+        charter=charter,
+        plan=c.plan or "（无：未规划）",
+        playbooks=playbooks_text or "（暂无可用打法，先用通用侦察）",
+        field_notes=field_notes or "（无：首次执行）",
+        compaction_summary=c.compaction_summary or "（无）",
+        blackboard=_format_blackboard(c.blackboard),
+        brief=brief,
+    )
+
+
+# 子任务结束协议：追加到执行者系统提示，要求结构化回传（而非只输出文字）
+SUBTASK_ENDING = """
+
+# 子任务结束协议（必须遵守）
+完成本子任务后，必须调用 finish_subtask 工具提交结构化结论（summary + findings + flag），
+不要只输出一段文字。主 Agent 只看得到你提交的 summary/findings/flag，看不到你的过程，
+所以 summary 必须自包含、写清结论；flag 没拿到就留空，禁止编造。"""
+
+
 def build_executor(role: dict, charter: str, brief: str,
                    field_notes: str = "") -> Agent:
     """构建执行者。instructions 用动态函数：每轮读 ctx.context.disclosed_skills，
     这样 hooks.py 在运行时追加技能后，下一轮系统提示会自动带上新打法。"""
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
-        c = ctx.context
-        playbooks_text = load_skill_bodies(c.disclosed_skills)
-        phase = PHASE_DEFS.get(c.phase, PHASE_DEFS["recon"])
-        return EXECUTOR_TEMPLATE.format(
-            role_name=role["role"],
-            role_style=role["style"],
-            phase_name=c.phase,
-            phase_goal=phase["goal"],
-            phase_focus=phase["focus"],
-            phase_next=phase.get("next", ""),
-            charter=charter,
-            plan=c.plan or "（无：未规划）",
-            playbooks=playbooks_text or "（暂无可用打法，先用通用侦察）",
-            field_notes=field_notes or "（无：首次执行）",
-            compaction_summary=c.compaction_summary or "（无）",
-            blackboard=_format_blackboard(c.blackboard),
-            brief=brief,
-        )
+        return _render_executor_instructions(ctx, role, charter, brief, field_notes)
 
     return Agent(name=f"Executor[{role['role']}]", instructions=_instructions,
                  tools=ALL_TOOLS, model=MODEL, model_settings=SETTINGS)
+
+
+def build_subtask_executor(role: dict, charter: str, brief: str,
+                           field_notes: str = "") -> Agent:
+    """构建子任务执行者：复用执行者模板 + finish_subtask 结束协议 + 专用结束工具。
+
+    子任务用独立 session（上下文隔离），结果通过 finish_subtask 结构化回传，
+    主 Agent 只拿到 summary/findings/flag，不接触子任务的海量工具输出。
+    """
+    def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
+        return (_render_executor_instructions(ctx, role, charter, brief, field_notes)
+                + SUBTASK_ENDING)
+
+    return Agent(name=f"Subtask[{role['role']}]", instructions=_instructions,
+                 tools=ALL_TOOLS + [finish_subtask], model=MODEL, model_settings=SETTINGS)
 
 
 # ================= 报告者 =================

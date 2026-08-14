@@ -13,6 +13,7 @@ from pathlib import Path
 
 from agents import RunHooks
 
+from events import BUS
 from skill_registry import detect_skill_triggers
 
 
@@ -121,13 +122,17 @@ class EventStreamHooks(RunHooks):
     def __init__(self, workdir: Path, code: str):
         self.workdir = workdir
         self.code = code
+        self.task_id = code  # 事件总线/落库的 task 标识（题目 unique_code 或 "generic"/"sub_<id>"）
 
     def _emit(self, kind: str, **data):
+        # 保留文件留痕（向后兼容，main.py 读 events.jsonl 的地方不变）
         entry = {"kind": kind, "ts": round(time.time(), 1), "code": self.code, **data}
         line = json.dumps(entry, ensure_ascii=False)
         print(f"  [{kind}] {json.dumps(data, ensure_ascii=False)[:200]}")
         with open(self.workdir / "events.jsonl", "a", encoding="utf-8") as f:
             f.write(line + "\n")
+        # 发射到进程级事件总线（内存历史 + SQLite 落库订阅者）
+        BUS.emit(self.task_id, kind, **data)
 
     async def on_llm_start(self, context, agent, system_prompt, input_items):
         self._emit("llm_call", agent=agent.name)
@@ -146,6 +151,8 @@ class EventStreamHooks(RunHooks):
             task_ctx.token_usage["output"] += cur["output"]
             task_ctx.token_usage["total"] += cur["total"]
             task_ctx.token_usage["requests"] += 1
+            # 记录最近一次请求的真实 prompt_tokens（上下文真实大小），供压缩观测/校准
+            task_ctx.last_prompt_tokens = cur["input"]
 
         # 完整文本进事件流（不截断），另发一条 token 事件供 UI 实时显示用量
         text = _output_text(response)

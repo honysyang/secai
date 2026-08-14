@@ -108,6 +108,41 @@ def get_poc(cve: str) -> Optional[Poc]:
     return load_pocs().get(cve.strip().upper())
 
 
+def create_poc(name: str, cve: str = "", summary: str = "", severity: str = "",
+               affected: str = "", poc_type: str = "", principle: str = "",
+               steps: Optional[List[str]] = None, payload: str = "",
+               verification: str = "", references: Optional[List[str]] = None) -> Path:
+    """创建一个 POC 文件（pocs/{cve或name}.yaml），返回文件路径。
+
+    Agent 实战确认漏洞后，把利用过程结构化沉淀为 POC，下次 search_cve/get_poc 直接复用。
+    """
+    POCS_DIR.mkdir(exist_ok=True)
+    cve = (cve or "").strip().upper()
+    fname = cve or name.strip().replace(" ", "_")
+    data = {
+        "info": {
+            "name": name.strip(),
+            "cve": cve,
+            "summary": summary.strip(),
+            "severity": severity.strip() or "medium",
+            "affected": affected.strip(),
+            "references": references or [],
+        },
+        "poc": {
+            "type": poc_type.strip() or "exploit",
+            "principle": principle.strip(),
+            "steps": steps or [],
+            "payload": payload,
+            "verification": verification.strip(),
+        },
+    }
+    path = POCS_DIR / f"{fname}.yaml"
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                    encoding="utf-8")
+    load_pocs.cache_clear()  # 清缓存，让新 POC 立即可被 search_cve/get_poc 检索
+    return path
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args or args[0] in {"list", "ls"}:

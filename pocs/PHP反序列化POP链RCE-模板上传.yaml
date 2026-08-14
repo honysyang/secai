@@ -1,0 +1,22 @@
+info:
+  name: PHP反序列化POP链RCE-模板上传
+  cve: ''
+  summary: 智慧报表导出系统 .tpl 上传触发 PHP 反序列化 POP 链（TemplateMetadata::__destruct→ReportRenderer::warmUp→ExportPostProcessor::handle→LocalFileArchiver::archive→file_put_contents）写
+    webshell
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: 智慧报表导出系统 .tpl 上传触发 PHP 反序列化 POP 链（TemplateMetadata::__destruct→ReportRenderer::warmUp→ExportPostProcessor::handle→LocalFileArchiver::archive→file_put_contents）写
+    webshell
+  steps:
+  - 1. 构造序列化 payload 上传到 /upload.php 的 template 字段
+  - 2. 触发 __destruct POP 链写入 webshell 到 /var/www/html/<name>.php
+  - 3. 访问写入的 php 文件执行 readfile() 读文件
+  - 4. flag 在 /challenge/flag.txt
+  payload: 序列化对象：TemplateMetadata{name=注入代码, renderer=ReportRenderer{postProcessor=ExportPostProcessor{archiver=LocalFileArchiver{storagePath=/var/www/html/shell.php}}}}。name
+    用 'x --> <? ... ?> <!-- y' 提前关闭 HTML 注释使 PHP 短标签代码执行。storagePath 必须为完整路径。审计绕过：<?php/<?=
+    被拦，用 <? 短标签（short_open_tag=On）；system/exec 等被拦，用 readfile() 读文件。
+  verification: 智慧报表导出系统 .tpl 上传触发 PHP 反序列化 POP 链（TemplateMetadata::__destruct→ReportRenderer::warmUp→ExportPostProcessor::handle→LocalFileArchiver::archive→file_put_contents）写
+    webshell

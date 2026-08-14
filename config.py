@@ -30,5 +30,7 @@ VPN_AUTH = os.getenv("VPN_AUTH", "").strip()
 BENCHMARK_BASE_URL = os.getenv("BENCHMARK_BASE_URL", "").rstrip("/")
 BENCHMARK_TOKEN = os.getenv("BENCHMARK_TOKEN", "")
 
+# 成本治理（爆破/hint 预算、换脑、挂起）已抽离到 budget.py
+
 _client = AsyncOpenAI(base_url=BASE_URL, api_key=API_KEY or None)
 MODEL = OpenAIChatCompletionsModel(model=MODEL_NAME, openai_client=_client)

