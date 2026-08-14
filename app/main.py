@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -39,7 +40,7 @@ from arsenal.registries.role_registry import assign_role
 from platform.scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
 from solvecraft.solution_templates import append_solution_template, load_solution_hint
 from runtime.status import set_status
-from runtime.stop_policy import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
+from runtime.deadline import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
 from core.task_context import TaskContext
 
 DATA_DIR = Path(__file__).parent.parent / "data"
@@ -160,7 +161,7 @@ async def run_with_model_fallback(agent, input, *, hooks=None, context=None,
                   f"切换到 {entry.name} 继续")
 
 
-async def _run_subtasks(ctx, pending, workdir, brief, model=None, model_settings=None) -> None:
+async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None) -> None:
     """并发调度 pending 子任务：每个子任务独立会话 + 独立 context，结果结构化回传。
 
     子任务用 finish_subtask 结束协议（summary/findings/flag），主 Agent 只拿到结构化结论，
@@ -174,20 +175,23 @@ async def _run_subtasks(ctx, pending, workdir, brief, model=None, model_settings
         sub["status"] = "running"
         # 独立 context：复制渐进披露技能，共享黑板/token 引用（结果与用量汇总回主 ctx）
         sub_ctx = TaskContext(
-            workdir=workdir,
+            workdir=challenge_workdir,
             disclosed_skills=list(ctx.disclosed_skills),
             task=ctx.task,
             charter=ctx.charter,
             role=ctx.role,
         )
+        sub_ctx.current_code = ctx.current_code
+        sub_ctx.submitted = ctx.submitted
+        sub_ctx.correct_flags = ctx.correct_flags
         sub_ctx.blackboard = ctx.blackboard
         sub_ctx.token_usage = ctx.token_usage
         sub_ctx.enabled_tools = set(ctx.enabled_tools) if ctx.enabled_tools is not None else None
         sub_ctx.phase = ctx.phase
         sub_ctx.plan = ctx.plan
         sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
-                                    db_path=str(SESSIONS_DIR / f"sub_{sub['id']}.sqlite"))
-        sub_hooks = EventStreamHooks(workdir, f"sub_{sub['id']}")
+                                    db_path=str(challenge_workdir / f"sub_{sub['id']}.sqlite"))
+        sub_hooks = EventStreamHooks(challenge_workdir, f"sub_{sub['id']}")
         try:
             await Runner.run(
                 sub_executor,
@@ -520,7 +524,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             # 子任务并发调度
             pending = [s for s in ctx.subtasks if s["status"] == "pending"]
             if pending:
-                await _run_subtasks(ctx, pending, workdir, brief,
+                await _run_subtasks(ctx, pending, challenge_workdir, brief,
                                     model=executor.model,
                                     model_settings=executor.model_settings)
 
@@ -599,7 +603,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
     attempts: Dict[str, int] = {}
     active: Dict[str, asyncio.Task] = {}  # code -> 单题 asyncio 任务
-    MAX_SLOTS = 6  # 软上限保护（防平台异常无限 start；实际并发由 container_busy 反馈决定）
+    MAX_SLOTS = int(os.getenv("PLATFORM_MAX_ACTIVE", "3"))  # 软上限保护（默认 3，适配平台活跃容器上限）
     results = []
     fatal_reason = ""
 

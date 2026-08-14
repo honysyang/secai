@@ -61,6 +61,10 @@ def is_model_failure(exc: Exception) -> bool:
     if isinstance(status_code, int) and (status_code in (401, 403, 404, 429)
                                            or 500 <= status_code < 600):
         return True
+    # 维度 2 补充：400 且消息含模型/配额关键词时也视为模型失败
+    if isinstance(status_code, int) and status_code == 400:
+        if any(k in msg for k in ("model", "quota", "额度", "不存在", "not exist", "invalid")):
+            return True
     # 异常 message 里也可能直接出现 "401" / "429" 等状态码
     if any(f" {code}" in msg or f"{code}:" in msg for code in (401, 403, 404, 429, 500, 502, 503, 504)):
         return True

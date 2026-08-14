@@ -125,7 +125,12 @@ def _pick_unseen_skills(ctx: TaskContext, max_skills: int = 3) -> List[str]:
 def _self_rescue_prompt(ctx: TaskContext, old_phase: str,
                         extra_skills: List[str]) -> str:
     """生成单模型自救时的 next_input。"""
+    bb_snapshot = json.dumps(
+        {k: v for k, v in ctx.blackboard.items()
+         if isinstance(v, dict) and v.get("status") in ("done", "failed")},
+        ensure_ascii=False)[:1500]
     parts = [
+        f"[已确认/已排除结论快照，禁止重复]\n{bb_snapshot}",
         f"已连续 {ctx.zero_gain_turns} 轮没有产生新的关键证据，当前模型可能陷入循环。",
         "请立即换一种思路，不要重复已经尝试过且未成功的方法。",
     ]

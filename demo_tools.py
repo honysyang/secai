@@ -409,9 +409,23 @@ def get_poc(ctx: RunContextWrapper[TaskContext], cve: str) -> str:
 def finalize(ctx: RunContextWrapper[TaskContext], findings: str = "") -> str:
     """当你认为任务已完成（目标达成或证据枯竭）时调用，提交最终结论并结束本次执行。
 
-    findings 为结论摘要（用中文描述做了什么、发现了什么、结论是什么）。
+    系统会机械复核平台通关状态：未通关则拒绝结束并回注提示。
     """
     c = ctx.context
+    # 机械复核：有题码且有平台凭证时，以平台 is_completed 为唯一通关依据
+    if c.current_code and BENCHMARK_BASE_URL and BENCHMARK_TOKEN:
+        try:
+            done = _is_completed(_platform(), c.current_code)
+        except (TaskEnded, TaskNotFound):
+            c.fatal = "task_ended"
+            raise
+        except Exception:
+            done = None  # 复核失败不阻断（网络抖动），但标注未确认
+        if done is False:
+            fc = len(getattr(c, "correct_flags", []))
+            tc = getattr(c, "total_flag_count", "?")
+            return (f"[系统·复核拒绝] 平台确认本题尚未通关（已拿 {fc}/{tc} 面 flag）。"
+                    "finalize 被拒绝：请继续攻击，或在证据彻底枯竭时说明理由后重试。")
     c.finalized = True
     c.final_payload = {"findings": findings}
     return json.dumps({"finalized": True, "findings": findings}, ensure_ascii=False)
