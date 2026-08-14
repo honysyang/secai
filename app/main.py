@@ -26,7 +26,7 @@ from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
 from runtime.model_pool import ModelPool, ModelExhaustedError, is_model_failure
-from runtime.stuck import StuckActionType, StuckDetector
+from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
 from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
 from core.context_manager import compact_if_needed
@@ -410,6 +410,13 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             elif stuck_action.action == StuckActionType.SELF_RESCUE:
                 print(f"  [self-rescue] 单题 {code} {stuck_action.reason}"
                       f"，解锁技能 {stuck_action.extra_skills}，阶段重置")
+                # 自救时压缩上下文：用 compactor_agent 摘要历史并清空 session
+                summary = await compact_session(
+                    ctx, session, getattr(executor, "model", None))
+                if summary:
+                    print(f"  [self-rescue] 单题 {code} 历史压缩成功")
+                else:
+                    print(f"  [self-rescue] 单题 {code} 历史压缩失败或跳过")
                 next_input = stuck_action.next_input
                 ctx.zero_gain_turns = 0
                 continue
