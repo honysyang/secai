@@ -92,59 +92,62 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
                         └──────────────────┬──────────────────────┘
                                            │ SSE
                         ┌──────────────────▼──────────────────────┐
-                        │            server.py（标准库 HTTP）        │
+                        │            app/server.py（标准库 HTTP）        │
                         │  / /monitor /agents + /api/*(meta/tasks/ │
                         │  events/stream/stream-db)                │
                         └──────────────────┬──────────────────────┘
                                            │
                         ┌──────────────────▼──────────────────────┐
-                        │              main.py（主编排）             │
+                        │              app/main.py（主编排）             │
                         │  Manager 立法 → Planner 规划 → 调度器循环   │
                         └───┬──────────┬──────────┬───────────┬───┘
                             │          │          │           │
                    ┌────────▼───┐ ┌────▼────┐ ┌───▼────┐ ┌────▼─────┐
-                   │ agents_def │ │ scheduler│ │ hooks  │ │ stop_    │
-                   │ Agent 定义  │ │ EV选题/  │ │ 事件流 │ │ policy   │
+                   │ core/      │ │platform/│ │ core/  │ │ runtime/ │
+                   │ agents_def │ │scheduler│ │ hooks  │ │ stop_    │
+                   │ Agent 定义  │ │ EV选题/ │ │ 事件流 │ │ policy   │
                    │ +子任务协议  │ │ 停滞决策 │ │ 增量打分│ │ 判停     │
                    └────────────┘ └─────────┘ └───┬────┘ └──────────┘
                             │                     │ BUS.emit
         ┌───────────────────┼─────────────────────┼──────────────┐
         │                   │                     ▼              │
   ┌─────▼─────┐      ┌──────▼──────┐      ┌───────▼──────┐ ┌────▼─────┐
-  │ demo_tools │      │ context_    │      │ events.py    │ │ budget.py│
-  │ 执行工具集  │      │ manager     │      │ 事件总线      │ │ 成本治理  │
-  │ 提交铁律   │      │ 压缩/续跑    │      │ (→db.py SQLite│ │ 换脑/挂起 │
-  │ 注入防御   │      │             │      │  落库)        │ │ 预算     │
+  │demo_tools  │      │ core/context_ │      │ core/events.py│ │ runtime/ │
+  │ 执行工具集  │      │ manager     │      │ 事件总线      │ │ budget.py│
+  │ 提交铁律   │      │ 压缩/续跑    │      │(→adapters/db.│ │ 成本治理  │
+  │ 注入防御   │      │             │      │ py SQLite落库)│ │ 换脑/挂起 │
   └───────────┘      └─────────────┘      └──────────────┘ └──────────┘
                             │
                        ┌────▼──────────────────────────────┐
-                       │ 声明式内容：prompts/ roles/ skills/ │
-                       │ tools/ vulns/ pocs/ knowledge/     │
-                       │ payloads/                          │
+                       │ 声明式内容：arsenal/              │
+                       │   roles/ skills/ tools/ vulns/    │
+                       │   pocs/ knowledge/ payloads/      │
                        └───────────────────────────────────┘
 ```
 
 ### 3.1 核心模块职责
 
-| 模块 | 职责 |
-|---|---|
-| `main.py` | 主编排入口：立法 → 规划 → 调度器循环 → 报告 + 子任务并发 + 成本治理 + 自适应容器 |
-| `agents_def.py` | Agent 定义与动态 instructions 组装 + 子任务结束协议 + 卡壳教练 |
-| `scheduler.py` | 跑分编排纯函数层（EV 选题 / 停滞决策） |
-| `solution_templates.py` | 解法模板（solved 题正向沉淀 + 同指纹题复用） |
-| `budget.py` | 成本治理（爆破/hint 预算 + 换脑/挂起），单一事实源 |
-| `hooks.py` | RunHooks 事件流 + 渐进披露 + 信息增量打分 + 网络不可达检测 |
-| `events.py` | 进程级事件总线（内存历史 + 订阅者分发） |
-| `db.py` | SQLite 落库（tasks/events 表，WAL，线程安全） |
-| `stop_policy.py` | 判停器（deadline / 零增益 / 空转 / 回合兜底） |
-| `task_context.py` | TaskContext：执行现场 + 全局状态 |
-| `context_manager.py` | 上下文压缩 + 断点续跑（state/session） |
-| `demo_tools.py` | 执行工具集 + 提交铁律 + Prompt 注入防御 + 工具按需加载 |
-| `platform_client.py` | 平台 SDK 语义封装（唯一懂平台协议的地方） |
-| `platform_tools.py` | 平台 API 的 Agent 工具封装 |
-| `status.py` | 阶段状态机（PHASE_DEFS + PHASE_TRANSITIONS） |
-| `charter.py` | 使命宪章落盘 |
-| 各 `*_registry.py` | 声明式内容加载器（skill/vuln/poc/knowledge/role） |
+| 模块 | 路径 | 职责 |
+|---|---|---|
+| `main.py` | `app/` | 主编排入口：立法 → 规划 → 调度器循环 → 报告 + 子任务并发 + 成本治理 + 自适应容器 |
+| `server.py` | `app/` | SSE 实时流服务（三页 + 监控 API） |
+| `agents_def.py` | `core/` | Agent 定义与动态 instructions 组装 + 子任务结束协议 + 卡壳教练 |
+| `scheduler.py` | `platform/` | 跑分编排纯函数层（EV 选题 / 停滞决策） |
+| `solution_templates.py` | `solvecraft/` | 解法模板（solved 题正向沉淀 + 同指纹题复用） |
+| `budget.py` | `runtime/` | 成本治理（爆破/hint 预算 + 换脑/挂起），单一事实源 |
+| `hooks.py` | `core/` | RunHooks 事件流 + 渐进披露 + 信息增量打分 + 网络不可达检测 |
+| `events.py` | `core/` | 进程级事件总线（内存历史 + 订阅者分发） |
+| `db.py` | `adapters/` | SQLite 落库（tasks/events 表，WAL，线程安全） |
+| `stop_policy.py` | `runtime/` | 判停器（deadline / 零增益 / 空转 / 回合兜底） |
+| `status.py` | `runtime/` | 阶段状态机（PHASE_DEFS + PHASE_TRANSITIONS） |
+| `task_context.py` | `core/` | TaskContext：执行现场 + 全局状态 |
+| `context_manager.py` | `core/` | 上下文压缩 + 断点续跑（state/session） |
+| `demo_tools.py` | 根目录 | 执行工具集 + 提交铁律 + Prompt 注入防御 + 工具按需加载 |
+| `platform_client.py` | `platform/` | 平台 SDK 语义封装（唯一懂平台协议的地方） |
+| `platform_tools.py` | `platform/` | 平台 API 的 Agent 工具封装 |
+| `charter.py` | `core/` | 使命宪章落盘 |
+| `config.py` | `adapters/` | env 配置 + 模型 |
+| 各 `*_registry.py` | `arsenal/registries/` | 声明式内容加载器（skill/vuln/poc/knowledge/role） |
 
 ---
 
@@ -271,7 +274,7 @@ while True:
 
 ## 6. 调度器（跑分编排）
 
-`scheduler.py` 是**零 LLM 纯函数层**，实现报告 P0-4 的核心要求。
+`platform/scheduler.py` 是**零 LLM 纯函数层**，实现报告 P0-4 的核心要求。
 
 ### 6.1 EV 选题
 
@@ -313,9 +316,9 @@ start_challenge
 
 ---
 
-## 6.5 成本治理（budget.py）
+## 6.5 成本治理（runtime/budget.py）
 
-治理规则收拢在 `budget.py`（单一事实源），避免在 config/scheduler/demo_tools/main 多处漂移。目标：Agent 空烧 token 时**机械止损**，而不是一路跑到超时。
+治理规则收拢在 `runtime/budget.py`（单一事实源），避免在 config/scheduler/demo_tools/main 多处漂移。目标：Agent 空烧 token 时**机械止损**，而不是一路跑到超时。
 
 | 层 | 触发条件 | 动作 |
 |---|---|---|
@@ -476,9 +479,9 @@ enable_tool, list_disabled_tools
 
 ### 9.5 本地安全 CLI（92 个）
 
-`tools/*.yaml` 声明式注册表，涵盖：nmap、sqlmap、ffuf、nuclei、gobuster、hydra、dirsearch、masscan、nikto、wpscan、metasploit、john、hashcat、gdb、radare2、angr、pwntools、slither、mythril 等。
+`arsenal/tools/*.yaml` 声明式注册表，涵盖：nmap、sqlmap、ffuf、nuclei、gobuster、hydra、dirsearch、masscan、nikto、wpscan、metasploit、john、hashcat、gdb、radare2、angr、pwntools、slither、mythril 等。
 
-- `sec_tools.py` 负责加载、构建命令、执行
+- `arsenal/registries/sec_tools.py` 负责加载、构建命令、执行
 - `list_tools` / `get_tool_spec` / `run_tool` 结构化调用
 - 启动时可 `shutil.which` 普查可用性（P2 优化）
 
@@ -488,10 +491,10 @@ enable_tool, list_disabled_tools
 
 ### 10.1 结构
 
-`skills/` 目录，62 个 Markdown 文件（顶层 + 分类子目录）：
+`arsenal/skills/` 目录，63 个 Markdown 文件（顶层 + 分类子目录）：
 
 ```
-skills/
+arsenal/skills/
 ├── unknown_target_sop.md     # 未知目标通用 SOP
 ├── file_read_oob.md          # 文件读取越权
 ├── filter_bypass.md          # 过滤绕过
@@ -499,6 +502,7 @@ skills/
 ├── sandbox_escape.md         # 沙箱逃逸
 ├── tcp_binary.md             # TCP 二进制协议
 ├── ai_security.md            # AI 安全
+├── arsenal_index.md          # 武器库导航（开局注入）
 ├── binary/                   # 二进制（pwn_exploitation/static_analysis）
 ├── ai_security/              # AI 安全（tool_misuse）
 ├── blockchain/               # 区块链（smart_contract_security）
@@ -527,7 +531,7 @@ skills/
 
 ### 11.1 角色定义（9 个）
 
-`roles/*.md`，frontmatter（name/pattern/playbooks）+ 思维风格正文：
+`arsenal/roles/*.md`，frontmatter（name/pattern/playbooks）+ 思维风格正文：
 
 | 角色 | 匹配 pattern（前缀锚定） | 定位 |
 |---|---|---|
@@ -543,7 +547,7 @@ skills/
 
 ### 11.2 派任机制
 
-- `assign_role(code, description)`：先按 `^` 前缀锚定题型，再按描述关键词，最后 fallback 通用侦察兵
+- `assign_role(code, description)` 位于 `arsenal/registries/role_registry.py`：先按 `^` 前缀锚定题型，再按描述关键词，最后 fallback 通用侦察兵
 - **题级派任**：调度器每 start 一题，用 `unique_code` 前缀 + 描述派任，注入该题专属 playbook（报告 P0-5）
 - 角色 = 思维风格模板 + 初始技能包，与阶段机正交分离
 
@@ -553,7 +557,7 @@ skills/
 
 ### 12.1 漏洞类型模块（9 个）
 
-`vulns/*.yaml`，每种漏洞一份结构化检测规范：
+`arsenal/vulns/*.yaml`，每种漏洞一份结构化检测规范：
 
 ```
 SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
@@ -569,7 +573,7 @@ SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
 
 ### 12.3 Payload 字典（10 个）
 
-`payloads/*.txt`：`sqli / lfi / path / xss / ssti / rce / idor / ssrf / upload / xxe`
+`arsenal/payloads/*.txt`：`sqli / lfi / path / xss / ssti / rce / idor / ssrf / upload / xxe`
 
 配合 `fuzz` / `parallel_shell` 使用。
 
@@ -577,21 +581,21 @@ SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
 
 ## 13. POC 与知识库
 
-### 13.1 POC（3 个精选）
+### 13.1 POC（20 个有效 POC）
 
-`pocs/` 目录，`search_cve` 检索 + `get_poc` 取全文，含利用原理/步骤/载荷/验证方式。
+`arsenal/pocs/` 目录，`search_cve` 检索 + `get_poc` 取全文，含利用原理/步骤/载荷/验证方式。
 
-> 注：早期曾导入 1967 个只有元数据无 poc 段的死数据，已清理，只保留有效 POC。
+> 注：早期曾导入 1967 个只有元数据无 poc 段的死数据，已清理；后续持续沉淀有效 POC。
 
-### 13.2 知识库（3 个条目）
+### 13.2 知识库（5 个条目）
 
-`knowledge/` 目录，`list_knowledge` 看简介 + `get_knowledge` 按 id 取全文（如 get_flag / post_exploit / waf_bypass）。
+`arsenal/knowledge/` 目录，`list_knowledge` 看简介 + `get_knowledge` 按 id 取全文（如 get_flag / post_exploit / waf_bypass）。
 
 ---
 
 ## 14. 前端可视化
 
-`static/`（三页）+ `server.py`（标准库 HTTP + SSE 实时流）：
+`static/`（三页）+ `app/server.py`（标准库 HTTP + SSE 实时流）：
 
 | 页面 | 路由 | 用途 |
 |---|---|---|
@@ -627,42 +631,54 @@ SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
 
 ```
 SECAI/
-├── main.py                 # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
-├── agents_def.py           # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
-├── scheduler.py            # 跑分调度器（EV选题/停滞决策，纯函数）
-├── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
-├── budget.py               # 成本治理（爆破/hint 预算 + 换脑/挂起）
-├── hooks.py                # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
-├── events.py               # 进程级事件总线（内存历史 + 订阅者分发）
-├── db.py                   # SQLite 落库（tasks/events 表，WAL，线程安全）
-├── stop_policy.py          # 判停器
-├── task_context.py         # TaskContext 状态
-├── context_manager.py      # 压缩 + 断点续跑
+├── app/
+│   ├── main.py             # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
+│   └── server.py           # SSE 实时流服务（三页 + 监控 API）
+├── core/
+│   ├── agents_def.py       # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
+│   ├── context_manager.py  # 上下文压缩 + 断点续跑
+│   ├── events.py           # 进程级事件总线（内存历史 + 订阅者分发）
+│   ├── hooks.py            # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
+│   ├── task_context.py     # TaskContext 状态
+│   └── charter.py          # 宪章落盘
+├── platform/
+│   ├── platform_client.py  # 平台 SDK 语义
+│   ├── platform_tools.py   # 平台 API 工具
+│   └── scheduler.py        # 跑分调度器（EV选题/停滞决策，纯函数）
+├── runtime/
+│   ├── budget.py           # 成本治理（爆破/hint 预算 + 换脑/挂起）
+│   ├── status.py           # 阶段状态机
+│   └── stop_policy.py      # 判停器
+├── adapters/
+│   ├── config.py           # env 配置 + 模型
+│   └── db.py               # SQLite 落库（tasks/events 表，WAL，线程安全）
+├── solvecraft/
+│   └── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
+├── arsenal/                # 声明式武器库（本地化、可扩展）
+│   ├── roles/              # 9 个角色定义
+│   ├── skills/             # 63 个技能（含子目录）
+│   ├── tools/              # 92 个 CLI 工具 YAML
+│   ├── vulns/              # 9 个漏洞检测模块
+│   ├── pocs/               # 20 个有效 POC
+│   ├── knowledge/          # 5 个知识条目
+│   ├── payloads/           # 10 个 payload 字典
+│   └── registries/         # 各类 registry 加载器
+│       ├── role_registry.py
+│       ├── skill_registry.py
+│       ├── sec_tools.py
+│       ├── vuln_registry.py
+│       ├── poc_registry.py
+│       └── knowledge_registry.py
 ├── demo_tools.py           # 执行工具 + 提交铁律 + 注入防御 + 按需加载
-├── platform_client.py      # 平台 SDK 语义
-├── platform_tools.py       # 平台 API 工具
-├── status.py               # 阶段状态机
-├── charter.py              # 宪章落盘
-├── sec_tools.py            # 92 个 CLI 工具执行
-├── role_registry.py        # 角色加载/派任
-├── skill_registry.py       # 技能加载/渐进披露
-├── vuln_registry.py        # 漏洞检测模块加载
-├── poc_registry.py         # POC 加载
-├── knowledge_registry.py   # 知识库加载
-├── server.py               # SSE 实时流服务（三页 + 监控 API）
-├── config.py               # env 配置 + 模型
 ├── prompts/                # 任务模板（tsec_task.txt）
-├── roles/                  # 9 个角色定义
-├── skills/                 # 62 个技能（含子目录）
-├── tools/                  # 92 个 CLI 工具 YAML
-├── vulns/                  # 9 个漏洞检测模块
-├── pocs/                   # 3 个 POC
-├── knowledge/              # 3 个知识条目
-├── payloads/               # 10 个 payload 字典
 ├── static/                 # 前端三页（index/monitor/agents）
 ├── docs/                   # 文档
 ├── data/                   # 运行时数据（agent.db + worker_generic/ 下含 worker_{code}/ 题级独立工作区）
-└── .env                    # 凭证配置
+├── tests/                  # 单元测试（预留）
+├── scripts/                # 辅助脚本（预留）
+├── config/                 # 配置模板（预留）
+├── .env                    # 凭证配置
+└── requirements.txt
 ```
 
 ---
@@ -718,16 +734,18 @@ SECAI/
 
 ## 18. 内容资产
 
-| 资产 | 数量 | 说明 |
-|---|---|---|
-| 角色 roles/ | 9 | Web审计、二进制协议、沙箱逃逸、免杀、边界渗透、AI安全、提权、横向、跑分 |
-| 技能 skills/ | 62 | Web漏洞（23）+ 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
-| CLI 工具 tools/ | 92 | nmap/sqlmap/ffuf/gdb/pwntools/angr/slither/mythril 等 |
-| 漏洞模块 vulns/ | 9 | SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD |
-| POC pocs/ | 3 | 精选有效 POC |
-| 知识 knowledge/ | 3 | get_flag/post_exploit/waf_bypass |
-| Payload payloads/ | 10 | sqli/lfi/path/xss/ssti/rce/idor/ssrf/upload/xxe |
+| 资产 | 路径 | 数量 | 说明 |
+|---|---|---|---|
+| 角色 | `arsenal/roles/` | 9 | Web审计、二进制协议、沙箱逃逸、免杀、边界渗透、AI安全、提权、横向、跑分 |
+| 技能 | `arsenal/skills/` | 63 | Web漏洞（23）+ 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
+| CLI 工具 | `arsenal/tools/` | 92 | nmap/sqlmap/ffuf/gdb/pwntools/angr/slither/mythril 等 |
+| 漏洞模块 | `arsenal/vulns/` | 9 | SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD |
+| POC | `arsenal/pocs/` | 20 | 有效 POC（含 CVE + 云/协议/框架） |
+| 知识 | `arsenal/knowledge/` | 5 | get_flag(idor/lfi/xss) + post_exploit + waf_bypass |
+| Payload | `arsenal/payloads/` | 10 | sqli/lfi/path/xss/ssti/rce/idor/ssrf/upload/xxe |
 
 ---
 
-*本文档随代码演进持续更新，是跨会话连续性的技术基座。*
+> **作者：一片丹心** | 其他贡献：奋进的小杨
+>
+> *本文档随代码演进持续更新，是跨会话连续性的技术基座。*

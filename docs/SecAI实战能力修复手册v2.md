@@ -1,5 +1,15 @@
 # SecAI 实战能力修复手册 v2
 
+> 注：本文档基于 commit 63a0101 的扁平目录编写。后续工程化重构后，文件路径已迁移到分层目录：
+> - `main.py` → `app/main.py`
+> - `agents_def.py` / `hooks.py` / `context_manager.py` / `events.py` / `task_context.py` / `charter.py` → `core/`
+> - `scheduler.py` / `platform_client.py` / `platform_tools.py` → `platform/`
+> - `budget.py` / `stop_policy.py` / `status.py` → `runtime/`
+> - `config.py` / `db.py` → `adapters/`
+> - `solution_templates.py` → `solvecraft/solution_templates.py`
+> - `demo_tools.py` 保留在项目根目录
+> - 各 `*_registry.py` → `arsenal/registries/`；skills/roles/pocs/vulns/payloads/knowledge/tools → `arsenal/`
+
 > 依据：当前仓库（commit 63a0101）评估报告。上一轮的六条修复已全部落地，本手册处理**残留的 1 个重伤 + 3 个中伤 + 3 个小伤**，全部为可直接照抄的代码补丁。
 > 总目标：通关题不再空烧 token、hint/skip 机制对 Web 题恢复生效、终局信号零丢失、接力档案按题检索。
 
@@ -9,13 +19,13 @@
 
 | # | 级别 | 问题 | 修复文件 |
 |---|---|---|---|
-| R1 | 重伤 | 通关出口是 LLM 的 finalize，平台 is_completed 缺席——通关题空烧到 suspend 档（easy 题 100 万 token） | `demo_tools.py` |
-| R2 | 中伤 | 信息增量判定过宽：任何 HTTP 状态码都算增量 → hint/skip 对 Web 题永不触发 | `hooks.py` / `task_context.py` |
-| R3 | 中伤 | 铁律吞终局异常（TaskEnded 变文本），与 platform_tools 的 fatal 机制行为不一致 | `demo_tools.py` |
-| R4 | 中伤 | field_notes 仍读尾部 3000 字符，按题检索缺席；题级沉淀缺席 | `main.py` 新增两函数 |
-| R5 | 小伤 | brief 无 flag 进度（多 flag 题"已拿 M/N 面"丢失） | `main.py` |
-| R6 | 小伤 | 工作纪律 16 条，单条最长 200+ 字，prompt 治理回潮 | `agents_def.py` |
-| R7 | 小伤 | 压缩 clear_session 可能留下孤儿 tool 响应（配对 400） | `context_manager.py` |
+| R1 | 重伤 | 通关出口是 LLM 的 finalize，平台 is_completed 缺席——通关题空烧到 suspend 档（easy 题 100 万 token） | `demo_tools.py`（项目根目录） |
+| R2 | 中伤 | 信息增量判定过宽：任何 HTTP 状态码都算增量 → hint/skip 对 Web 题永不触发 | `core/hooks.py` / `core/task_context.py` |
+| R3 | 中伤 | 铁律吞终局异常（TaskEnded 变文本），与 platform_tools 的 fatal 机制行为不一致 | `demo_tools.py`（项目根目录） |
+| R4 | 中伤 | field_notes 仍读尾部 3000 字符，按题检索缺席；题级沉淀缺席 | `app/main.py` 新增两函数 |
+| R5 | 小伤 | brief 无 flag 进度（多 flag 题"已拿 M/N 面"丢失） | `app/main.py` |
+| R6 | 小伤 | 工作纪律 16 条，单条最长 200+ 字，prompt 治理回潮 | `core/agents_def.py` |
+| R7 | 小伤 | 压缩 clear_session 可能留下孤儿 tool 响应（配对 400） | `core/context_manager.py` |
 
 ---
 
@@ -23,7 +33,7 @@
 
 **原理**：`submit_flag` 的响应里本来就带 `correct_flag_count / total_flag_count`，correct=true 时机械比对；相等（或平台 is_completed 复核为真）→ 直接置 `ctx.finalized`，不再等 LLM 想起 finalize。
 
-### demo_tools.py —— `_submit_flags_if_any` 整函数替换
+### demo_tools.py（项目根目录）—— `_submit_flags_if_any` 整函数替换
 
 ```python
 _PLATFORM = None  # 模块级单例（顺手修掉"每次新建 PlatformClient"）
@@ -107,7 +117,7 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     return "\n".join(notes)
 ```
 
-**配套**：`task_context.py` 确认存在 `submitted: set` 与 `correct_flags: list` 字段（若无则补上）。
+**配套**：`core/task_context.py` 确认存在 `submitted: set` 与 `correct_flags: list` 字段（若无则补上）。
 
 **效果**：通关当轮立即退出单题循环，`outcome="solved"`，不进入 suspend 档，不白花 token；多 flag 题被明确告知"继续找下一面"。
 
@@ -115,18 +125,18 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
 
 ## R2（中伤）：信息增量判定收窄——状态码不再是万金油
 
-**病灶**：`hooks.py:79` `_HTTP_STATUS_RE` 匹配任何输出里的 `200/301/500…`——每次 `http_request` 都含 `status=200`，`turn_gain` 恒真，`zero_gain_turns` 永不增长，`scheduler.decide_stuck_action` 的 hint/skip 预算对 Web 题形同虚设。
+**病灶**：`hooks.py:79` `_HTTP_STATUS_RE` 匹配任何输出里的 `200/301/500…`——每次 `http_request` 都含 `status=200`，`turn_gain` 恒真，`zero_gain_turns` 永不增长，`platform/scheduler.decide_stuck_action` 的 hint/skip 预算对 Web 题形同虚设。
 
-### task_context.py —— 加签名集字段
+### core/task_context.py —— 加签名集字段
 
 ```python
     seen_signatures: set = field(default_factory=set)  # 已见路径/指纹签名（增量去重用）
 ```
 
-### hooks.py —— `_score_tool_result` 整函数替换 + on_tool_end 调用处改签名
+### core/hooks.py —— `_score_tool_result` 整函数替换 + on_tool_end 调用处改签名
 
 ```python
-# hooks.py 顶部追加
+# core/hooks.py 顶部追加
 _PATH_EXTRACT_RE = re.compile(r"(?:/[A-Za-z0-9_.~%-]{2,}){1,4}")
 _SENSITIVE_RE = re.compile(
     r"(config\.php|\.git/|backup|\.env|phpinfo|/flag|flag\.txt|wp-config|"
@@ -193,7 +203,7 @@ def _score_tool_result(tool: str, text: str, ctx) -> int:
 
 **思路**：沉淀不靠 LLM 报告者（那是战役级），每题结束时用**纯代码**从黑板提取死路/战果写档案——零 token；注入时按题号 + 同前缀检索。
 
-### main.py —— 新增两函数，替换 `_load_field_notes` 的调用
+### app/main.py —— 新增两函数，替换 `_load_field_notes` 的调用
 
 ```python
 def _append_mechanical_note(code: str, outcome: str, ctx) -> None:
@@ -224,7 +234,7 @@ def load_notes_for(code: str, max_chars: int = 900) -> str:
     return "\n---\n".join(hits[-3:])
 ```
 
-### main.py `_run_single_challenge` 两处接线
+### app/main.py `_run_single_challenge` 两处接线
 
 ```python
 # ① 构建 executor 处，替换 field_notes 参数：
@@ -241,7 +251,7 @@ def load_notes_for(code: str, max_chars: int = 900) -> str:
 
 ## R5（小伤）：brief 补 flag 进度
 
-### main.py —— `_run_single_challenge` 签名与 brief
+### app/main.py —— `_run_single_challenge` 签名与 brief
 
 ```python
 # 签名加两参数
@@ -272,7 +282,7 @@ async def _run_single_challenge(code, desc, addrs, charter, task, global_plan,
 
 ## R6（小伤）：纪律 16 条 → 8 条
 
-### agents_def.py —— EXECUTOR_TEMPLATE 的 `# 工作纪律` 段整段替换
+### core/agents_def.py —— EXECUTOR_TEMPLATE 的 `# 工作纪律` 段整段替换
 
 ```
 # 工作纪律
@@ -295,7 +305,7 @@ async def _run_single_challenge(code, desc, addrs, charter, task, global_plan,
 
 ## R7（小伤）：压缩后防孤儿 tool 响应
 
-### context_manager.py —— `compact_if_needed` 尾部加固
+### core/context_manager.py —— `compact_if_needed` 尾部加固
 
 ```python
     # 清空会话，只保留最近若干条；摘要走系统提示，不占 session item
@@ -340,12 +350,12 @@ def _is_orphan_tool_output(item: Any) -> bool:
 
 | 文件 | 动作 | 对应 |
 |---|---|---|
-| `demo_tools.py` | 改（铁律整函数替换 + 单例 + 通关判决） | R1/R3 |
-| `hooks.py` | 改（增量打分 v2 + 调用处签名） | R2 |
-| `task_context.py` | 改（加 seen_signatures/submitted/correct_flags） | R1/R2 |
-| `main.py` | 改（题级沉淀/按题检索/brief 进度/参数透传） | R4/R5 |
-| `agents_def.py` | 改（纪律 16→8） | R6 |
-| `context_manager.py` | 改（孤儿防护） | R7 |
+| `demo_tools.py`（项目根目录） | 改（铁律整函数替换 + 单例 + 通关判决） | R1/R3 |
+| `core/hooks.py` | 改（增量打分 v2 + 调用处签名） | R2 |
+| `core/task_context.py` | 改（加 seen_signatures/submitted/correct_flags） | R1/R2 |
+| `app/main.py` | 改（题级沉淀/按题检索/brief 进度/参数透传） | R4/R5 |
+| `core/agents_def.py` | 改（纪律 16→8） | R6 |
+| `core/context_manager.py` | 改（孤儿防护） | R7 |
 
 **预期效果**（对照上版评估）：通关题当轮退出——按 easy 题 suspend 档 100 万 token 算，每道 easy 通关题省下的空烧足以多打 2~3 题；hint/skip 对 Web 题恢复生效——卡壳题在第 6~10 轮获得平台提示而不是空转到换题档；终局信号在两条提交路径上行为一致，比赛结束时刻零延迟收工。
 

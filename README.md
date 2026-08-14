@@ -2,6 +2,8 @@
 
 > 基于 openai-agents SDK 的 AI 自动化渗透测试系统，面向 CTF / 攻防比赛 / 靶场跑分场景。
 > 多智能体协作 + 零 LLM 跑分调度 + 成本治理 + 事件总线落库 + 声明式技能库 + 实时可视化。
+>
+> **作者：一片丹心** 别名：奋进的小杨
 
 ---
 
@@ -50,44 +52,51 @@ flowchart TB
         FE3["agents.html<br/>智能体 kill-chain 展示"]
     end
 
-    subgraph Server["server.py（标准库 HTTP + SSE）"]
+    subgraph Server["app/server.py（标准库 HTTP + SSE）"]
         SRV["/ /monitor /agents<br/>/api/meta /api/tasks /api/events /api/stream"]
     end
 
-    subgraph Orchestrator["main.py（主编排）"]
+    subgraph Orchestrator["app/main.py（主编排）"]
         MGR["① Manager 立法"]
         PLN["② Planner 规划"]
         SCH["③ 调度器循环<br/>list→EV选题→start→单题→close"]
         RPT["④ Reporter 战报"]
     end
 
-    subgraph Core["核心模块"]
+    subgraph Core["core/ 核心模块"]
         AGENT["agents_def.py<br/>Agent 定义 + 动态 instructions"]
-        SCHED["scheduler.py<br/>EV选题/难度分级/停滞决策"]
         HOOKS["hooks.py<br/>事件流/渐进披露/增量打分"]
         CTX["task_context.py<br/>执行现场+全局状态"]
         CTXM["context_manager.py<br/>压缩+断点续跑"]
-        TOOLS["demo_tools.py<br/>执行工具+提交铁律+注入防御"]
+        TOOLS["../demo_tools.py<br/>执行工具+提交铁律+注入防御"]
     end
 
-    subgraph Observability["可观测性"]
+    subgraph Platform["platform/ 平台对接"]
+        SCHED["scheduler.py<br/>EV选题/难度分级/停滞决策"]
+        PCLI["platform_client.py<br/>平台 SDK 语义封装"]
+        PTOOLS["platform_tools.py<br/>平台 API 工具（异常上抛）"]
+    end
+
+    subgraph Observability["adapters/ + core/ 可观测性"]
         BUS["events.py<br/>进程级事件总线"]
         DB["db.py<br/>SQLite 落库 tasks/events"]
     end
 
-    subgraph Budget["成本治理"]
+    subgraph Budget["runtime/ 成本治理"]
         BGT["budget.py<br/>爆破/hint 预算 + 换脑/挂起"]
+        STP["stop_policy.py<br/>停止策略"]
+        STA["status.py<br/>阶段状态机"]
     end
 
-    subgraph Declarative["声明式内容（本地化、可扩展）"]
+    subgraph Declarative["arsenal/ 声明式内容（本地化、可扩展）"]
         PROMPTS["prompts/ 任务模板"]
         ROLES["roles/ 9 角色"]
-        SKILLS["skills/ 62 技能"]
+        SKILLS["skills/ 62+ 技能"]
         CLITOOLS["tools/ 92 CLI"]
         VULNS["vulns/ 9 漏洞模块"]
-        POCS["pocs/ 3 POC"]
-        KNOW["knowledge/ 3 知识"]
-        PAYL["payloads/ 10 字典"]
+        POCS["pocs/ 17+ POC"]
+        KNOW["knowledge/ 知识"]
+        PAYL["payloads/ 字典"]
     end
 
     FE1 & FE2 & FE3 --> SRV
@@ -202,7 +211,7 @@ start_challenge
 
 ## 成本治理
 
-治理规则收拢在 `budget.py`（单一事实源），避免在 config/scheduler/demo_tools/main 多处漂移。目标：让 Agent 空烧 token 时**机械止损**，而不是一路跑到超时。
+治理规则收拢在 `runtime/budget.py`（单一事实源），避免在 config/scheduler/demo_tools/main 多处漂移。目标：让 Agent 空烧 token 时**机械止损**，而不是一路跑到超时。
 
 ### 三层止损
 
@@ -286,41 +295,53 @@ flowchart LR
 
 ```
 SECAI/
-├── main.py                 # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
-├── agents_def.py           # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
-├── scheduler.py            # 跑分调度器（EV选题/难度分级/停滞决策，纯函数）
-├── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
-├── budget.py               # 成本治理（爆破/hint 预算 + 换脑/挂起）
-├── hooks.py                # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
-├── events.py               # 进程级事件总线（内存历史 + 订阅者分发）
-├── db.py                   # SQLite 落库（tasks/events 表，WAL，线程安全）
-├── stop_policy.py          # 判停器（deadline/零增益/空转）
-├── task_context.py         # TaskContext 执行现场 + 全局状态
-├── context_manager.py      # 上下文压缩 + 断点续跑
+├── app/
+│   ├── main.py             # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
+│   └── server.py           # SSE 实时流服务（三页 + 监控 API）
+├── core/
+│   ├── agents_def.py       # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
+│   ├── context_manager.py  # 上下文压缩 + 断点续跑
+│   ├── events.py           # 进程级事件总线（内存历史 + 订阅者分发）
+│   ├── hooks.py            # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
+│   └── task_context.py     # TaskContext 执行现场 + 全局状态
+├── platform/
+│   ├── platform_client.py  # 平台 SDK 语义封装
+│   ├── platform_tools.py   # 平台 API 工具（异常上抛）
+│   └── scheduler.py        # 跑分调度器（EV选题/难度分级/停滞决策，纯函数）
+├── runtime/
+│   ├── budget.py           # 成本治理（爆破/hint 预算 + 换脑/挂起）
+│   ├── status.py           # 阶段状态机
+│   └── stop_policy.py      # 判停器（deadline/零增益/空转）
+├── adapters/
+│   ├── config.py           # env 配置 + 模型
+│   └── db.py               # SQLite 落库（tasks/events 表，WAL，线程安全）
+├── solvecraft/
+│   └── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
+├── arsenal/                # 声明式武器库（本地化、可扩展）
+│   ├── roles/              # 9 个角色定义（frontmatter + 思维风格）
+│   ├── skills/             # 62+ 个技能（含 binary/ai_security/blockchain 等子目录）
+│   ├── tools/              # 92 个 CLI 工具 YAML
+│   ├── vulns/              # 9 个漏洞检测模块 YAML
+│   ├── pocs/               # 17+ 个 POC
+│   ├── knowledge/          # 知识条目
+│   ├── payloads/           # payload 字典
+│   └── registries/         # 各类 registry 加载器
+│       ├── role_registry.py
+│       ├── skill_registry.py
+│       ├── sec_tools.py
+│       ├── vuln_registry.py
+│       ├── poc_registry.py
+│       └── knowledge_registry.py
 ├── demo_tools.py           # 执行工具 + 提交铁律 + 注入防御 + 工具按需加载
-├── platform_client.py      # 平台 SDK 语义封装
-├── platform_tools.py       # 平台 API 工具（异常上抛）
-├── status.py               # 阶段状态机
-├── sec_tools.py            # 92 个 CLI 工具执行
-├── role_registry.py        # 角色加载/题级派任
-├── skill_registry.py       # 技能加载/渐进披露/注入预算
-├── vuln_registry.py        # 漏洞检测模块加载
-├── poc_registry.py         # POC 加载
-├── knowledge_registry.py   # 知识库加载
-├── server.py               # SSE 实时流服务（三页 + 监控 API）
-├── config.py               # env 配置 + 模型
 ├── prompts/                # 任务模板（tsec_task.txt）
-├── roles/                  # 9 个角色定义（frontmatter + 思维风格）
-├── skills/                 # 62 个技能（含 binary/ai_security/blockchain 等子目录）
-├── tools/                  # 92 个 CLI 工具 YAML
-├── vulns/                  # 9 个漏洞检测模块 YAML
-├── pocs/                   # 3 个 POC
-├── knowledge/              # 3 个知识条目
-├── payloads/               # 10 个 payload 字典
 ├── static/                 # 前端三页（index/monitor/agents）
 ├── docs/                   # 架构设计 + 诊断报告 + 修复手册
 ├── data/                   # 运行时数据（events/status/checkpoint/agent.db）
-└── .env                    # 凭证配置
+├── tests/                  # 单元测试（预留）
+├── scripts/                # 辅助脚本（预留）
+├── config/                 # 配置模板（预留）
+├── .env                    # 凭证配置
+└── requirements.txt
 ```
 
 ---
@@ -358,16 +379,16 @@ cp .env.example .env
 
 ```bash
 # 跑分模式（有 BENCHMARK_TOKEN 自动进调度器）
-.venv/bin/python main.py
+.venv/bin/python -m app.main
 
 # 通用渗透任务
-.venv/bin/python main.py "目标描述" [角色提示]
+.venv/bin/python -m app.main "目标描述" [角色提示]
 
 # 断点续跑
-.venv/bin/python main.py --resume
+.venv/bin/python -m app.main --resume
 
 # 启动实时可视化前端
-.venv/bin/python server.py
+.venv/bin/python -m app.server
 # 浏览器打开 http://localhost:8000
 ```
 
@@ -381,21 +402,21 @@ sudo setcap cap_net_admin,cap_net_raw+ep /usr/sbin/openvpn
 
 ## 内容资产
 
-| 资产 | 数量 | 说明 |
-|---|---|---|
-| 角色 roles/ | 9 | Web审计、二进制协议、沙箱逃逸、免杀、边界渗透、AI安全、提权、横向、跑分 |
-| 技能 skills/ | 62 | Web漏洞（23）+ 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
-| CLI 工具 tools/ | 92 | nmap/sqlmap/ffuf/gdb/pwntools/angr/slither/mythril 等 |
-| 漏洞模块 vulns/ | 9 | SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD |
-| POC pocs/ | 3 | 精选有效 POC |
-| 知识 knowledge/ | 3 | get_flag/post_exploit/waf_bypass |
-| Payload payloads/ | 10 | sqli/lfi/path/xss/ssti/rce/idor/ssrf/upload/xxe |
+| 资产 | 路径 | 数量 | 说明 |
+|---|---|---|---|
+| 角色 | `arsenal/roles/` | 9 | Web审计、二进制协议、沙箱逃逸、免杀、边界渗透、AI安全、提权、横向、跑分 |
+| 技能 | `arsenal/skills/` | 63 | Web漏洞 + 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
+| CLI 工具 | `arsenal/tools/` | 92 | nmap/sqlmap/ffuf/gdb/pwntools/angr/slither/mythril 等 |
+| 漏洞模块 | `arsenal/vulns/` | 9 | SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD |
+| POC | `arsenal/pocs/` | 20 | 精选有效 POC（含 CVE + 云/协议/框架） |
+| 知识 | `arsenal/knowledge/` | 5 | get_flag(idor/lfi/xss) + post_exploit + waf_bypass |
+| Payload | `arsenal/payloads/` | 10 | sqli/lfi/path/xss/ssti/rce/idor/ssrf/upload/xxe |
 
 ---
 
 ## 前端可视化
 
-三页实时展示（`server.py` 标准库后端 + SSE）：
+三页实时展示（`app/server.py` 标准库后端 + SSE）：
 
 | 页面 | 路由 | 用途 |
 |---|---|---|

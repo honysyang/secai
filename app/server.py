@@ -1,7 +1,7 @@
 """SecAI 实时对话前端服务（Python 标准库，零新依赖）。
 
 启动：
-    python server.py
+    python -m app.server
 访问：
     http://localhost:8000
 

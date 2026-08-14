@@ -4,9 +4,9 @@
 不依赖任何靶场平台 / flag / 提交铁律，只跑通「多智能体 + 角色 + 多 Skills 渐进披露」主流程。
 
 用法：
-    python main.py "<任务描述>" [角色提示]
-    python main.py                              # 使用默认本地侦察任务
-    python main.py --resume                     # 从上次 checkpoint 续跑
+    python -m app.main "<任务描述>" [角色提示]
+    python -m app.main                              # 使用默认本地侦察任务
+    python -m app.main --resume                     # 从上次 checkpoint 续跑
 """
 from __future__ import annotations
 
