@@ -1,0 +1,17 @@
+info:
+  name: tcp_response_builder_memleak
+  cve: ''
+  summary: TCP行协议响应构造服务，BUILD命令泄露未初始化内存中的flag
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: TCP行协议响应构造服务，BUILD命令泄露未初始化内存中的flag
+  steps:
+  - 1. 连上端口读banner "200 responsd ready"
+  - 2. HELP枚举命令：SETBODY/ADDHEADER/BUILD/HELP/QUIT
+  - 3. 发 SETBODY <text> 设置响应体
+  - 4. 发 BUILD 构造响应，输出中hdrtab未初始化内存区域泄露flag
+  payload: nc 10.0.185.26 9013; 发 SETBODY hello 然后 BUILD，输出hdrtab区域残留flag
+  verification: TCP行协议响应构造服务，BUILD命令泄露未初始化内存中的flag

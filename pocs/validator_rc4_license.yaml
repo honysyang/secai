@@ -1,0 +1,22 @@
+info:
+  name: validator_rc4_license
+  cve: ''
+  summary: ELF许可证校验程序：硬编码license key经XOR混淆，RC4加密flag数据。分析校验函数还原key，用key做RC4解密提取flag。
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: ELF许可证校验程序：硬编码license key经XOR混淆，RC4加密flag数据。分析校验函数还原key，用key做RC4解密提取flag。
+  steps:
+  - 1. strings+objdump反汇编main(0x10c0)定位校验函数(0x1330)与解密函数(0x1210)
+  - 2. 校验函数逐字节cmp还原license key：前4字节=rodata[0x2048]^0x73, idx4-9固定"ED-RC4", 后4字节=rodata[0x2044]^0x73
+  - 3. 解密函数是RC4：用license key做KSA+PRGA解密0x4020处38字节
+  - 4. python实现RC4解密得到flag
+  payload: "def rc4(key, data):\n    S = list(range(256)); j = 0\n    for i in range(256):\n\
+    \        j = (j + S[i] + key[i % len(key)]) & 0xff\n        S[i], S[j] = S[j],\
+    \ S[i]\n    i = j = 0; out = bytearray()\n    for b in data:\n        i = (i+1)&0xff;\
+    \ j = (j+S[i])&0xff; S[i],S[j]=S[j],S[i]\n        out.append(b ^ S[(S[i]+S[j])&0xff])\n\
+    \    return bytes(out)\n# key从校验函数XOR还原：前4字节=0x2048^0x73, 中段ED-RC4, 后4字节=0x2044^0x73\n\
+    # 解密0x4020处38字节数据"
+  verification: ELF许可证校验程序：硬编码license key经XOR混淆，RC4加密flag数据。分析校验函数还原key，用key做RC4解密提取flag。

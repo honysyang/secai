@@ -1,0 +1,21 @@
+info:
+  name: azure_aad_devicecode_token_leak
+  cve: ''
+  summary: Azure AD 设备码认证流程中，token 交换返回的 JWT payload 内含敏感数据（flag）
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Azure AD 设备码认证流程中，token 交换返回的 JWT payload 内含敏感数据（flag）
+  steps:
+  - 探测 /api/blob-leak 获取配置 → 发起 devicecode 请求 → 用 device_code 交换 token → 解码 JWT 读敏感字段
+  payload: '1) GET /api/blob-leak 拿 client_id/tenant_id
+
+    2) POST /{tenant}/oauth2/v2.0/devicecode (client_id, scope) 拿 device_code
+
+    3) POST /{tenant}/oauth2/v2.0/token (grant_type=device_code, client_id, device_code)
+    拿 access_token
+
+    4) base64 解码 JWT payload 读 sensitive_data 字段'
+  verification: Azure AD 设备码认证流程中，token 交换返回的 JWT payload 内含敏感数据（flag）

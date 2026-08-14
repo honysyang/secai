@@ -72,8 +72,10 @@ def assign_role(code: str, description: str = "",
     fallback: dict | None = None
 
     def _build(r: dict, matched_by: str) -> dict:
+        # 所有角色统一注入「武器库导航」基础技能（告知 POC/载荷/知识/工具等资产怎么用）
+        playbooks = ["arsenal_index"] + [p for p in r["playbooks"] if p != "arsenal_index"]
         return {"role": r["role"], "style": r["style"] + TOOL_USAGE_HINT,
-                "playbooks": r["playbooks"], "matched_by": matched_by}
+                "playbooks": playbooks, "matched_by": matched_by}
 
     # 第一遍：锚定 pattern（^ 开头，code 前缀题型），最具体
     for r in roles:

@@ -1,0 +1,17 @@
+info:
+  name: session_token_cookie_flag_leak
+  cve: ''
+  summary: 响应头 Set-Cookie 中 session_token 直接泄露 URL 编码的 flag
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: 响应头 Set-Cookie 中 session_token 直接泄露 URL 编码的 flag
+  steps:
+  - 1. curl -sI 目标首页
+  - 2. 检查 Set-Cookie 头中的 session_token 值
+  - 3. 若为 flag%7B...%7D 形式，URL 解码得到 flag
+  payload: 'curl -sI http://<target>/ 观察 Set-Cookie: session_token=flag%7B...%7D，URL解码即得
+    flag'
+  verification: 响应头 Set-Cookie 中 session_token 直接泄露 URL 编码的 flag

