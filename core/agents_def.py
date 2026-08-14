@@ -168,18 +168,21 @@ SUBTASK_ENDING = """
 
 
 def build_executor(role: dict, charter: str, brief: str,
-                   field_notes: str = "") -> Agent:
+                   field_notes: str = "", model=None, model_settings=None) -> Agent:
     """构建执行者。instructions 用动态函数：每轮读 ctx.context.disclosed_skills，
-    这样 hooks.py 在运行时追加技能后，下一轮系统提示会自动带上新打法。"""
+    这样 hooks.py 在运行时追加技能后，下一轮系统提示会自动带上新打法。
+
+    可通过 model/model_settings 注入模型池当前模型，支持灾备切换。
+    """
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
         return _render_executor_instructions(ctx, role, charter, brief, field_notes)
 
     return Agent(name=f"Executor[{role['role']}]", instructions=_instructions,
-                 tools=ALL_TOOLS, model=MODEL, model_settings=SETTINGS)
+                 tools=ALL_TOOLS, model=model or MODEL, model_settings=model_settings or SETTINGS)
 
 
 def build_subtask_executor(role: dict, charter: str, brief: str,
-                           field_notes: str = "") -> Agent:
+                           field_notes: str = "", model=None, model_settings=None) -> Agent:
     """构建子任务执行者：复用执行者模板 + finish_subtask 结束协议 + 专用结束工具。
 
     子任务用独立 session（上下文隔离），结果通过 finish_subtask 结构化回传，
@@ -190,7 +193,8 @@ def build_subtask_executor(role: dict, charter: str, brief: str,
                 + SUBTASK_ENDING)
 
     return Agent(name=f"Subtask[{role['role']}]", instructions=_instructions,
-                 tools=ALL_TOOLS + [finish_subtask], model=MODEL, model_settings=SETTINGS)
+                 tools=ALL_TOOLS + [finish_subtask], model=model or MODEL,
+                 model_settings=model_settings or SETTINGS)
 
 
 # ================= 报告者 =================

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
 import sys
 import time
 from pathlib import Path
@@ -25,7 +24,8 @@ from agents.memory import SQLiteSession
 from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach_agent,
                             build_executor, build_subtask_executor)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
-                            build_escalation_models, should_pull_hint_by_budget)
+                            should_pull_hint_by_budget)
+from runtime.model_pool import ModelPool, ModelExhaustedError, is_model_failure
 from core.charter import save_charter
 from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
 from core.context_manager import compact_if_needed
@@ -121,14 +121,15 @@ REPLAN_MAX = 3           # 最多 replan 次数，防止无限重规划
 COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（每题目仅 1 次）
 
 
-async def _run_subtasks(ctx, pending, workdir, brief) -> None:
+async def _run_subtasks(ctx, pending, workdir, brief, model=None, model_settings=None) -> None:
     """并发调度 pending 子任务：每个子任务独立会话 + 独立 context，结果结构化回传。
 
     子任务用 finish_subtask 结束协议（summary/findings/flag），主 Agent 只拿到结构化结论，
     不接触子任务的海量工具输出（上下文隔离）。结果写回主黑板（subtask:<id>）。
     """
     sub_executor = build_subtask_executor(ctx.role, ctx.charter, brief,
-                                         field_notes=_load_field_notes())
+                                         field_notes=_load_field_notes(),
+                                         model=model, model_settings=model_settings)
 
     async def _run_one(sub):
         sub["status"] = "running"
@@ -272,8 +273,11 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         brief += (f"# 历史成功解法参考（同类题，可优先尝试）\n{sol_hint}\n\n")
     brief += ("选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
               "不要自己调用 list_challenges / start_challenge / close_challenge。")
+    # 模型池：主模型 + ESCALATION_MODELS 灾备候选
+    model_pool = ModelPool()
     executor = build_executor(role, charter, brief,
-                              field_notes=load_notes_for(code) or _load_field_notes())
+                              field_notes=load_notes_for(code) or _load_field_notes(),
+                              model=model_pool.current.model)
     session = SQLiteSession(session_id=f"challenge_{code}",
                             db_path=str(SESSIONS_DIR / f"challenge_{code}.sqlite"))
 
@@ -288,7 +292,6 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     cost_base_tokens = ctx.token_usage.get("total", 0)
     suspend_time_base = time.monotonic()
     switched = False
-    escalation_llms = build_escalation_models()
     suspend_tokens_map = {d: v.get("suspend_tokens", 0)
                           for d, v in COST_LIMITS.items()}
     db = db_mod.get_db()
@@ -298,15 +301,18 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     try:
         while True:
             turn_count += 1
-            # 成本治理：换脑档 + 挂起档（token / 时钟到档即停止本次尝试腾槽）
+            # 成本治理：挂起档（token / 时钟到档即停止本次尝试腾槽）
             used = ctx.token_usage.get("total", 0) - cost_base_tokens
-            if switch_tokens and not switched and used >= switch_tokens and escalation_llms:
-                new_model = random.choice(escalation_llms)
-                old = getattr(executor.model, "model", "?")
-                executor.model = new_model  # 无感知换脑：新模型以为轨迹全是自己的
-                switched = True
-                print(f"  [switch] 单题 {code} token {used} 到换脑档，"
-                      f"{old} -> {getattr(new_model, 'model', '?')}")
+            # token 成本档位触发无感知换脑（灾备池）
+            if (switch_tokens and not switched and used >= switch_tokens
+                    and model_pool.has_alternative):
+                entry = model_pool.next(reason="token_threshold")
+                if entry is not None:
+                    old = getattr(executor.model, "model", "?")
+                    executor.model = entry.model
+                    switched = True
+                    print(f"  [switch] 单题 {code} token {used} 到换脑档，"
+                          f"{old} -> {entry.name}")
             if suspend_tokens and used >= suspend_tokens:
                 outcome = "suspended"
                 break
@@ -323,6 +329,23 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                                  hooks=challenge_hooks, session=session, max_turns=1)
             except MaxTurnsExceeded:
                 pass
+            except Exception as exc:
+                # 模型服务端失败（额度/限流/鉴权/超时）→ 灾备切换模型继续同一会话
+                if is_model_failure(exc):
+                    current_name = getattr(executor.model, "model", "?")
+                    model_pool.mark_failed(current_name)
+                    entry = model_pool.next(current_name=current_name, reason=f"model_failure:{type(exc).__name__}")
+                    if entry is None:
+                        print(f"  [model-exhausted] 单题 {code} 所有模型均不可用：{exc}")
+                        outcome = "fatal"
+                        break
+                    executor.model = entry.model
+                    print(f"  [model-fallback] 单题 {code} {current_name} 失败，"
+                          f"切换到 {entry.name} 继续同一会话")
+                    # 不更新 next_input，直接继续 while 循环用同一输入重试
+                    continue
+                # 非模型类异常（如平台错误、工具异常）按原逻辑抛出，由外层处理
+                raise
 
             if ctx.phase == prev_phase:
                 ctx.stuck_turns += 1
@@ -421,7 +444,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             # 子任务并发调度
             pending = [s for s in ctx.subtasks if s["status"] == "pending"]
             if pending:
-                await _run_subtasks(ctx, pending, workdir, brief)
+                await _run_subtasks(ctx, pending, workdir, brief,
+                                    model=executor.model,
+                                    model_settings=executor.model_settings)
 
             # 历史压缩
             if await compact_if_needed(session, ctx):
