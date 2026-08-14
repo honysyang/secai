@@ -23,7 +23,10 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 # DeepSeek 等兼容后端不支持官方 trace endpoint，关掉，否则每轮会尝试上报
 set_tracing_disabled(disabled=True)
 
+# 兼容用户遗漏 /v1 后缀的网关地址（OpenAI SDK 会在 base_url 后拼 /chat/completions）
 BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
+if not BASE_URL.endswith("/v1"):
+    BASE_URL += "/v1"
 MODEL_NAME = os.getenv("LLM_MODEL", "deepseek-chat")
 API_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
 

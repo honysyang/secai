@@ -363,7 +363,7 @@ cp .env.example .env
 # 编辑 .env：
 #   主模型：百度 glm-5.2-agent-chanllenge（OpenAI 兼容网关）
 #   LLM_API_KEY=YOUR_BAIDU_API_KEY
-#   LLM_BASE_URL=https://agent-awd.baidu.com
+#   LLM_BASE_URL=https://agent-awd.baidu.com   # 可省略末尾 /v1，代码自动补齐
 #   LLM_MODEL=glm-5.2-agent-chanllenge
 #
 #   灾备模型池（额度/限流/失败/无进展时自动切换）：
