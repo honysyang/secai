@@ -15,7 +15,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
@@ -50,6 +50,10 @@ SESSIONS_DIR = WORKDIR / "sessions"
 SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 _db_initialized = False
 
+# 外层 Agent（Manager/Planner/Reporter/Coach）共享的模型灾备池，
+# 在 run_task 入口初始化，避免与单题 executor 内部模型池冲突。
+global_model_pool: Optional[ModelPool] = None
+
 
 def _init_observability() -> None:
     """初始化 SQLite 落库 + 事件总线订阅（只初始化一次，防重复订阅）。
@@ -65,7 +69,7 @@ def _init_observability() -> None:
 
 # 跑分任务模板已抽离到 prompts/tsec_task.txt（见下方 build_default_task）
 
-
+#目标任务
 TSEC_TASK_FILE = Path(__file__).parent.parent / "prompts" / "tsec_task.txt"
 
 
@@ -120,6 +124,40 @@ SUBTASK_MAX_TURNS = 8  # 每个子任务最多 LLM 回合数（内部 ReAct，Ag
 ZERO_GAIN_REPLAN_TURNS = 5  # 连续零信息增量轮数触发 replan（替代旧「阶段停滞」判据）
 REPLAN_MAX = 3           # 最多 replan 次数，防止无限重规划
 COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（每题目仅 1 次）
+
+
+async def run_with_model_fallback(agent, input, *, hooks=None, context=None,
+                                  session=None, max_turns=None, model_pool=None,
+                                  agent_name=""):
+    """带模型灾备切换的 Runner.run 包装函数（供外层 Agent 使用）。
+
+    - model_pool 为 None 时，仅执行一次 Runner.run，不重试；
+    - model_pool 有效时，捕获 is_model_failure 异常后，标记当前模型失败并切换到
+      model_pool.next() 返回的新模型，覆盖 agent.model 后继续重试；
+    - 所有候选模型均失败时抛出 ModelExhaustedError，避免无限重试。
+    """
+    if model_pool is None:
+        return await Runner.run(agent, input=input, hooks=hooks, context=context,
+                                session=session, max_turns=max_turns)
+
+    while True:
+        try:
+            return await Runner.run(agent, input=input, hooks=hooks, context=context,
+                                      session=session, max_turns=max_turns)
+        except Exception as exc:
+            if not is_model_failure(exc):
+                raise
+            current_name = getattr(agent.model, "model", "?")
+            model_pool.mark_failed(current_name)
+            entry = model_pool.next(current_name=current_name,
+                                    reason=f"model_failure:{type(exc).__name__}")
+            if entry is None:
+                print(f"  [model-exhausted] {agent_name or '外层 Agent'} 所有模型均不可用：{exc}")
+                raise ModelExhaustedError(
+                    f"{agent_name or '外层 Agent'} 模型池耗尽") from exc
+            agent.model = entry.model
+            print(f"  [model-fallback] {agent_name or '外层 Agent'} {current_name} 失败，"
+                  f"切换到 {entry.name} 继续")
 
 
 async def _run_subtasks(ctx, pending, workdir, brief, model=None, model_settings=None) -> None:
@@ -205,14 +243,17 @@ async def _replan(ctx, task: str, charter: str, role: dict, hooks) -> str:
     """执行中计划修正：把黑板 + 近期事件流尾部 + 原计划交给 Planner，产出修正后的计划。"""
     events_text = (ctx.workdir / "events.jsonl").read_text(encoding="utf-8")[-4000:]
     blackboard_text = json.dumps(ctx.blackboard, ensure_ascii=False)[:2000]
-    result = await Runner.run(
+    # 外层 Agent 共享同一模型池，失败时自动切换模型重试
+    result = await run_with_model_fallback(
         planner_agent,
         input=(f"原任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
                f"原作战计划：\n{ctx.plan}\n\n"
                f"当前黑板（已完成事项）：\n{blackboard_text}\n\n"
                f"近期执行情况（事件流尾部）：\n{events_text}\n\n"
                f"请指出原计划哪里判断错了，并给出修正后的作战计划。"),
-        hooks=hooks)
+        hooks=hooks,
+        model_pool=global_model_pool,
+        agent_name="Planner")
     return str(result.final_output)
 
 
@@ -228,14 +269,17 @@ async def _coach(ctx, brief, hooks) -> str:
     except Exception:
         events_text = ""
     skills = ", ".join(ctx.disclosed_skills) or "无"
-    result = await Runner.run(
+    # 外层 Coach 共享全局模型池，失败时自动切换模型重试
+    result = await run_with_model_fallback(
         coach_agent,
         input=(f"题目：\n{brief}\n\n"
                f"已解锁技能：{skills}\n\n"
                f"当前黑板（已尝试/已完成）：\n{blackboard_text}\n\n"
                f"近期执行动作（事件流尾部）：\n{events_text}\n\n"
                f"请给出 1~2 条具体可执行的新方向。"),
-        hooks=hooks)
+        hooks=hooks,
+        model_pool=global_model_pool,
+        agent_name="Coach")
     return str(result.final_output)
 
 
@@ -508,6 +552,16 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     workdir.mkdir(exist_ok=True)
     hooks = EventStreamHooks(workdir, "generic")
 
+    # 外层 Agent 全局模型池（与单题 executor 内部模型池隔离，互不污染）
+    global global_model_pool
+    global_model_pool = ModelPool()
+    # 同步更新外层 Agent 默认模型为当前模型池入口，避免首次调用仍用旧默认
+    if global_model_pool is not None:
+        manager_agent.model = global_model_pool.current.model
+        planner_agent.model = global_model_pool.current.model
+        reporter_agent.model = global_model_pool.current.model
+        coach_agent.model = global_model_pool.current.model
+
     # 清理旧 checkpoint / 事件流（调度器模式：题目进度在平台侧，本地不依赖续跑状态）
     for f in ("state.json", "session.sqlite"):
         (workdir / f).unlink(missing_ok=True)
@@ -516,8 +570,12 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     # ① 管理者·立法（全局一次）
     print("== 管理者：写使命宪章 ==")
     set_status(workdir, "legislate", "running")
-    charter_result = await Runner.run(manager_agent, input=f"用户任务：{task}",
-                                      hooks=hooks)
+    charter_result = await run_with_model_fallback(
+        manager_agent,
+        input=f"用户任务：{task}",
+        hooks=hooks,
+        model_pool=global_model_pool,
+        agent_name="Manager")
     charter = str(charter_result.final_output)
     save_charter(DATA_DIR / "mission_charter.md", charter)
     set_status(workdir, "legislate", "finish")
@@ -528,11 +586,13 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
     # ② 规划师·全局计划（一次，单题复用 + 单题 brief 补充）
     print("== 规划师：任务深度分析，产出作战计划 ==")
-    plan_result = await Runner.run(
+    plan_result = await run_with_model_fallback(
         planner_agent,
         input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
                f"派任角色：{base_role['role']}\n\n请产出作战计划。"),
-        hooks=hooks)
+        hooks=hooks,
+        model_pool=global_model_pool,
+        agent_name="Planner")
     global_plan = str(plan_result.final_output)
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
@@ -674,11 +734,13 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     set_status(workdir, "report", "running")
     events_text = (workdir / "events.jsonl").read_text(encoding="utf-8")[-6000:]
     summary = json.dumps(results, ensure_ascii=False)[:2000]
-    report = await Runner.run(
+    report = await run_with_model_fallback(
         reporter_agent,
         input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
                f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
-        hooks=hooks)
+        hooks=hooks,
+        model_pool=global_model_pool,
+        agent_name="Reporter")
     report_text = str(report.final_output)
     (DATA_DIR / "field_notes.md").open("a", encoding="utf-8").write(
         f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{report_text}\n")
