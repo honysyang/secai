@@ -15,7 +15,7 @@ from typing import Dict
 from agents import OpenAIChatCompletionsModel, RunContextWrapper
 from openai import AsyncOpenAI
 
-from config import BASE_URL, API_KEY
+from adapters.config import BASE_URL, API_KEY
 
 # ================= 爆破预算 =================
 BRUTEFORCE_MAX_CALLS = int(os.getenv("BRUTEFORCE_MAX_CALLS", "20"))  # 每题爆破调用硬上限，0=关闭

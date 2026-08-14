@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-KNOWLEDGE_DIR = Path(__file__).parent / "knowledge"
+KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
 
 
 def load_knowledge() -> List[dict]:

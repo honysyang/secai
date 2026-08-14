@@ -20,18 +20,18 @@ from typing import Any, Dict, List
 import requests
 from agents import function_tool, RunContextWrapper
 
-from task_context import TaskContext
+from core.task_context import TaskContext
 
-import sec_tools
-import poc_registry
-import vuln_registry
-import knowledge_registry
-import platform_tools
-from skill_registry import find_skills as search_skills, create_skill
-from budget import brute_gate
-from config import (VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL,
-                    BENCHMARK_TOKEN)
-from platform_client import PlatformClient, TaskEnded, TaskNotFound
+from arsenal.registries import sec_tools
+from arsenal.registries import poc_registry
+from arsenal.registries import vuln_registry
+from arsenal.registries import knowledge_registry
+from platform import platform_tools
+from arsenal.registries.skill_registry import find_skills as search_skills, create_skill
+from runtime.budget import brute_gate
+from adapters.config import (VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL,
+                             BENCHMARK_TOKEN)
+from platform.platform_client import PlatformClient, TaskEnded, TaskNotFound
 
 PREVIEW = 4000
 ARTIFACT_SPILL_THRESHOLD = 800  # 工具输出超过此字符数就外置到 artifacts/

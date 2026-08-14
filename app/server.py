@@ -22,15 +22,15 @@ from urllib.parse import parse_qs, urlparse
 from agents import Agent, Runner
 from agents.memory import SQLiteSession
 
-from agents_def import SETTINGS
-from config import MODEL
-import db as db_mod
+from core.agents_def import SETTINGS
+from adapters.config import MODEL
+import adapters.db as db_mod
 from demo_tools import ALL_TOOLS, TOOL_GROUPS, CORE_TOOL_NAMES
-from hooks import EventStreamHooks
-from status import PHASE_DEFS
-from task_context import TaskContext
+from core.hooks import EventStreamHooks
+from runtime.status import PHASE_DEFS
+from core.task_context import TaskContext
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parent.parent
 WORKDIR = ROOT / "data" / "worker_web"
 WORKDIR.mkdir(parents=True, exist_ok=True)
 EVENTS_FILE = WORKDIR / "events.jsonl"

@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
-POCS_DIR = Path(__file__).parent / "pocs"
+POCS_DIR = Path(__file__).parent.parent / "pocs"
 
 
 @dataclass

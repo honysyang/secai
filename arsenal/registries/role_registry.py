@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import List
 
-ROLES_DIR = Path(__file__).parent / "roles"
+ROLES_DIR = Path(__file__).parent.parent / "roles"
 
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
 

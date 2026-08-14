@@ -27,7 +27,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-DEFAULT_TOOLS_DIR = str(Path(__file__).parent / "tools")
+DEFAULT_TOOLS_DIR = str(Path(__file__).parent.parent / "tools")
 TOOLS_DIR = os.getenv("TOOLS_DIR", DEFAULT_TOOLS_DIR)
 
 MAX_OUTPUT = 8000          # stdout 截断

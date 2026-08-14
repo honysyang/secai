@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data"
 TEMPLATES_FILE = DATA_DIR / "solution_templates.jsonl"
 
 # 指纹抽取：技术栈/框架/漏洞类型关键词（小写匹配，命中即作为指纹）

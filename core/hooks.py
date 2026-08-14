@@ -13,8 +13,8 @@ from pathlib import Path
 
 from agents import RunHooks
 
-from events import BUS
-from skill_registry import detect_skill_triggers
+from core.events import BUS
+from arsenal.registries.skill_registry import detect_skill_triggers
 
 
 def _output_text(response) -> str:

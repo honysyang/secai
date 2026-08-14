@@ -11,11 +11,11 @@ import time
 
 from agents import Agent, ModelSettings, RunContextWrapper
 
-from config import MODEL
+from adapters.config import MODEL
 from demo_tools import ALL_TOOLS, finish_subtask
-from skill_registry import load_skill_bodies
-from status import PHASE_DEFS
-from task_context import TaskContext
+from arsenal.registries.skill_registry import load_skill_bodies
+from runtime.status import PHASE_DEFS
+from core.task_context import TaskContext
 
 # parallel_tool_calls=False：DeepSeek 等兼容后端在并行工具调用时更容易生成非法 JSON，
 # 强制每轮最多一次工具调用，换取稳定性（牺牲一点并发）。

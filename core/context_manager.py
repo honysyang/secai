@@ -14,8 +14,8 @@ from typing import Any, Dict, List
 
 from agents import Runner
 
-from agents_def import compactor_agent
-from task_context import TaskContext
+from core.agents_def import compactor_agent
+from core.task_context import TaskContext
 
 # 会话 L2 层 token 量超过此值触发压缩
 COMPACT_TOKEN_THRESHOLD = 30000

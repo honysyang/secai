@@ -9,9 +9,9 @@ import json
 
 from agents import function_tool, RunContextWrapper
 
-from config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
-from platform_client import PlatformClient, TaskNotFound, TaskEnded
-from task_context import TaskContext
+from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
+from platform.platform_client import PlatformClient, TaskNotFound, TaskEnded
+from core.task_context import TaskContext
 
 # 单次工具返回的字符上限，避免塞爆上下文
 _PREVIEW = 6000

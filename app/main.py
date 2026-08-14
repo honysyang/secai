@@ -22,26 +22,26 @@ from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.memory import SQLiteSession
 
-from agents_def import (manager_agent, planner_agent, reporter_agent, coach_agent,
-                        build_executor, build_subtask_executor)
-from budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
-                    build_escalation_models, should_pull_hint_by_budget)
-from charter import save_charter
-from config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
-from context_manager import compact_if_needed
-import db as db_mod
+from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach_agent,
+                            build_executor, build_subtask_executor)
+from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
+                            build_escalation_models, should_pull_hint_by_budget)
+from core.charter import save_charter
+from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
+from core.context_manager import compact_if_needed
+import adapters.db as db_mod
 from demo_tools import build_default_tools
-from events import BUS
-from hooks import EventStreamHooks
-from platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
-from role_registry import assign_role
-from scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
-from solution_templates import append_solution_template, load_solution_hint
-from status import set_status
-from stop_policy import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
-from task_context import TaskContext
+from core.events import BUS
+from core.hooks import EventStreamHooks
+from platform.platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
+from arsenal.registries.role_registry import assign_role
+from platform.scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
+from solvecraft.solution_templates import append_solution_template, load_solution_hint
+from runtime.status import set_status
+from runtime.stop_policy import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
+from core.task_context import TaskContext
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 WORKDIR = DATA_DIR / "worker_generic"

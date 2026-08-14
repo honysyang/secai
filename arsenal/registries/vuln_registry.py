@@ -22,8 +22,8 @@ from typing import Dict, List, Optional
 
 import yaml
 
-VULNS_DIR = Path(__file__).parent / "vulns"
-PAYLOADS_DIR = Path(__file__).parent / "payloads"
+VULNS_DIR = Path(__file__).parent.parent / "vulns"
+PAYLOADS_DIR = Path(__file__).parent.parent / "payloads"
 
 
 def load_payloads(vuln_type: str) -> List[str]:
