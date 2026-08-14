@@ -361,18 +361,25 @@ python3 -m venv .venv
 ```bash
 cp .env.example .env
 # 编辑 .env：
-#   LLM_API_KEY=你的 DeepSeek/OpenAI 兼容 API Key
-#   LLM_BASE_URL=https://api.deepseek.com/v1
-#   LLM_MODEL=deepseek-chat
+#   主模型：百度 glm-5.2-agent-chanllenge（OpenAI 兼容网关）
+#   LLM_API_KEY=YOUR_BAIDU_API_KEY
+#   LLM_BASE_URL=https://agent-awd.baidu.com
+#   LLM_MODEL=glm-5.2-agent-chanllenge
+#
+#   灾备模型池（额度/限流/失败/无进展时自动切换）：
+#   ESCALATION_MODELS=[{"model":"deepseek-chat","base_url":"https://api.deepseek.com/v1","api_key":"YOUR_DEEPSEEK_API_KEY","role":"backup"}]
+#
+#   靶场平台：
 #   BENCHMARK_TOKEN=跑分平台的 token
 #   BENCHMARK_BASE_URL=跑分平台地址
 #   VPN_CONFIG=/path/to/xxx.ovpn   # 需要走内网时
 #
-# 成本治理（可选，均有默认值，见 budget.py）：
+# 成本治理（可选，均有默认值，见 budget.py / runtime/stuck.py）：
 #   BRUTEFORCE_MAX_CALLS=20       # 每题爆破/枚举调用硬上限，0=关闭
 #   HINT_BUDGET_RATIO=0.35        # 卡题且 token 达挂起档该比例时拉 hint，0=关闭
 #   SUSPEND_SECONDS=2700          # 墙上时钟挂起档（秒），0=关闭
-#   ESCALATION_MODELS=[...]       # 换脑候选模型 JSON 列表（缺省回退主模型）
+#   MODEL_SWITCH_TURNS=6        # 连续多少轮 zero_gain 触发模型切换/自救
+#   MODEL_SELF_RESCUE_MAX=2     # 单模型场景下最多自救几次
 ```
 
 ### 3. 运行
