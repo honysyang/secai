@@ -757,6 +757,11 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                     addrs = await asyncio.to_thread(client.start_challenge, code)
                 except ContainerBusy:
                     break
+                except (TaskEnded, TaskNotFound) as e:
+                    # 平台任务结束/token 无效：全局终止信号，不能当普通启动失败跳过
+                    fatal_reason = str(e)
+                    log_warn(f"== 平台终止：{fatal_reason} ==")
+                    break
                 except Exception as e:
                     attempts[code] = attempts.get(code, 0) + 1
                     log_warn(f"[start] 启动 {code} 失败：{str(e)[:200]}，跳过")
@@ -768,6 +773,14 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 t = asyncio.create_task(_run_one(code, desc, addrs, difficulty, chal))
                 active[code] = t
                 log_info(f"[slot] 启动 {code}（活跃 {len(active)}/{MAX_SLOTS}）")
+
+            if fatal_reason:
+                # start 阶段遇到 TaskEnded/TaskNotFound：取消并发题，终止整个跑分
+                for other in active.values():
+                    other.cancel()
+                if active:
+                    await asyncio.gather(*active.values(), return_exceptions=True)
+                break
 
             if not active:
                 log_info("== 全部题目已完成（无可选题目）==")
