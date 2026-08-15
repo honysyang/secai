@@ -19,6 +19,15 @@ from core.task_context import TaskContext
 
 # parallel_tool_calls=False：DeepSeek 等兼容后端在并行工具调用时更容易生成非法 JSON，
 # 强制每轮最多一次工具调用，换取稳定性（牺牲一点并发）。
+# 按角色拆分 ModelSettings：输出型 Agent 稳定低 temperature，探索型 Agent 略高；
+# Reporter/Compactor 给更大 max_tokens 以处理长事件流/摘要。
+MANAGER_SETTINGS = ModelSettings(temperature=0.1, max_tokens=2048, parallel_tool_calls=False)
+PLANNER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
+EXECUTOR_SETTINGS = ModelSettings(temperature=0.3, max_tokens=4096, parallel_tool_calls=False)
+REPORTER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
+COMPACTOR_SETTINGS = ModelSettings(temperature=0.1, max_tokens=2048, parallel_tool_calls=False)
+COACH_SETTINGS = ModelSettings(temperature=0.3, max_tokens=2048, parallel_tool_calls=False)
+# 保留兼容性兜底 SETTINGS
 SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
 
 
@@ -34,7 +43,7 @@ MANAGER_INSTRUCTIONS = """你是 SecAI 的管理者，负责立法而非执行�
 只输出宪章本身，不要寒暄。宪章将被注入执行者的系统提示，并作为终止核对的依据。"""
 
 manager_agent = Agent(name="Manager", instructions=MANAGER_INSTRUCTIONS,
-                      model=MODEL, model_settings=SETTINGS)
+                      model=MODEL, model_settings=MANAGER_SETTINGS)
 
 
 # ================= 规划师（任务深度分析 → 作战计划） =================
@@ -58,7 +67,7 @@ PLANNER_INSTRUCTIONS = """你是 SecAI 的作战规划师（分析主智能体�
 只输出计划本身，不要寒暄。计划将被注入执行者的系统提示，指导其阶段推进。"""
 
 planner_agent = Agent(name="Planner", instructions=PLANNER_INSTRUCTIONS,
-                      model=MODEL, model_settings=SETTINGS)
+                      model=MODEL, model_settings=PLANNER_SETTINGS)
 
 
 # ================= 执行者（按角色组装，渐进披露技能） =================
@@ -192,7 +201,7 @@ def build_executor(role: dict, charter: str, brief: str,
         return _render_executor_instructions(ctx, role, charter, brief, field_notes)
 
     return Agent(name=f"Executor[{role['role']}]", instructions=_instructions,
-                 tools=ALL_TOOLS, model=model or MODEL, model_settings=model_settings or SETTINGS)
+                 tools=ALL_TOOLS, model=model or MODEL, model_settings=model_settings or EXECUTOR_SETTINGS)
 
 
 def build_subtask_executor(role: dict, charter: str, brief: str,
@@ -208,7 +217,7 @@ def build_subtask_executor(role: dict, charter: str, brief: str,
 
     return Agent(name=f"Subtask[{role['role']}]", instructions=_instructions,
                  tools=ALL_TOOLS + [finish_subtask], model=model or MODEL,
-                 model_settings=model_settings or SETTINGS)
+                 model_settings=model_settings or EXECUTOR_SETTINGS)
 
 
 # ================= 报告者 =================
@@ -219,7 +228,7 @@ REPORTER_INSTRUCTIONS = """你是 SecAI 的报告者，负责把执行过程翻�
 只输出这两节。不评价、不抒情、不建议。"""
 
 reporter_agent = Agent(name="Reporter", instructions=REPORTER_INSTRUCTIONS,
-                       model=MODEL, model_settings=SETTINGS)
+                       model=MODEL, model_settings=REPORTER_SETTINGS)
 
 
 # ================= 历史压缩器（上下文超阈值时调用） =================
@@ -232,7 +241,7 @@ COMPACTOR_INSTRUCTIONS = """你是对话历史的压缩器。输入包含「更�
 只输出摘要本身，不要寒暄。"""
 
 compactor_agent = Agent(name="Compactor", instructions=COMPACTOR_INSTRUCTIONS,
-                        model=MODEL, model_settings=SETTINGS)
+                        model=MODEL, model_settings=COMPACTOR_SETTINGS)
 
 
 # ================= 卡壳教练（软干预：hint 后给具体方向，不重规划） =================
@@ -253,4 +262,4 @@ COACH_INSTRUCTIONS = """你是 SecAI 的卡壳教练（分析型）。执行者�
 - 若黑板已有 confirmed 漏洞但尚未拿到 flag，优先给「基于该漏洞换 payload / 换利用链」的建议，而非让执行者重新侦察。"""
 
 coach_agent = Agent(name="Coach", instructions=COACH_INSTRUCTIONS,
-                    model=MODEL, model_settings=SETTINGS)
+                    model=MODEL, model_settings=COACH_SETTINGS)
