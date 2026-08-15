@@ -24,10 +24,10 @@ from core.task_context import TaskContext
 # Manager/Compactor 加量以保留详细约束与关键事实。
 MANAGER_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
 PLANNER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
-EXECUTOR_SETTINGS = ModelSettings(temperature=0.4, max_tokens=4096, parallel_tool_calls=False)
+EXECUTOR_SETTINGS = ModelSettings(temperature=0.3, max_tokens=4096, parallel_tool_calls=False)
 REPORTER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
 COMPACTOR_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
-COACH_SETTINGS = ModelSettings(temperature=0.1, max_tokens=2048, parallel_tool_calls=False)
+COACH_SETTINGS = ModelSettings(temperature=0.3, max_tokens=2048, parallel_tool_calls=False)
 # 保留兼容性兜底 SETTINGS
 SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
 
