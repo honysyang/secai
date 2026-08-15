@@ -20,13 +20,14 @@ from core.task_context import TaskContext
 # parallel_tool_calls=False：DeepSeek 等兼容后端在并行工具调用时更容易生成非法 JSON，
 # 强制每轮最多一次工具调用，换取稳定性（牺牲一点并发）。
 # 按角色拆分 ModelSettings：输出型 Agent 稳定低 temperature，探索型 Agent 略高；
-# Reporter/Compactor 给更大 max_tokens 以处理长事件流/摘要。
-MANAGER_SETTINGS = ModelSettings(temperature=0.1, max_tokens=2048, parallel_tool_calls=False)
-PLANNER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
-EXECUTOR_SETTINGS = ModelSettings(temperature=0.3, max_tokens=4096, parallel_tool_calls=False)
+# Planner/Reporter 给更大 max_tokens 以输出完整计划/总结；
+# Manager/Compactor 加量以保留详细约束与关键事实。
+MANAGER_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
+PLANNER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
+EXECUTOR_SETTINGS = ModelSettings(temperature=0.4, max_tokens=4096, parallel_tool_calls=False)
 REPORTER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
-COMPACTOR_SETTINGS = ModelSettings(temperature=0.1, max_tokens=2048, parallel_tool_calls=False)
-COACH_SETTINGS = ModelSettings(temperature=0.3, max_tokens=2048, parallel_tool_calls=False)
+COMPACTOR_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
+COACH_SETTINGS = ModelSettings(temperature=0.1, max_tokens=2048, parallel_tool_calls=False)
 # 保留兼容性兜底 SETTINGS
 SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
 
