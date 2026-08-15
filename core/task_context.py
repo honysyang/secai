@@ -36,6 +36,7 @@ class TaskContext:
     correct_flags: List[str] = field(default_factory=list)       # 已确认 correct 的 flag（多 flag 题进度）
     seen_signatures: Set[str] = field(default_factory=set)       # 已见路径/指纹签名（信息增量去重用）
     subtasks: List[Dict[str, Any]] = field(default_factory=list)  # 子任务队列 [{id, desc, status, result}]，主循环并发调度
+    todos: List[Dict[str, Any]] = field(default_factory=list)      # 待办清单 [{id, title, status, priority, created_at, done_at}]，执行者自我管理用
     enabled_tools: Optional[Set[str]] = None  # 工具按需加载：None=全部启用；否则只启用集合内的工具名（见 demo_tools.CORE_TOOL_NAMES）
     phase: str = "recon"                      # 当前阶段（recon/enumerate/detect/exploit/post），驱动 instructions 动态切换
     plan: str = ""                            # 作战计划（Planner 深度分析产出，注入执行者系统提示）
