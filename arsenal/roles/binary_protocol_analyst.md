@@ -1,6 +1,6 @@
 ---
 name: 二进制协议分析师
-pattern: "^f1"
+pattern: "^f[12]"
 playbooks: tcp_binary, pwn_exploitation, unknown_target_sop
 ---
 
