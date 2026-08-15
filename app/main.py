@@ -424,11 +424,12 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     entry = model_pool.next(current_name=current_name, reason=f"model_failure:{type(exc).__name__}")
                     if entry is None:
                         log_error(f"[model-exhausted] 单题 {code} 所有模型均不可用：{exc}")
-                        outcome = "fatal"
+                        # 模型耗尽不是「任务结束」，标记为 stuck 换题，避免误触发全局终止
+                        outcome = "stuck"
                         break
                     executor.model = entry.model
                     log_warn(f"[model-fallback] 单题 {code} {current_name} 失败，"
-                             f"切换到 {entry.name} 继续同一会话")
+                             f"切换到 {entry.name} 继续同一会话：{str(exc)[:300]}")
                     # 不更新 next_input，直接继续 while 循环用同一输入重试
                     continue
                 # 非模型类异常（如平台错误、工具异常）按原逻辑抛出，由外层处理
