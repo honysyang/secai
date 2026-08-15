@@ -1,7 +1,7 @@
 ---
 name: 多阶段渗透专员
 pattern: "多阶段|攻击链|域控|域环境|active directory|持久化|后渗透|红队|攻防演练"
-playbooks: tcp_binary, sandbox_escape, unknown_target_sop
+playbooks: post_exploitation, active_directory_attack, unknown_target_sop
 ---
 
 ## 定位

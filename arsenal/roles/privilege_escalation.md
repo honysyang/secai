@@ -1,7 +1,7 @@
 ---
 name: 提权专员
 pattern: "提权|权限提升|privesc|垂直越权"
-playbooks: sandbox_escape, unknown_target_sop
+playbooks: post_exploitation, unknown_target_sop
 ---
 
 ## 定位

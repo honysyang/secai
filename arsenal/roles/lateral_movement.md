@@ -1,7 +1,7 @@
 ---
 name: 横向移动专员
 pattern: "横向移动|横向渗透|内网渗透|lateral|域渗透"
-playbooks: tcp_binary, unknown_target_sop
+playbooks: active_directory_attack, post_exploitation, unknown_target_sop
 ---
 
 ## 定位
