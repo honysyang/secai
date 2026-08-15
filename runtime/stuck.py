@@ -1,6 +1,6 @@
 """卡壳治理：模型惰性 / 无进展时的切换模型或自救策略。
 
-与 platform/scheduler.py 的机械决策互补：
+与 bench_platform/scheduler.py 的机械决策互补：
 - scheduler 决定「什么时候看 hint / 什么时候换题」；
 - stuck.py 决定「同一题内，当 Agent 陷入惰性时，是换模型接管还是单模型自救换思路」。
 """
@@ -65,16 +65,24 @@ class StuckDetector:
             for s in extra_skills:
                 if s not in ctx.disclosed_skills:
                     ctx.disclosed_skills.append(s)
-            # 阶段回退到 recon，让 Agent 重新评估全局
+            # 阶段走向：已确认漏洞时保留 exploit 阶段，否则回退 recon 重新评估全局
             old_phase = ctx.phase
-            ctx.phase = "recon"
+            keep_exploit = _has_confirmed_vuln(ctx)
+            if keep_exploit:
+                # 已有 confirmed 漏洞：不要回退 recon，停留在 exploit/post 继续换利用方法
+                if ctx.phase in ("recon", "enumerate", "detect"):
+                    ctx.phase = "exploit"
+                reset_phase = False
+            else:
+                ctx.phase = "recon"
+                reset_phase = True
             return StuckAction(
                 action=StuckActionType.SELF_RESCUE,
                 reason=f"连续 {ctx.zero_gain_turns} 轮零增量，第 {self.self_rescue_count} 次自救换思路"
                         + ("（仍有候选模型，自救无效后将切换）" if has_alternative else "（仅有一个模型）"),
                 extra_skills=extra_skills,
-                reset_phase=True,
-                next_input=_self_rescue_prompt(ctx, old_phase, extra_skills),
+                reset_phase=reset_phase,
+                next_input=_self_rescue_prompt(ctx, old_phase, extra_skills, keep_exploit=keep_exploit),
             )
 
         # 自救次数用尽后，若存在未尝试过的候选模型，则切换模型接管
@@ -97,34 +105,132 @@ class StuckDetector:
         )
 
 
+# 确认过的漏洞类黑板 key（status=confirmed），自救时保留 exploit 阶段而非回退 recon
+_CONFIRMED_VULN_KEYS = (
+    "lfi_confirmed", "sqli_confirmed", "rce_confirmed", "ssrf_endpoint",
+    "api_flag_endpoint", "upload_success", "deserialization_confirmed",
+    "logic_flaw_hint", "vuln_confirmed",
+)
+
+
+def _has_confirmed_vuln(ctx: TaskContext) -> bool:
+    """判断黑板是否已有 confirmed 漏洞，用于自救时决定阶段走向。"""
+    for key in _CONFIRMED_VULN_KEYS:
+        v = ctx.blackboard.get(key)
+        if isinstance(v, dict) and v.get("status") == "confirmed":
+            return True
+    # 兼容旧写法：任意黑板项 value=True 且 status=confirmed 也算
+    for v in ctx.blackboard.values():
+        if isinstance(v, dict) and v.get("status") == "confirmed" and v.get("verified"):
+            return True
+    return False
+
+
+# 自救选技能：攻击面/技术栈关键词 → 建议解锁的漏洞技能。
+# 相比旧版「阶段+角色模糊匹配」，改为优先命中题目指纹里的攻击面，聚焦解题而非工具用法。
+_VULN_HINTS = {
+    # 技术栈指纹
+    "flask": ["authentication_jwt", "broken_function_level_authorization", "ssti", "mass_assignment"],
+    "werkzeug": ["authentication_jwt", "broken_function_level_authorization", "ssti"],
+    "django": ["authentication_jwt", "broken_function_level_authorization", "idor", "mass_assignment"],
+    "fastapi": ["authentication_jwt", "idor", "mass_assignment"],
+    "php": ["sql_injection", "path_traversal_lfi_rfi", "insecure_file_uploads", "ssrf"],
+    "java": ["insecure_deserialization", "path_traversal_lfi_rfi"],
+    "node": ["prototype_pollution", "nosql_injection"],
+    # 攻击面 / 功能关键词
+    "ssrf": ["ssrf"],
+    "proxy": ["ssrf"],
+    "file://": ["path_traversal_lfi_rfi", "ssrf"],
+    "weaver": ["ssrf", "sql_injection", "path_traversal_lfi_rfi"],
+    "泛微": ["ssrf", "sql_injection", "path_traversal_lfi_rfi"],
+    "admin": ["broken_function_level_authorization", "idor", "mass_assignment"],
+    "管理员": ["broken_function_level_authorization", "idor"],
+    "upload": ["insecure_file_uploads"],
+    "上传": ["insecure_file_uploads"],
+    "import": ["xxe", "insecure_file_uploads"],
+    "导入": ["xxe", "insecure_file_uploads"],
+    "login": ["authentication_jwt", "sql_injection"],
+    "登录": ["authentication_jwt", "sql_injection"],
+    "session": ["authentication_jwt", "broken_function_level_authorization"],
+    "jwt": ["authentication_jwt"],
+    "oauth": ["authentication_jwt"],
+    "graphql": ["idor", "mass_assignment"],
+    "price": ["business_logic", "race_conditions"],
+    "优惠券": ["business_logic", "race_conditions"],
+    "秒杀": ["business_logic", "race_conditions"],
+    "文档": ["idor", "information_disclosure", "mass_assignment"],
+    "机密": ["information_disclosure", "idor"],
+    "命令执行": ["rce"],
+    "反序列化": ["insecure_deserialization"],
+    "deserialization": ["insecure_deserialization"],
+    # 云存储 / Azure Blob / SAS 相关
+    "azure": ["azure_blob_storage", "information_disclosure", "idor"],
+    "azurite": ["azure_blob_storage", "information_disclosure"],
+    "blob": ["azure_blob_storage", "information_disclosure", "idor"],
+    "sas": ["azure_blob_storage", "information_disclosure", "idor"],
+    "container": ["azure_blob_storage", "idor"],
+    "storage": ["azure_blob_storage", "information_disclosure"],
+    "devstoreaccount": ["azure_blob_storage"],
+    "aws": ["aws", "information_disclosure"],
+    "s3": ["aws", "information_disclosure"],
+    "lambda": ["aws", "ssrf"],
+    "firebase": ["firebase_firestore", "information_disclosure"],
+    "supabase": ["supabase", "information_disclosure"],
+}
+
+
+def _fingerprint_text(ctx: TaskContext) -> str:
+    """拼接题目指纹/技术栈线索（黑板 + 任务 + 计划），作为选技能匹配文本。"""
+    parts = []
+    for key in ("fingerprint", "target_fingerprint", "target"):
+        v = ctx.blackboard.get(key)
+        if isinstance(v, dict):
+            val = str(v.get("value", "")).strip()
+            if val:
+                parts.append(val)
+    parts.append(ctx.task)
+    parts.append(ctx.plan)
+    return " ".join(parts).lower()
+
+
 def _pick_unseen_skills(ctx: TaskContext, max_skills: int = 3) -> List[str]:
-    """按当前阶段/角色主动挑选尚未披露的技能，用于单模型自救。"""
+    """自救时挑选尚未披露的技能。
+
+    策略（聚焦解题，避免旧版只解锁工具用法）：
+    1. 用题目指纹/任务/计划里的攻击面关键词精确命中漏洞技能（+4）；
+    2. 漏洞类技能（vulnerabilities）兜底（+2）；
+    3. 排除纯工具/扫描模式技能（tooling/scan_modes）。
+    """
     skills = load_skills()
-    phase = ctx.phase
-    role_name = str(ctx.role.get("role", "")).lower()
-    hints = [phase, role_name]
-    hints.extend(ctx.task.lower().split())
-    scored: List[tuple] = []
+    text = _fingerprint_text(ctx)
+
+    scores: Dict[str, int] = {}
+    for kw, names in _VULN_HINTS.items():
+        if kw in text:
+            for n in names:
+                if n in skills:
+                    scores[n] = scores.get(n, 0) + 4
+
     for name, s in skills.items():
         if name in ctx.disclosed_skills:
             continue
-        score = 0
-        hay = " ".join([s.name, s.display_name, s.category, s.description,
-                        " ".join(s.triggers)]).lower()
-        for h in hints:
-            if h and h in hay:
-                score += 1
-        # 优先选与当前阶段最相关的
-        if phase and phase in hay:
-            score += 2
-        if score > 0:
-            scored.append((score, name, s))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [name for _, name, _ in scored[:max_skills]]
+        if s.category in ("tooling", "scan_modes"):
+            continue
+        sc = scores.get(name, 0)
+        if s.category == "vulnerabilities":
+            sc += 2
+        hay = f"{s.name} {s.display_name} {s.category} {s.description} {' '.join(s.triggers)}".lower()
+        if ctx.phase and ctx.phase in hay:
+            sc += 1
+        if sc > 0:
+            scores[name] = sc
+
+    ranked = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+    return [name for name, _ in ranked[:max_skills]]
 
 
 def _self_rescue_prompt(ctx: TaskContext, old_phase: str,
-                        extra_skills: List[str]) -> str:
+                        extra_skills: List[str], keep_exploit: bool = False) -> str:
     """生成单模型自救时的 next_input。"""
     bb_snapshot = json.dumps(
         {k: v for k, v in ctx.blackboard.items()
@@ -133,8 +239,19 @@ def _self_rescue_prompt(ctx: TaskContext, old_phase: str,
     parts = [
         f"[已确认/已排除结论快照，禁止重复]\n{bb_snapshot}",
         f"已连续 {ctx.zero_gain_turns} 轮没有产生新的关键证据，当前模型可能陷入循环。",
-        "请立即换一种思路，不要重复已经尝试过且未成功的方法。",
     ]
+    if keep_exploit:
+        parts.append(
+            "你已经确认过可利用漏洞（见黑板 confirmed 项）。请基于已确认漏洞，"
+            "更换利用方式或 payload，不要重新做信息收集，也不要重复已失败的路径。"
+        )
+    else:
+        parts.append(
+            "请立即换一种思路，不要重复已经尝试过且未成功的方法。"
+        )
+    parts.append(
+        "一次探测脚本应同时覆盖所有候选假设（例如：list 容器、list blob、常见 blob 名、直连后端等），禁止把同一思路改参数后重复写成 probe2/probe3。"
+    )
     # 若此前已做过历史压缩，把摘要注入提示，让模型基于全局事实继续
     if ctx.compaction_summary:
         parts.append(f"历史压缩摘要：\n{ctx.compaction_summary}")
@@ -147,10 +264,13 @@ def _self_rescue_prompt(ctx: TaskContext, old_phase: str,
     ]
     if failed_paths:
         parts.append(f"已证伪的方向不要重复：{', '.join(failed_paths[:5])}。")
-    parts.append(
-        f"阶段已从 {old_phase} 重置为 recon，请重新做信息收集与攻击面识别，"
-        "产出新的工具调用或新的发现后再继续。"
-    )
+    if keep_exploit:
+        parts.append(f"当前阶段保持 {ctx.phase}，请集中精力完成利用并提交 flag。")
+    else:
+        parts.append(
+            f"阶段已从 {old_phase} 重置为 recon，请重新做信息收集与攻击面识别，"
+            "产出新的工具调用或新的发现后再继续。"
+        )
     return "\n".join(parts)
 
 

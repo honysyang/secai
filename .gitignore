@@ -18,6 +18,10 @@ data/
 *.sqlite-wal
 *.sqlite-shm
 
+# 运行时日志
+nohup.out
+*.out
+
 # IDE / 系统
 .DS_Store
 .idea/

@@ -1,0 +1,30 @@
+.git
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+
+# 敏感配置与凭证（运行时用 --env-file 传入，禁止打进镜像）
+.env
+vpn/
+*.ovpn
+
+# 运行时数据（运行时挂载宿主 data/ 持久化）
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.log
+
+# 运行日志 / 打包产物（避免无谓体积进入镜像）
+nohup.out
+*.out
+*.tar.gz
+*.tgz
+*.zip
+
+# IDE / 系统
+.idea
+.vscode
+.DS_Store

@@ -30,7 +30,7 @@ HINT_BUDGET_RATIO = float(os.getenv("HINT_BUDGET_RATIO", "0.35"))  # 卡题且 t
 COST_LIMITS = {
     "easy":   {"switch_tokens": 500000,  "suspend_tokens": 1000000},
     "medium": {"switch_tokens": 1000000, "suspend_tokens": 2000000},
-    "hard":   {"suspend_tokens": 3500000},
+    "hard":   {"switch_tokens": 1500000, "suspend_tokens": 3500000},
 }
 SUSPEND_SECONDS = int(os.getenv("SUSPEND_SECONDS", "2700"))  # 墙上时钟挂起档，0=关闭
 

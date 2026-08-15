@@ -87,45 +87,71 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 
 ## 3. 总体架构
 
-```
-                        ┌─────────────────────────────────────────┐
-                        │          前端 static/（三页）             │
-                        │ index(对话+任务流) / monitor(监控) /      │
-                        │ agents(智能体 kill-chain)                │
-                        └──────────────────┬──────────────────────┘
-                                           │ SSE
-                        ┌──────────────────▼──────────────────────┐
-                        │            app/server.py（标准库 HTTP）        │
-                        │  / /monitor /agents + /api/*(meta/tasks/ │
-                        │  events/stream/stream-db)                │
-                        └──────────────────┬──────────────────────┘
-                                           │
-                        ┌──────────────────▼──────────────────────┐
-                        │              app/main.py（主编排）             │
-                        │  Manager 立法 → Planner 规划 → 调度器循环   │
-                        └───┬──────────┬──────────┬───────────┬───┘
-                            │          │          │           │
-                   ┌────────▼───┐ ┌────▼────┐ ┌───▼────┐ ┌────▼─────┐
-                   │ core/      │ │platform/│ │ core/  │ │ runtime/ │
-                   │ agents_def │ │scheduler│ │ hooks  │ │ model_   │
-                   │ Agent 定义  │ │ EV选题/ │ │ 事件流 │ │ pool/    │
-                   │ +子任务协议  │ │ 停滞决策 │ │ 增量打分│ │ stuck/log│
-                   └────────────┘ └─────────┘ └───┬────┘ └──────────┘
-                            │                     │ BUS.emit
-        ┌───────────────────┼─────────────────────┼──────────────┐
-        │                   │                     ▼              │
-  ┌─────▼─────┐      ┌──────▼──────┐      ┌───────▼──────┐ ┌────▼─────┐
-  │demo_tools  │      │ core/context_ │      │ core/events.py│ │ runtime/ │
-  │ 执行工具集  │      │ manager     │      │ 事件总线      │ │ budget.py│
-  │ 提交铁律   │      │ 压缩/续跑    │      │(→adapters/db.│ │ 成本治理  │
-  │ 注入防御   │      │             │      │ py SQLite落库)│ │ 换脑/挂起 │
-  └───────────┘      └─────────────┘      └──────────────┘ └──────────┘
-                            │
-                       ┌────▼──────────────────────────────┐
-                       │ 声明式内容：arsenal/              │
-                       │   roles/ skills/ tools/ vulns/    │
-                       │   pocs/ knowledge/ payloads/      │
-                       └───────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Frontend["前端 static/（三页）"]
+        FE1["index.html<br/>对话流 + 任务流"]
+        FE2["monitor.html<br/>任务生命周期监控"]
+        FE3["agents.html<br/>智能体 kill-chain 展示"]
+    end
+
+    subgraph Server["app/server.py（标准库 HTTP + SSE）"]
+        SRV["/ /monitor /agents<br/>/api/meta /api/tasks /api/events /api/stream"]
+    end
+
+    subgraph Orchestrator["app/main.py（主编排）"]
+        MGR["① Manager 立法"]
+        PLN["② Planner 规划"]
+        SCH["③ 调度器循环<br/>list→EV选题→start→单题→close"]
+        RPT["④ Reporter 战报"]
+    end
+
+    subgraph Core["core/ 核心模块"]
+        AGENT["agents_def.py<br/>Agent 定义 + 动态 instructions"]
+        HOOKS["hooks.py<br/>事件流/渐进披露/增量打分"]
+        CTX["task_context.py<br/>执行现场+全局状态"]
+        CTXM["context_manager.py<br/>压缩+断点续跑"]
+        TOOLS["../demo_tools.py<br/>执行工具+提交铁律+注入防御"]
+    end
+
+    subgraph Platform["bench_platform/ 平台对接"]
+        SCHED["scheduler.py<br/>EV选题/难度分级/停滞决策"]
+        PCLI["platform_client.py<br/>平台 SDK 语义封装"]
+        PTOOLS["platform_tools.py<br/>平台 API 工具（异常上抛）"]
+    end
+
+    subgraph Observability["adapters/ + core/ 可观测性"]
+        BUS["events.py<br/>进程级事件总线"]
+        DB["db.py<br/>SQLite 落库 tasks/events"]
+    end
+
+    subgraph Runtime["runtime/ 治理与模型"]
+        BGT["budget.py<br/>爆破/hint 预算 + 换脑/挂起"]
+        STA["status.py<br/>阶段状态机"]
+        MPL["model_pool.py<br/>多模型灾备池"]
+        STK["stuck.py<br/>惰性检测 + 自救/切换"]
+        LOG["log.py<br/>统一日志"]
+        DDL["deadline.py<br/>比赛时限"]
+    end
+
+    subgraph Declarative["arsenal/ 声明式内容（本地化、可扩展）"]
+        PROMPTS["prompts/ 任务模板"]
+        ROLES["roles/ 9 角色"]
+        SKILLS["skills/ 64 技能"]
+        CLITOOLS["tools/ 92 CLI"]
+        VULNS["vulns/ 9 漏洞模块"]
+        POCS["pocs/ 31 POC"]
+        KNOW["knowledge/ 知识"]
+        PAYL["payloads/ 字典"]
+    end
+
+    FE1 & FE2 & FE3 --> SRV
+    SRV --> Orchestrator
+    Orchestrator --> Core
+    Orchestrator --> Runtime
+    Orchestrator --> Observability
+    Core --> Declarative
+    HOOKS --> BUS --> DB
 ```
 
 ### 3.1 核心模块职责
@@ -135,7 +161,7 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 | `main.py` | `app/` | 主编排入口：立法 → 规划 → 调度器循环 → 报告 + 子任务并发 + 成本治理 + 自适应容器 |
 | `server.py` | `app/` | SSE 实时流服务（三页 + 监控 API） |
 | `agents_def.py` | `core/` | Agent 定义与动态 instructions 组装 + 子任务结束协议 + 卡壳教练 |
-| `scheduler.py` | `platform/` | 跑分编排纯函数层（EV 选题 / 停滞决策） |
+| `scheduler.py` | `bench_platform/` | 跑分编排纯函数层（EV 选题 / 停滞决策） |
 | `solution_templates.py` | `solvecraft/` | 解法模板（solved 题正向沉淀 + 同指纹题复用） |
 | `budget.py` | `runtime/` | 成本治理（爆破/hint 预算 + 换脑/挂起），单一事实源 |
 | `hooks.py` | `core/` | RunHooks 事件流 + 渐进披露 + 信息增量打分 + 网络不可达检测 |
@@ -149,8 +175,8 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 | `task_context.py` | `core/` | TaskContext：执行现场 + 全局状态 |
 | `context_manager.py` | `core/` | 上下文压缩 + 断点续跑（state/session） |
 | `demo_tools.py` | 根目录 | 执行工具集 + 提交铁律 + Prompt 注入防御 + 工具按需加载 |
-| `platform_client.py` | `platform/` | 平台 SDK 语义封装（唯一懂平台协议的地方） |
-| `platform_tools.py` | `platform/` | 平台 API 的 Agent 工具封装 |
+| `platform_client.py` | `bench_platform/` | 平台 SDK 语义封装（唯一懂平台协议的地方） |
+| `platform_tools.py` | `bench_platform/` | 平台 API 的 Agent 工具封装 |
 | `charter.py` | `core/` | 使命宪章落盘 |
 | `config.py` | `adapters/` | env 配置 + 模型 |
 | 各 `*_registry.py` | `arsenal/registries/` | 声明式内容加载器（skill/vuln/poc/knowledge/role） |
@@ -322,7 +348,7 @@ start_challenge
 
 ---
 
-## 6.5 成本治理（runtime/budget.py）
+### 6.4 成本治理（runtime/budget.py）
 
 治理规则收拢在 `runtime/budget.py`（单一事实源），避免在 config/scheduler/demo_tools/main 多处漂移。目标：Agent 空烧 token 时**机械止损**，而不是一路跑到超时。
 
@@ -497,7 +523,7 @@ enable_tool, list_disabled_tools
 
 ### 10.1 结构
 
-`arsenal/skills/` 目录，63 个 Markdown 文件（顶层 + 分类子目录）：
+`arsenal/skills/` 目录，64 个 Markdown 文件（顶层 + 分类子目录）：
 
 ```
 arsenal/skills/
@@ -587,7 +613,7 @@ SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
 
 ## 13. POC 与知识库
 
-### 13.1 POC（20 个有效 POC）
+### 13.1 POC（31 个有效 POC）
 
 `arsenal/pocs/` 目录，`search_cve` 检索 + `get_poc` 取全文，含利用原理/步骤/载荷/验证方式。
 
@@ -647,7 +673,7 @@ SECAI/
 │   ├── hooks.py            # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
 │   ├── task_context.py     # TaskContext 状态
 │   └── charter.py          # 宪章落盘
-├── platform/
+├── bench_platform/
 │   ├── platform_client.py  # 平台 SDK 语义
 │   ├── platform_tools.py   # 平台 API 工具
 │   └── scheduler.py        # 跑分调度器（EV选题/停滞决策，纯函数）
@@ -665,10 +691,10 @@ SECAI/
 │   └── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
 ├── arsenal/                # 声明式武器库（本地化、可扩展）
 │   ├── roles/              # 9 个角色定义
-│   ├── skills/             # 63 个技能（含子目录）
+│   ├── skills/             # 64 个技能（含子目录）
 │   ├── tools/              # 92 个 CLI 工具 YAML
 │   ├── vulns/              # 9 个漏洞检测模块
-│   ├── pocs/               # 20 个有效 POC
+│   ├── pocs/               # 31 个有效 POC
 │   ├── knowledge/          # 5 个知识条目
 │   ├── payloads/           # 10 个 payload 字典
 │   └── registries/         # 各类 registry 加载器
@@ -749,10 +775,10 @@ SECAI/
 | 资产 | 路径 | 数量 | 说明 |
 |---|---|---|---|
 | 角色 | `arsenal/roles/` | 9 | Web审计、二进制协议、沙箱逃逸、免杀、边界渗透、AI安全、提权、横向、跑分 |
-| 技能 | `arsenal/skills/` | 63 | Web漏洞（23）+ 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
+| 技能 | `arsenal/skills/` | 64 | Web漏洞（23）+ 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
 | CLI 工具 | `arsenal/tools/` | 92 | nmap/sqlmap/ffuf/gdb/pwntools/angr/slither/mythril 等 |
 | 漏洞模块 | `arsenal/vulns/` | 9 | SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD |
-| POC | `arsenal/pocs/` | 20 | 有效 POC（含 CVE + 云/协议/框架） |
+| POC | `arsenal/pocs/` | 31 | 有效 POC（含 CVE + 云/协议/框架） |
 | 知识 | `arsenal/knowledge/` | 5 | get_flag(idor/lfi/xss) + post_exploit + waf_bypass |
 | Payload | `arsenal/payloads/` | 10 | sqli/lfi/path/xss/ssti/rce/idor/ssrf/upload/xxe |
 

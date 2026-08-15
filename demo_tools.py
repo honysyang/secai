@@ -26,13 +26,13 @@ from arsenal.registries import sec_tools
 from arsenal.registries import poc_registry
 from arsenal.registries import vuln_registry
 from arsenal.registries import knowledge_registry
-from platform import platform_tools
+from bench_platform import platform_tools
 from arsenal.registries.skill_registry import find_skills as search_skills, create_skill
 from runtime.budget import brute_gate
-from runtime.log import log_info
+from runtime.log import log_info, log_warn
 from adapters.config import (VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL,
                              BENCHMARK_TOKEN)
-from platform.platform_client import PlatformClient, TaskEnded, TaskNotFound
+from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFound
 
 PREVIEW = 4000
 ARTIFACT_SPILL_THRESHOLD = 800  # 工具输出超过此字符数就外置到 artifacts/
@@ -189,6 +189,25 @@ def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
 
 
 # ================= 基础执行 / 侦察工具 =================
+def _python_traceback_hint(command: str, stderr: str, rc: int) -> str:
+    """Python 脚本执行失败时，提炼 traceback 关键错误并给出修复指引。
+
+    模型经 write_file 写脚本 + `python3 xxx.py` 执行，常见 NameError/路径/编码
+    错误；这里把最后一行的错误类型+消息提炼出来，引导模型针对性修脚本，
+    而不是看到报错后换方向或反复试探。
+    """
+    if rc == 0 or "Traceback" not in stderr:
+        return ""
+    if not re.search(r"\bpython3?(?:\s|$)", command):
+        return ""
+    lines = [ln.strip() for ln in stderr.strip().splitlines() if ln.strip()]
+    last = lines[-1] if lines else ""
+    m = re.search(r'File "([^"]+\.py)"', stderr)
+    script = m.group(1) if m else "脚本"
+    return (f"\n[系统·脚本报错] {script} 执行失败（rc={rc}）：{last}\n"
+            "请定位上述错误（常见：变量未定义/路径不对/编码问题），修正脚本后重新执行。")
+
+
 @function_tool
 def shell(ctx: RunContextWrapper[TaskContext], command: str, timeout: int = 30) -> str:
     """在工作目录执行 shell 命令。探测请打包：一条命令完成多个动作。
@@ -202,6 +221,9 @@ def shell(ctx: RunContextWrapper[TaskContext], command: str, timeout: int = 30) 
         p = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
                            timeout=min(timeout, 120), cwd=str(c.workdir))
         out = f"rc={p.returncode}\nstdout:\n{p.stdout[:PREVIEW]}\nstderr:\n{p.stderr[:1000]}"
+        hint = _python_traceback_hint(command, p.stderr, p.returncode)
+        if hint:
+            out += hint
         return _spill_output(ctx, out)
     except subprocess.TimeoutExpired:
         return f"命令超时（{timeout}s）。hint: 缩短范围或加 --max-time"

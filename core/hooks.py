@@ -78,24 +78,179 @@ def _auto_advance_phase(task_ctx, text: str) -> bool:
     return False
 
 
+def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
+    """关键证据自动闭环：拿到漏洞/敏感点后直接给出最小利用指令。
+
+    目前覆盖：
+      - LFI 可读敏感文件 → 指示读取 flag、config 等并提交；
+      - 登录成功且发现 /api/flag 等端点 → 直接访问该端点；
+      - SSRF/内网端点可访问 → 批量探测常见 flag 路径；
+      - SQL 注入（报错/UNION/时间）→ UNION 注出或拖库找 flag；
+      - 命令注入/RCE（whoami/id 回显）→ 直接读 flag；
+      - 文件上传成功 → 访问上传路径并尝试 webshell/直接读 flag；
+      - 反序列化 gadget 命中 → 构造完整反序列化利用链；
+      - 业务逻辑漏洞（优惠券/金额/越权）→ 构造异常业务流提交。
+    返回非空字符串时表示需要在下一轮追加给 Agent 的强制指令。
+    """
+    if task_ctx is None:
+        return None
+    low = text.lower()
+    bb = task_ctx.blackboard
+
+    def _set(key: str, value: str, evidence: str = "") -> None:
+        bb[key] = {
+            "value": value,
+            "status": "confirmed",
+            "ts": int(time.time()),
+            "verified": True,
+            "evidence": evidence[:200],
+        }
+
+    def _already(key: str, value: str = "") -> bool:
+        cur = bb.get(key, {})
+        if not value:
+            return cur.get("value") is not None
+        return cur.get("value") == value
+
+    # LFI 确认：输出包含路径穿越 + 敏感文件内容
+    lfi_match = re.search(
+        r"([\w./-]*(?:\.\./|\.\.\\|%2e%2e)[\w./%-]*(?:/etc/passwd|/flag|flag\.txt|config\.php|\.env|web\.config))",
+        text, re.I)
+    if lfi_match and ("/etc/passwd" in low or "root:" in low):
+        ev = lfi_match.group(1)
+        if not _already("lfi_confirmed", "true"):
+            _set("lfi_confirmed", "true", ev)
+            log_warn("[闭环] 检测到 LFI，强制读取 flag/config 并提交")
+            return ("已确认存在 LFI（文件包含漏洞）。请立即执行：\n"
+                    "1. 用当前 LFI 参数读取 /flag、/flag.txt、config.php、.env、/etc/passwd；\n"
+                    "2. 将读取到的 flag{...} 字符串直接提交；\n"
+                    "3. 若读取的是源码/配置，从中提取下一步利用所需凭证或新路径。")
+
+    # API flag 端点：登录成功且发现 /api/flag
+    if ("login success" in low or "logged in" in low or "session=" in low
+            or '"authenticated": true' in low or "token" in low):
+        api_flag = re.search(r"(?:^|\s)(/api/[\w/-]*flag[\w/-]*)", text, re.I)
+        if api_flag:
+            endpoint = api_flag.group(1)
+            if not _already("api_flag_endpoint", endpoint):
+                _set("api_flag_endpoint", endpoint)
+                log_warn(f"[闭环] 发现 flag API 端点 {endpoint}，强制直接请求并提交")
+                return (f"已发现 flag 端点 {endpoint} 且已登录/有 session。"
+                        f"请立即用当前 session/token 访问 {endpoint}，拿到 flag{{...}} 直接提交。")
+
+    # SSRF/内网端点确认：输出含内网 IP 或 localhost 且返回业务内容
+    ssrf_match = re.search(r"(http://(?:127\.0\.0\.1|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[/\w%.-]*)",
+                           text, re.I)
+    if ssrf_match and any(k in low for k in ("200", "201", "flag{", "admin", "secret")):
+        url = ssrf_match.group(1)
+        if not _already("ssrf_endpoint", url):
+            _set("ssrf_endpoint", url)
+            log_warn(f"[闭环] 检测到 SSRF/内网可访问端点 {url}")
+            return (f"已确认 SSRF/内网可访问端点 {url}。请立即：\n"
+                    f"1. 访问该端点的 /flag、/admin、/config、/api/flag 等路径；\n"
+                    f"2. 拿到 flag{{...}} 直接提交；\n"
+                    f"3. 若需绕过，构造完整 URL 批量探测常见 flag 路径。")
+
+    # SQL 注入确认：数据库报错 / UNION 成功 / 时间盲注成功
+    sqli_match = re.search(
+        r"(syntax error|mysql_fetch|sqlite_|pg_query|ORA-|you have an error in your sql|"
+        r"union\s+select|information_schema|table_name|column_name|sleep\(|benchmark\(|pg_sleep)",
+        text, re.I)
+    if sqli_match and ("error" in low or "union" in low or "sleep(" in low
+                       or "information_schema" in low or "sqlite_" in low):
+        if not _already("sqli_confirmed", "true"):
+            _set("sqli_confirmed", "true", sqli_match.group(0))
+            log_warn("[闭环] 检测到 SQL 注入，强制注出 flag/凭证")
+            return ("已确认存在 SQL 注入。请立即：\n"
+                    "1. 用 UNION SELECT 注出当前数据库名、表名、列名（information_schema / sqlite_master）；\n"
+                    "2. 找到 flag 列后直接 SELECT 出 flag 值；\n"
+                    "3. 若是报错/时间盲注，用 sqlmap 或手工脚本批量拖取；\n"
+                    "4. 拿到 flag{...} 立即提交。")
+
+    # 命令注入 / RCE 确认：whoami/id 等命令回显
+    cmdi_match = re.search(
+        r"((?:^|\s)(uid=\d+|gid=\d+|root|www-data|daemon|nt authority|powershell|cmd\.exe))",
+        text, re.I)
+    if cmdi_match and any(k in low for k in ("whoami", "id", "uid=", "root", "www-data")):
+        if not _already("rce_confirmed", "true"):
+            _set("rce_confirmed", "true", cmdi_match.group(0))
+            log_warn("[闭环] 检测到命令执行/RCE，强制读 flag")
+            return ("已确认存在命令执行/RCE。请立即：\n"
+                    "1. 执行 `cat /flag*`、`find / -name 'flag*' -maxdepth 3 -type f`、`ls /`；\n"
+                    "2. 读取 flag 文件内容并直接提交；\n"
+                    "3. 若权限不足，尝试 `sudo -l`、SUID 提权、容器逃逸等拿到 root 后重读。")
+
+    # 文件上传成功：响应含 uploaded / path / filename
+    upload_match = re.search(
+        r"((?:uploaded|success|file saved|path)[:\s]+([\w./-]+\.(?:php|jsp|asp|aspx|py|sh|php7)))",
+        text, re.I)
+    if upload_match:
+        up_path = upload_match.group(2)
+        if not _already("upload_success", up_path):
+            _set("upload_success", up_path)
+            log_warn(f"[闭环] 检测到文件上传成功 {up_path}，强制 webshell/读 flag")
+            return (f"已确认文件上传成功，路径 {up_path}。请立即：\n"
+                    f"1. 访问 {up_path} 确认是否可执行；\n"
+                    f"2. 若是 WebShell，执行 `cat /flag*` 读 flag 并提交；\n"
+                    f"3. 若不可执行，尝试二次上传 .php/.asp/双后缀/内容类型绕过。")
+
+    # 反序列化 gadget 命中：输出含 __destruct / gadget / phar / Object 等
+    if any(k in low for k in ("__destruct", "__wakeup", "unserialize", "phar://", "gadget chain",
+                              "object injection", "php object")):
+        if not _already("deserialization_confirmed", "true"):
+            _set("deserialization_confirmed", "true", text[:200])
+            log_warn("[闭环] 检测到反序列化 gadget，强制构造利用链")
+            return ("已确认存在反序列化/ gadget 链入口。请立即：\n"
+                    "1. 识别目标类与可利用 magic 方法（__destruct/__wakeup/__toString）；\n"
+                    "2. 构造最小 POP 链，调用 file_get_contents / eval / system / 写文件；\n"
+                    "3. 通过 unserialize / phar:// 触发，读取 flag 并提交。")
+
+    # 业务逻辑漏洞：优惠券 / 金额 / 积分 / 越权
+    logic_match = re.search(
+        r"((?:coupon|discount|price|amount|balance|point|score|voucher)[\s:=]+([\w.-]+))",
+        text, re.I)
+    if logic_match and any(k in low for k in ("coupon", "优惠", "金额", "price", "discount",
+                                              "order", "checkout", "balance", "credit")):
+        if not _already("logic_flaw_hint", logic_match.group(0)):
+            _set("logic_flaw_hint", logic_match.group(0))
+            log_warn("[闭环] 检测到业务逻辑漏洞线索，强制构造异常业务流")
+            return ("已发现业务逻辑相关字段（优惠券/金额/积分/订单）。请立即：\n"
+                    "1. 尝试金额篡改（负数、超大数、0.01→0）、重复领券、并发抢购、越权查看他人订单；\n"
+                    "2. 重点观察响应中的 price/amount/balance/discount 变化；\n"
+                    "3. 找到可让余额/价格异常归零或获得未授权商品的接口，触发后读取 flag 或提交。")
+
+    return None
+
+
 _HTTP_STATUS_RE = re.compile(r"\b(?:200|201|204|301|302|307|308|401|403|405|500)\b")
+# 枚举类工具中视为「正向存活」的状态码：2xx 成功 / 3xx 重定向
+_POSITIVE_STATUS_CODES = {"200", "201", "204", "301", "302", "307", "308"}
 _PORT_OPEN_RE = re.compile(r"\b\d{1,5}/(?:tcp|udp)\s+open\b", re.IGNORECASE)
-# 增量打分 v2：路径抽取与敏感文件识别（配合 seen_signatures 去重）
+# 增量打分 v3：路径抽取与敏感文件识别（配合 seen_signatures 去重）
 _PATH_EXTRACT_RE = re.compile(r"(?:/[A-Za-z0-9_.~%-]{2,}){1,4}")
 _SENSITIVE_RE = re.compile(
     r"(config\.php|\.git/|backup|\.env|phpinfo|/flag|flag\.txt|wp-config|"
     r"\.bak|\.sql|\.zip|web\.config|id_rsa|shadow)", re.I)
-_ENUM_TOOLS = {"run_tool", "fuzz", "parallel_shell"}   # 只有枚举类工具的状态码算增量
+_ENUM_TOOLS = {"run_tool", "fuzz", "parallel_shell"}   # 枚举类工具的状态码算增量
+# shell/http_request 等交互类工具的行为差异关键词（SQLi/命令注入/SSRF/反序列化）
+_BEHAVIOR_DIFF_HINTS = (
+    "syntax error", "mysql", "sqlite", "postgresql", "ORA-", "warning:",
+    "sql", "union", "select", "sleep(", "benchmark(", "pg_sleep",
+    "whoami", "id\n", "root:", "admin", "secret", "internal", "localhost",
+    "deserialization", "serial", "gadget", "__destruct", "__wakeup",
+    "rce", "popen", "system(", "eval(", "exec(", "shell_exec",
+)
 
 
 def _score_tool_result(tool: str, text: str, ctx) -> int:
-    """信息增量打分 v2：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
+    """信息增量打分 v3：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
 
-    收窄原则：
+    原则：
     - 铁证（flag/提交正确/漏洞确认/登录/差分判定）任何工具都算；
-    - HTTP 状态码只在【枚举类工具】输出里算增量，且必须出现 2 个以上不同状态码
-      （单次 http_request 的状态码不算——内容差异才算）；
-    - 新路径/敏感文件：与历史签名去重后，首次出现才算；
+    - 枚举类工具：出现正向存活码 + 不同状态码差异/新路径/敏感文件即算增量；
+    - 交互类工具（shell/http_request）：响应出现可利用行为特征（SQLi 报错、命令回显、
+      内网内容、反序列化异常、敏感关键词）也算增量，避免精心构造的 payload 被误判为零；
+    - 新路径/敏感文件：与历史签名去重后，首次出现即可算增量（由 ≥2 降为 ≥1）；
     - 工具失败/网络错误判 0 交给 LLM 决策（default-soft 不变）。
     """
     low = text.lower()
@@ -111,18 +266,33 @@ def _score_tool_result(tool: str, text: str, ctx) -> int:
     if sensitive - ctx.seen_signatures:
         ctx.seen_signatures |= sensitive
         return 1
-    # ③ 枚举类工具：多状态码并存（说明扫到了存活的端点集合）
+    # ③ 枚举类工具：状态码必须包含正向存活码（2xx/3xx）才说明扫到可访问端点
     if tool in _ENUM_TOOLS:
         codes = set(_HTTP_STATUS_RE.findall(text))
-        if len(codes) >= 2 or _PORT_OPEN_RE.search(text) or "open port" in low:
+        has_positive = bool(codes & _POSITIVE_STATUS_CODES)
+        has_negative = bool(codes - _POSITIVE_STATUS_CODES)
+        # 放宽：一个正向码 + 任意差异（不同状态码 / 敏感路径 / 开放端口）即算增量
+        if has_positive and (len(codes) >= 2 or has_negative or _PORT_OPEN_RE.search(text)
+                           or "open port" in low):
             return 1
-        # 枚举发现的新路径（去重后仍有新货）
+        # 枚举发现的新路径（去重后仍有新货）≥1 条即算，避免漏掉单条高价值路径
         new_paths = {p.lower() for p in _PATH_EXTRACT_RE.findall(text)} \
                     - ctx.seen_signatures
-        if len(new_paths) >= 2:                      # 至少 2 条新路径才算一轮增量
+        if new_paths:
             ctx.seen_signatures |= new_paths
             return 1
-    # ④ shell/http_request：只看铁证与敏感文件（①②已覆盖），状态码一律不算
+    # ④ 交互类工具：行为差异也算增量，避免 payload 被误判为零进展
+    if tool in ("shell", "http_request"):
+        if any(k in low for k in _BEHAVIOR_DIFF_HINTS):
+            return 1
+        # HTTP 单次请求中同时出现状态码 + 响应长度/关键词线索，说明触发了后端逻辑
+        if tool == "http_request":
+            codes = set(_HTTP_STATUS_RE.findall(text))
+            if (codes & _POSITIVE_STATUS_CODES
+                    and any(k in low for k in ("error", "syntax", "warning", "exception",
+                                              "admin", "root", "flag", "internal", "localhost",
+                                              "serial", "deserialization"))):
+                return 1
     return 0
 
 
@@ -274,6 +444,12 @@ class EventStreamHooks(RunHooks):
         if _auto_advance_phase(task_ctx, str(result)):
             self._emit("phase_changed", agent=agent.name,
                        phase=task_ctx.phase, trigger=tool.name)
+
+        # ---- 关键证据自动闭环：拿到漏洞点直接给最小利用指令 ----
+        close_prompt = _auto_close_loop(task_ctx, tool.name, str(result))
+        if close_prompt:
+            task_ctx.notes.append(close_prompt)
+            self._emit("coach_advice", agent=agent.name, text=close_prompt)
 
         # ---- 信息增量打分：正向证据置位 turn_gain，供判停/replan 复用 ----
         score = _score_tool_result(tool.name, str(result), task_ctx)

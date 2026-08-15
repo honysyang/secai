@@ -27,6 +27,7 @@ from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
 from runtime.model_pool import ModelPool, ModelExhaustedError, is_model_failure
+import runtime.stuck as stuck_mod
 from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
 from adapters.config import (BENCHMARK_BASE_URL, BENCHMARK_TOKEN,
@@ -36,11 +37,11 @@ import adapters.db as db_mod
 from demo_tools import build_default_tools
 from core.events import BUS
 from core.hooks import EventStreamHooks
-from platform.platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
+from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
 from arsenal.registries.role_registry import assign_role
 from arsenal.registries.skill_registry import load_skills
 from arsenal.registries import sec_tools
-from platform.scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
+from bench_platform.scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
 from solvecraft.solution_templates import append_solution_template, load_solution_hint
 from runtime.status import set_status
 from runtime.deadline import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
@@ -128,8 +129,35 @@ def load_notes_for(code: str, max_chars: int = 900) -> str:
 
 SUBTASK_MAX_TURNS = 8  # 每个子任务最多 LLM 回合数（内部 ReAct，Agent 可 finalize 提前结束）
 ZERO_GAIN_REPLAN_TURNS = 5  # 连续零信息增量轮数触发 replan（替代旧「阶段停滞」判据）
-REPLAN_MAX = 3           # 最多 replan 次数，防止无限重规划
+REPLAN_MAX = 2           # 最多 replan 次数，防止无限重规划
 COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（每题目仅 1 次）
+# 单题「自救+切换模型+hint+coach+replan」累计上限，按难度分档防死循环：
+# 简单题快速放弃，hard 题给更多利用机会（链式利用需要更多轮次）。
+MAX_STUCK_INTERVENTIONS = {
+    "easy": 3,
+    "medium": 5,
+    "hard": 8,
+}
+
+
+def _max_interventions(difficulty: str) -> int:
+    """按难度返回累计干预上限，未知难度默认 medium。"""
+    return MAX_STUCK_INTERVENTIONS.get(str(difficulty).lower(),
+                                       MAX_STUCK_INTERVENTIONS["medium"])
+
+
+def _tool_groups_for(role_name: str, desc: str) -> tuple:
+    """按题型返回初始工具组，减少无关工具干扰（配合 build_default_tools）。
+
+    原则：核心工具常驻；平台编排/VPN 始终保留；二进制/协议/Pwn 题不挂 web 组
+    （distinguish/web_search 对二进制帮助有限），其余题型挂 web 组做差分实验。
+    """
+    text = f"{role_name or ''} {desc or ''}".lower()
+    groups = ["platform", "vpn", "seccli"]  # 平台编排 + VPN + 安全 CLI（run_tool）
+    if any(k in text for k in ("二进制", "协议", "pwn", "reverse", "逆向", "f1", "f2")):
+        return tuple(groups)  # 二进制/协议题：去掉 web 组，避免差分实验/联网干扰
+    groups.append("web")       # Web/通用题：distinguish + web_search
+    return tuple(groups)
 
 
 async def run_with_model_fallback(agent, input, *, hooks=None, context=None,
@@ -312,7 +340,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     ctx = TaskContext(workdir=challenge_workdir, disclosed_skills=list(role["playbooks"]),
                       task=task, charter=charter, role=role)
     ctx.blackboard = _load_blackboard(challenge_workdir)  # 回注上次尝试进度（挂起/重试）
-    ctx.enabled_tools = build_default_tools()
+    # 按题型动态裁剪初始工具集：减少无关工具对 Agent 注意力的干扰
+    ctx.enabled_tools = build_default_tools(groups=_tool_groups_for(role.get("role", ""), desc))
     # 调度器独占编排工具：单题循环里 Agent 不得自己选题/启动/关闭容器，避免破坏调度器追踪
     for t in ("check_vpn", "list_challenges", "start_challenge", "close_challenge"):
         ctx.enabled_tools.discard(t)
@@ -340,6 +369,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     turn_count = 0
     hint_used = False
     coach_used = False  # 软干预教练：每题目仅触发 1 次
+    intervention_count = 0  # 累计干预次数：自救+切换模型+hint+coach+replan
     stuck_detector = StuckDetector()  # 模型惰性检测器（多模型切换 / 单模型自救）
     outcome = "stopped"
     # 成本治理：本尝试的 token/时钟起点 + 换脑/挂起档
@@ -458,8 +488,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     executor.model = entry.model
                     log_warn(f"[model-switch] 单题 {code} {stuck_action.reason}，"
                              f"{current_name} -> {entry.name} 接管会话")
-                    next_input = switch_model_prompt(ctx, current_name, entry.name)
+                    next_input = stuck_mod.switch_model_prompt(ctx, current_name, entry.name)
                     ctx.zero_gain_turns = 0
+                    intervention_count += 1
                     continue
                 # 无可用候选时落回 scheduler 决策
             elif stuck_action.action == StuckActionType.SELF_RESCUE:
@@ -474,10 +505,13 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     log_warn(f"[self-rescue] 单题 {code} 历史压缩失败或跳过")
                 next_input = stuck_action.next_input
                 ctx.zero_gain_turns = 0
+                intervention_count += 1
                 continue
 
             # 单题停滞机械决策：先看 hint，看完仍无进展则换题
-            action = decide_stuck_action(ctx.zero_gain_turns, hint_used, difficulty)
+            action = decide_stuck_action(
+                ctx.zero_gain_turns, hint_used, difficulty,
+                task_text=ctx.task + " " + json.dumps(ctx.blackboard, ensure_ascii=False))
             # hint 预算：卡题（≥2 条失败路径）且 token 达挂起档比例时提前拉提示
             if action not in ("hint", "skip"):
                 failed_paths = sum(
@@ -495,6 +529,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     hint = f"（获取提示失败：{str(e)[:120]}）"
                 hint_used = True
                 ctx.zero_gain_turns = 0
+                intervention_count += 1
                 log_info(f"[hint] 单题 {code} 停滞，机械看提示")
                 next_input = f"本题卡住。系统已获取提示：\n{hint}\n\n请结合提示继续攻击本题。"
                 continue
@@ -518,6 +553,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 log_info(f"[coach] 单题 {code} hint 后仍停滞 {ctx.zero_gain_turns} 轮，教练给方向")
                 next_input = (f"本题卡住。教练建议（可尝试的新方向）：\n{advice}\n\n"
                               f"请结合建议继续尝试，产出新证据。")
+                intervention_count += 1
                 continue
 
             # 单题 replan（停滞重新规划，仍针对本题）
@@ -525,8 +561,16 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 ctx.plan = await _replan(ctx, brief, charter, role, hooks)
                 ctx.replan_count += 1
                 ctx.zero_gain_turns = 0
+                intervention_count += 1
                 next_input = "作战计划已更新，按新计划继续攻击本题。"
                 continue
+
+            # 兜底：累计干预次数超限直接换题，避免任何单题死循环空转
+            if intervention_count >= _max_interventions(difficulty):
+                log_warn(f"[skip] 单题 {code} 累计干预 {intervention_count} 次"
+                         f"（难度 {difficulty or 'unknown'} 上限 {_max_interventions(difficulty)}）仍无进展，机械换题")
+                outcome = "stuck"
+                break
 
             # 子任务并发调度
             pending = [s for s in ctx.subtasks if s["status"] == "pending"]
@@ -538,6 +582,14 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             # 历史压缩
             if await compact_if_needed(session, ctx):
                 log_info("[compact] 单题历史已压缩")
+
+            # 关键证据自动闭环：把 hooks 写入 notes 的强制利用指令优先注入下一轮
+            close_notes = [n for n in ctx.notes if n.startswith("[闭环]") or n.startswith("已确认")]
+            if close_notes:
+                ctx.notes = [n for n in ctx.notes if n not in close_notes]
+                next_input = "系统检测到可利用的关键证据，请立即按以下指令执行（不要继续侦察）：\n\n" + "\n\n".join(close_notes)
+                ctx.zero_gain_turns = 0
+                continue
 
             next_input = "继续攻击本题：调用工具产出新证据增量，或调用 finalize 提交本题结论。"
     finally:
@@ -628,14 +680,11 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     results = []
     fatal_reason = ""
 
-    # 启动前清理残留容器（上次运行残留的活跃容器，避免一上来就 max active）
-    try:
-        for c in client.list_challenges():
-            if c.get("container_status") in ("available", "stopped", ""):
-                client.close_challenge(c.get("unique_code"))
-                log_info(f"[cleanup] 清理残留容器 {c.get('unique_code')}")
-    except Exception:
-        pass
+    # 启动前不清理残留容器：依赖平台 max_active 自然淘汰，避免启动阶段
+    # 浪费大量时间逐个关闭容器（参考日志 secai-20260814.log #L26-35）。
+    # 若后续出现一上来就 container_busy 导致无法 start 新题的情况，
+    # 可在此加一段异步批量 close 可用/停止状态容器的逻辑。
+    pass
 
     async def _run_one(code: str, desc: str, addrs: list, difficulty: str,
                        chal: dict) -> str:
@@ -738,8 +787,11 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
             if fatal_hit:
                 # 任一题致命错误：取消其余并发任务，终止战役
+                # 必须 await 取消完成，确保各任务的 finally 能正常关闭容器
                 for other in active.values():
                     other.cancel()
+                if active:
+                    await asyncio.gather(*active.values(), return_exceptions=True)
                 break
     except KeyboardInterrupt:
         log_warn("== 已中断 ==")

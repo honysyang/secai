@@ -18,15 +18,23 @@ DIFF_COEF = {"easy": 1.3, "medium": 1.0, "hard": 0.7}
 DECAY = 0.3
 
 # 单题停滞机械前置（报告 P0-4「hint 第 8 轮机械前置」）
-# 轮次预算按难度分级（对齐 SecAI/secai tsec_benchmark：easy≤12 / medium≤20 / hard≤25）：
-# 难题给更多轮次，简单题卡住就尽早换（easy 单位时间得分率最高）。
-_DIFF_BUDGET = {
+# 轮次预算按难度分级（对齐 SecAI/secai tsec_benchmark：easy≤12 / medium≤20 / hard≤25）。
+# 针对 cloud 类题目（azure/s3/blob/sas/storage），因为结果通常二元、死磕收益低，
+# hint/skip 阈值整体再提前一档。
+_HINT_EARLY_TURNS = 2
+_SKIP_EARLY_TURNS = 4
+_HINT_DIFF_BUDGET = {
     "easy":   {"hint": 6,  "skip": 12},
     "medium": {"hint": 8,  "skip": 20},
     "hard":   {"hint": 10, "skip": 25},
 }
-_DEFAULT_BUDGET = {"hint": 8, "skip": 16}   # 难度未知时的兜底
+_DEFAULT_HINT_BUDGET = {"hint": 8, "skip": 16}   # 难度未知时的兜底
 SINGLE_EMPTY_TURNS = 6   # 单题连续 N 轮无工具调用 → 机械换题（空转也放弃，与难度无关）
+
+# 触发“提前放弃”的题目指纹关键词（云存储 / SaaS / 二元结果类）
+# 注意：不要加入过于宽泛的词（如 container），避免误触发普通 Web 题
+_EARLY_HINT_KEYWORDS = ("azure", "azurite", "blob", "sas", "s3", "lambda",
+                        "firebase", "supabase", "aws storage", "gcp", "google cloud")
 
 
 def select_challenge(challenges: List[dict], attempts: Dict[str, int]) -> Optional[dict]:
@@ -48,13 +56,21 @@ def select_challenge(challenges: List[dict], attempts: Dict[str, int]) -> Option
 
 
 def decide_stuck_action(zero_gain_turns: int, hint_used: bool,
-                        difficulty: str = "") -> str:
+                        difficulty: str = "", task_text: str = "") -> str:
     """单题停滞决策：'hint' 看提示 / 'skip' 换题 / 'continue' 继续。
 
     优先级：先看 hint（一次），看完仍无进展到更大阈值才换题。
     阈值按题目难度分级（easy/medium/hard），难题给更多轮次。
+    若题目描述/指纹命中云存储等二元结果类关键词，hint/skip 阈值整体提前。
     """
-    budget = _DIFF_BUDGET.get(str(difficulty).lower(), _DEFAULT_BUDGET)
+    task_lower = str(task_text).lower()
+    is_cloud_like = any(kw in task_lower for kw in _EARLY_HINT_KEYWORDS)
+
+    budget = _HINT_DIFF_BUDGET.get(str(difficulty).lower(), _DEFAULT_HINT_BUDGET).copy()
+    if is_cloud_like:
+        budget["hint"] = max(2, budget["hint"] - _HINT_EARLY_TURNS)
+        budget["skip"] = max(4, budget["skip"] - _SKIP_EARLY_TURNS)
+
     if zero_gain_turns >= budget["skip"]:
         return "skip"
     if zero_gain_turns >= budget["hint"] and not hint_used:

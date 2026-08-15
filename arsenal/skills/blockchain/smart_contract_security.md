@@ -1,7 +1,7 @@
 ---
 name: 智能合约安全审计
 description: 用静态分析+符号执行+人工审查检测智能合约常见漏洞
-triggers: 智能合约, solidity, evm, blockchain, 区块链, defi, reentrancy, 重入, 合约, nft, dao
+triggers: solidity, .sol, evm, blockchain, 以太坊, defi, reentrancy, 重入攻击, nft, dao, hardhat, truffle
 ---
 
 # 智能合约安全审计

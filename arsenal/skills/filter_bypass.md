@@ -1,6 +1,6 @@
 ---
 description: 过滤器绕过（WAF/网关/自定义过滤）
-triggers: 403, 406, forbidden, denied, 拦截, waf, 过滤, 绕过
+triggers: waf, 拦截页, 过滤绕过, payload被拦, 关键字被替换, 请求被改写, 绕waf
 ---
 
 # 过滤器绕过（WAF/网关/自定义过滤）

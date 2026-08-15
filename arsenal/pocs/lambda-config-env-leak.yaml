@@ -1,0 +1,21 @@
+info:
+  name: lambda-config-env-leak
+  cve: ''
+  summary: Serverless/Lambda 函数管理门户暴露 /api/functions/<name>/config 接口，直接返回函数环境变量(含
+    DB 密码等凭据)，flag 藏在 DATABASE_PASSWORD 环境变量中
+  severity: medium
+  affected: ''
+  references: []
+poc:
+  type: exploit
+  principle: Serverless/Lambda 函数管理门户暴露 /api/functions/<name>/config 接口，直接返回函数环境变量(含
+    DB 密码等凭据)，flag 藏在 DATABASE_PASSWORD 环境变量中
+  steps:
+  - 1. 访问首页获取 API 端点文档
+  - 2. GET /api/functions 列出全部函数名
+  - 3. 对每个函数名调用 GET /api/functions/<name>/config
+  - 4. 解析返回 JSON 中 environment 字段，提取敏感凭据(flag)
+  payload: GET /api/functions/<function_name>/config → 返回含 environment.DATABASE_PASSWORD
+    的完整配置 JSON
+  verification: Serverless/Lambda 函数管理门户暴露 /api/functions/<name>/config 接口，直接返回函数环境变量(含
+    DB 密码等凭据)，flag 藏在 DATABASE_PASSWORD 环境变量中

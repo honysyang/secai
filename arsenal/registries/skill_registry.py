@@ -97,13 +97,42 @@ def skill_triggers() -> Dict[str, List[str]]:
     return {s.name: s.triggers for s in load_skills().values() if s.triggers}
 
 
-def detect_skill_triggers(text: str, already_disclosed: List[str]) -> List[str]:
-    """扫描一段事件文本，返回命中但尚未披露的技能名清单（保持注册表顺序）。"""
+def detect_skill_triggers(text: str, already_disclosed: List[str],
+                          task_type: str = "") -> List[str]:
+    """扫描一段事件文本，返回命中但尚未披露的技能名清单（保持注册表顺序）。
+
+    增加简单上下文过滤：二进制/PWN/协议技能只在输出包含二进制特征
+    （ELF、段、栈/canary/ret/shellcode/端口状态等）时才触发；智能合约
+    技能需要 Solidity/EVM 上下文证据。避免普通 Web 响应里的常见字段
+    （Connection: keep-alive、TCP、403、contract 等）误命中。
+    """
     low = text.lower()
     hits: List[str] = []
+    skills = load_skills()
     for name, keywords in skill_triggers().items():
         if name in already_disclosed:
             continue
+        skill = skills.get(name)
+        cat = (skill.category if skill else "").lower()
+        # 二进制 / PWN / 协议类技能需要额外上下文证据
+        if cat in ("binary", "tcp_binary") or name in ("pwn_exploitation", "tcp_binary"):
+            binary_ctx = any(k in low for k in (
+                "elf", "checksec", "canary", "nx ", "pie ", "relro", "got.plt",
+                "stack", "heap", "shellcode", "objdump", "ida", "ghidra",
+                "pwntools", "libc", "ret2", "ropgadget", "/tcp", "open port",
+                "listening on", "connection from", "accept("
+            ))
+            if not binary_ctx:
+                continue
+        # 智能合约技能需要 Solidity/EVM 上下文证据
+        if name == "smart_contract_security":
+            sol_ctx = any(k in low for k in (
+                ".sol", "solidity", "pragma", "contract ", "function ",
+                "msg.sender", "delegatecall", "selfdestruct", "hardhat",
+                "truffle", "openzeppelin", "ethers.js", "web3.js"
+            ))
+            if not sol_ctx:
+                continue
         if any(k.lower() in low for k in keywords):
             hits.append(name)
     return hits
