@@ -29,8 +29,23 @@ TOOL_USAGE_HINT = (
     "1. list_tools 查看有哪些可用工具；\n"
     "2. get_tool_spec 查目标工具的完整参数；\n"
     "3. run_tool 执行该工具。\n"
-    "不要靠 shell 手拼复杂命令，能用结构化工具就用结构化工具。"
+    "不要靠 shell 手拼复杂命令，能用结构化工具就用结构化工具。\n"
+    "4. 需要 CVE 检索/POC 库/漏洞知识库/差分实验时，先 list_disabled_tools 查看未挂载"
+    "的工具组，再用 enable_tool 挂载对应组（poc/vuln/knowledge/web）后使用。"
 )
+
+
+# 所有角色共用的第一性原理探索提示：技能库无现成打法时的兜底方法论。
+# 常驻注入（追加到 role.style），不占 playbook 名额——playbook 走渐进披露，
+# 会被 load_skill_bodies 的 3 篇同屏预算挤掉，兜底方法论必须全程在线。
+# FIRST_PRINCIPLES_HINT = (
+#     "\n\n# 第一性原理探索分析\n"
+#     "1. 技术栈反推：确认语言/框架/中间件后，按该栈最高危面列候选漏洞，"
+#     "不依赖技能库是否命中（如 PHP→文件包含/反序列化，Node→原型链/SSRF）。\n"
+#     "2. 差异实验为主武器：distinguish 定攻击面，fuzz 归组找差异点"
+#     "——差异点即未知漏洞的第一性证据。\n"
+#     "3. 每个候选漏洞 = 可验证假设 + 最小探测 + 正/负证据。"
+# )
 
 
 def _parse_frontmatter(text: str) -> dict:
@@ -60,6 +75,7 @@ def load_roles() -> List[dict]:
             "role": meta.get("name", p.stem),
             "style": body,
             "playbooks": [x.strip() for x in meta.get("playbooks", "").split(",") if x.strip()],
+            "trigger": meta.get("trigger", ""),
         })
     return roles
 
@@ -74,7 +90,8 @@ def assign_role(code: str, description: str = "",
     def _build(r: dict, matched_by: str) -> dict:
         # 所有角色统一注入「武器库导航」基础技能（告知 POC/载荷/知识/工具等资产怎么用）
         playbooks = ["arsenal_index"] + [p for p in r["playbooks"] if p != "arsenal_index"]
-        return {"role": r["role"], "style": r["style"] + TOOL_USAGE_HINT,
+        return {"role": r["role"],
+                "style": r["style"] + TOOL_USAGE_HINT,
                 "playbooks": playbooks, "matched_by": matched_by}
 
     # 第一遍：锚定 pattern（^ 开头，code 前缀题型），最具体

@@ -308,6 +308,17 @@ def find_skills(ctx: RunContextWrapper[TaskContext], query: str, limit: int = 5)
 
 
 @function_tool
+def query_skills(query: str, limit: int = 5) -> str:
+    """只读检索技能库（按名称/描述/触发词匹配），不自动披露、不写状态。
+
+    供分析型智能体（Planner/Coach）在规划/给方向时查武器库用；执行者用 find_skills
+    （检索并披露）。本工具无副作用，不依赖执行上下文。
+    """
+    matches = search_skills(query, limit)
+    return json.dumps({"matches": matches}, ensure_ascii=False)
+
+
+@function_tool
 def list_tools(ctx: RunContextWrapper[TaskContext], keyword: str = "", limit: int = 20) -> str:
     """列出本机已安装、可直接调用的安全 CLI 工具（nmap/sqlmap/ffuf/nuclei 等）。
 

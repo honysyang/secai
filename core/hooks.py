@@ -17,6 +17,32 @@ from core.events import BUS
 from arsenal.registries.skill_registry import detect_skill_triggers
 from runtime.log import log_info, log_warn, log_debug
 
+# 无进展工具：这些工具不产生攻击进展，调用它们不计入「本轮工具调用」，
+# 否则 think/todo/checkpoint 会合法绕过「连续 N 轮空转 → 机械换题」防线。
+_NO_PROGRESS_TOOLS = {"think", "todo_add", "todo_list", "todo_mark", "checkpoint"}
+
+
+def _boost_role_by_trigger(task_ctx) -> None:
+    """证据触发的阶段增强角色：黑板 confirmed 键命中角色 trigger 时注入对应打法。
+
+    与渐进披露技能（disclosed_skills）不同，角色增强是「攻击链阶段」级方法论，
+    随证据生长——同一场战役里执行者先后「成为」侦察兵、审计员、提权专员。
+    触发信号只认黑板 confirmed 键（rce_confirmed/sqli_confirmed 等），不 grep 事件文本。
+    """
+    if task_ctx is None:
+        return
+    from arsenal.registries.role_registry import load_roles
+    bb_keys = set(task_ctx.blackboard.keys())
+    for r in load_roles():
+        trig = (r.get("trigger") or "").strip()
+        if not trig:
+            continue
+        if any(t.strip() in bb_keys for t in trig.split(",")):
+            if r["role"] not in task_ctx.boosted_roles:
+                task_ctx.boosted_roles.append(r["role"])
+                task_ctx.role_boost = r.get("style", "")
+                log_warn(f"[role-boost] 证据触发注入增强角色「{r['role']}」")
+
 
 def _output_text(response) -> str:
     """从 Response.output 提取完整可读文本（思考/回复/工具调用），不截断。
@@ -423,7 +449,7 @@ class EventStreamHooks(RunHooks):
     async def on_tool_start(self, context, agent, tool):
         self._emit("tool", agent=agent.name, tool=tool.name, status="executing")
         task_ctx = getattr(context, "context", None)
-        if task_ctx is not None:
+        if task_ctx is not None and tool.name not in _NO_PROGRESS_TOOLS:
             task_ctx.turn_tool_count += 1
 
     async def on_tool_end(self, context, agent, tool, result):
@@ -450,6 +476,9 @@ class EventStreamHooks(RunHooks):
         if close_prompt:
             task_ctx.notes.append(close_prompt)
             self._emit("coach_advice", agent=agent.name, text=close_prompt)
+
+        # ---- 阶段增强角色（证据触发）：黑板 confirmed 键命中角色 trigger 时注入打法 ----
+        _boost_role_by_trigger(task_ctx)
 
         # ---- 信息增量打分：正向证据置位 turn_gain，供判停/replan 复用 ----
         score = _score_tool_result(tool.name, str(result), task_ctx)

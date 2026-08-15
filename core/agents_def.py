@@ -12,7 +12,8 @@ import time
 from agents import Agent, ModelSettings, RunContextWrapper
 
 from adapters.config import MODEL
-from demo_tools import ALL_TOOLS, finish_subtask
+from demo_tools import (ALL_TOOLS, finish_subtask, query_skills, list_knowledge,
+                        get_knowledge, list_tools)
 from arsenal.registries.skill_registry import load_skill_bodies
 from runtime.status import PHASE_DEFS
 from core.task_context import TaskContext
@@ -30,6 +31,16 @@ COMPACTOR_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_to
 COACH_SETTINGS = ModelSettings(temperature=0.3, max_tokens=2048, parallel_tool_calls=False)
 # 保留兼容性兜底 SETTINGS
 SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
+
+
+def intel_tools():
+    """分析型智能体（Planner/Coach）的只读检索工具包：只查不改，不写黑板/状态。
+
+    - query_skills / list_knowledge / get_knowledge / list_tools 均无副作用；
+    - 执行者的 find_skills 会写 disclosed_skills（披露），这里不用它——分析型
+      智能体不该写执行者的账本（权力分界铁约束）。
+    """
+    return [query_skills, list_knowledge, get_knowledge, list_tools]
 
 
 # ================= 管理者 =================
@@ -53,6 +64,7 @@ PLANNER_INSTRUCTIONS = """你是 SecAI 的作战规划师（分析主智能体�
 输入包括：用户任务、使命宪章、派任角色。输出 Markdown 作战计划，包含五节：
 
 # 任务研判 —— 目标是什么类型、技术栈、最可能的漏洞类型（1~3 个候选，按概率排序）
+优先技术栈反推（确认语言/框架后按该栈最高危面列候选），不依赖技能库是否命中；差异实验（distinguish/fuzz 找响应差异点）是未知漏洞的第一性证据。
 每个候选漏洞必须给出「可验证假设」：即「假设存在 X 漏洞 → 用什么最小探测验证 → 预期正/负响应各是什么」。禁止只写漏洞类型名称而不写验证方法。
 
 # 攻击面预测 —— 最可能的入口/参数/接口/文件（按可达性从高到低排序）
@@ -68,6 +80,7 @@ PLANNER_INSTRUCTIONS = """你是 SecAI 的作战规划师（分析主智能体�
 只输出计划本身，不要寒暄。计划将被注入执行者的系统提示，指导其阶段推进。"""
 
 planner_agent = Agent(name="Planner", instructions=PLANNER_INSTRUCTIONS,
+                      tools=intel_tools(),
                       model=MODEL, model_settings=PLANNER_SETTINGS)
 
 
@@ -103,6 +116,7 @@ EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的
 6. 卡壳时：先 find_skills / list_knowledge 查打法；提示来了先深度分析再动手。
 7. 拿到可复用攻击链后用 remember 沉淀 POC/知识/技能（只在真正有价值时）。
 8. 阶段随进展用 set_phase 切换；任务完成或证据枯竭时调用 finalize 提交结论。
+9. 确认漏洞/凭据/源码后立即沿最短路径拿 flag；系统注入的[闭环]指令优先级最高，按指令执行。
 
 # 可用打法（随战况渐进披露，当前已解锁）
 {playbooks}
@@ -159,7 +173,7 @@ def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
     c = ctx.context
     playbooks_text = load_skill_bodies(c.disclosed_skills)
     phase = PHASE_DEFS.get(c.phase, PHASE_DEFS["recon"])
-    return EXECUTOR_TEMPLATE.format(
+    rendered = EXECUTOR_TEMPLATE.format(
         role_name=role["role"],
         role_style=role["style"],
         phase_name=c.phase,
@@ -174,6 +188,10 @@ def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
         blackboard=_format_blackboard(c.blackboard),
         brief=brief,
     )
+    # 阶段增强角色（证据触发）：hooks 置位 role_boost 后，追加进执行者系统提示
+    if getattr(c, "role_boost", ""):
+        rendered += "\n\n# 阶段增强（证据触发，随战况注入）\n" + c.role_boost
+    return rendered
 
 
 # 子任务结束协议：追加到执行者系统提示，要求结构化回传（而非只输出文字）
@@ -259,8 +277,10 @@ COACH_INSTRUCTIONS = """你是 SecAI 的卡壳教练（分析型）。执行者�
 
 补充要求：
 - 优先从「已解锁技能」和知识库里找方向；
+- 若技能库无现成打法，引导执行者走第一性原理：技术栈反推 + 差异实验（distinguish/fuzz 找响应差异点）；
 - 禁止输出「继续尝试」「深入分析」等没有信息量的空话；
 - 若黑板已有 confirmed 漏洞但尚未拿到 flag，优先给「基于该漏洞换 payload / 换利用链」的建议，而非让执行者重新侦察。"""
 
 coach_agent = Agent(name="Coach", instructions=COACH_INSTRUCTIONS,
+                    tools=intel_tools(),
                     model=MODEL, model_settings=COACH_SETTINGS)

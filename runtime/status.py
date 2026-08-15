@@ -55,7 +55,7 @@ PHASE_TRANSITIONS = {
     "enumerate": ["detect", "recon"],
     "detect":    ["exploit", "enumerate", "post"],
     "exploit":   ["post", "detect"],
-    "post":      [],
+    "post":      ["exploit"],
 }
 
 

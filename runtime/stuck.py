@@ -17,6 +17,7 @@ from agents import Runner
 from arsenal.registries.skill_registry import load_skills
 from core.agents_def import compactor_agent
 from core.task_context import TaskContext
+from runtime.model_fallback import run_with_model_fallback
 
 
 # 模型惰性检测阈值（可通过环境变量覆盖）
@@ -375,12 +376,14 @@ async def compact_session(ctx: TaskContext, session, compactor_model=None) -> Op
             )
 
     try:
-        result = await Runner.run(
+        result = await run_with_model_fallback(
             agent,
             input=compact_input,
             context=ctx,
             session=session,
             max_turns=1,
+            model_pool=model_pool,
+            agent_name="Compactor",
         )
         summary = str(result.final_output).strip()
     except Exception:

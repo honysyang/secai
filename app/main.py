@@ -26,8 +26,8 @@ from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach
                             build_executor, build_subtask_executor)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
-from runtime.model_pool import (ModelPool, ModelExhaustedError, is_model_failure,
-                                is_permanent_model_failure)
+from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
+from runtime.model_fallback import run_with_model_fallback
 import runtime.stuck as stuck_mod
 from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
@@ -162,53 +162,7 @@ def _tool_groups_for(role_name: str, desc: str) -> tuple:
     return tuple(groups)
 
 
-async def run_with_model_fallback(agent, input, *, hooks=None, context=None,
-                                  session=None, max_turns=None, model_pool=None,
-                                  agent_name="", max_rounds=6, retry_delay=5):
-    """带模型灾备切换 + 冷却重试的 Runner.run 包装函数（供外层 Agent 使用）。
-
-    - model_pool 为 None 时，仅执行一次 Runner.run，不重试；
-    - model_pool 有效时，模型失败后区分永久/暂时失败：
-      永久失败（鉴权/模型名错误）拉黑；暂时失败（限流/超时）冷却后重试；
-    - 主/灾备之间可多轮切换，最多 max_rounds 轮；全部不可用抛 ModelExhaustedError。
-    """
-    if model_pool is None:
-        return await Runner.run(agent, input=input, hooks=hooks, context=context,
-                                session=session, max_turns=max_turns)
-
-    rounds = 0
-    while rounds < max_rounds:
-        rounds += 1
-        try:
-            return await Runner.run(agent, input=input, hooks=hooks, context=context,
-                                      session=session, max_turns=max_turns)
-        except Exception as exc:
-            if not is_model_failure(exc):
-                raise
-            current_name = getattr(agent.model, "model", "?")
-            permanent = is_permanent_model_failure(exc)
-            model_pool.mark_failed(current_name, permanent=permanent)
-            entry = model_pool.next(current_name=current_name,
-                                    reason=f"model_failure:{type(exc).__name__}")
-            if entry is not None:
-                agent.model = entry.model
-                log_warn(f"[model-fallback] {agent_name or '外层 Agent'} {current_name} 失败，"
-                         f"切换到 {entry.name} 继续同一会话：{str(exc)[:300]}")
-                continue
-            # 无可用候选：永久失败立即耗尽；暂时失败等待冷却后重试
-            if permanent or rounds >= max_rounds:
-                log_error(f"[model-exhausted] {agent_name or '外层 Agent'} 所有模型均不可用：{exc}")
-                raise ModelExhaustedError(
-                    f"{agent_name or '外层 Agent'} 模型池耗尽") from exc
-            log_warn(f"[model-retry] {agent_name or '外层 Agent'} 模型暂时不可用，"
-                     f"{retry_delay}s 后重试（{rounds}/{max_rounds}）：{str(exc)[:200]}")
-            await asyncio.sleep(retry_delay)
-            continue
-    log_error(f"[model-exhausted] {agent_name or '外层 Agent'} 达到最大重试轮数 {max_rounds}")
-    raise ModelExhaustedError(f"{agent_name or '外层 Agent'} 模型池耗尽")
-
-
-async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None) -> None:
+async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None, model_pool=None) -> None:
     """并发调度 pending 子任务：每个子任务独立会话 + 独立 context，结果结构化回传。
 
     子任务用 finish_subtask 结束协议（summary/findings/flag），主 Agent 只拿到结构化结论，
@@ -240,11 +194,13 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
                                     db_path=str(challenge_workdir / f"sub_{sub['id']}.sqlite"))
         sub_hooks = EventStreamHooks(challenge_workdir, f"sub_{sub['id']}")
         try:
-            await Runner.run(
+            await run_with_model_fallback(
                 sub_executor,
                 input=f"子任务：{sub['desc']}\n独立完成这个子任务，完成后调用 finish_subtask 提交结构化结论。",
                 context=sub_ctx, hooks=sub_hooks, session=sub_session,
-                max_turns=SUBTASK_MAX_TURNS)
+                max_turns=SUBTASK_MAX_TURNS,
+                model_pool=model_pool,
+                agent_name="Subtask")
             payload = sub_ctx.final_payload or {}
             if sub_ctx.finalized and payload.get("summary"):
                 # 走了结束协议：结构化回传 summary/findings/flag
@@ -593,7 +549,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             if pending:
                 await _run_subtasks(ctx, pending, challenge_workdir, brief,
                                     model=executor.model,
-                                    model_settings=executor.model_settings)
+                                    model_settings=executor.model_settings,
+                                    model_pool=model_pool)
 
             # 历史压缩
             if await compact_if_needed(session, ctx):
@@ -722,6 +679,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     fatal_reason = ""
     list_fail_streak = 0  # 拉题目列表连续失败计数（网络抖动重试，超限停止，不崩溃退出）
     LIST_RETRY_MAX = int(os.getenv("LIST_RETRY_MAX", "10"))  # 连续失败上限
+    slot_wait = 0  # 连续「有未完成题但拿不到容器名额」轮数（残留容器清理/判停用）
 
     # 启动前不清理残留容器：依赖平台 max_active 自然淘汰，避免启动阶段
     # 浪费大量时间逐个关闭容器（参考日志 secai-20260814.log #L26-35）。
@@ -814,8 +772,28 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 break
 
             if not active:
-                log_info("== 全部题目已完成（无可选题目）==")
-                break
+                # 区分「全部完成」与「还有题但拿不到名额」：后者是残留容器占位，
+                # 不能误报为全部完成（否则提前退出、漏题）。
+                unfinished = [c for c in challenges if not c.get("is_completed")]
+                if not unfinished:
+                    log_info("== 全部题目已完成 ==")
+                    break
+                slot_wait += 1
+                if slot_wait == 1:
+                    log_warn("[slot] 无可用槽位但仍有未完成题，批量清理非 running 残留容器")
+                    for c in unfinished:
+                        if c.get("container_status") in ("available", "stopped", ""):
+                            try:
+                                client.close_challenge(c.get("unique_code"))
+                            except Exception:
+                                pass
+                if slot_wait >= 10:
+                    fatal_reason = "连续 10 轮拿不到容器名额（疑似平台侧残留/泄漏）"
+                    break
+                await asyncio.sleep(5)
+                continue
+
+            slot_wait = 0  # 成功拿到槽位，重置无槽位计数
 
             # 等待任一单题完成
             done, _ = await asyncio.wait(

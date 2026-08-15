@@ -40,6 +40,8 @@ class TaskContext:
     enabled_tools: Optional[Set[str]] = None  # 工具按需加载：None=全部启用；否则只启用集合内的工具名（见 demo_tools.CORE_TOOL_NAMES）
     phase: str = "recon"                      # 当前阶段（recon/enumerate/detect/exploit/post），驱动 instructions 动态切换
     plan: str = ""                            # 作战计划（Planner 深度分析产出，注入执行者系统提示）
+    boosted_roles: List[str] = field(default_factory=list)  # 已注入的阶段增强角色（证据触发，去重用）
+    role_boost: str = ""                      # 当前注入的阶段增强打法（下一轮 instructions 追加）
     stuck_turns: int = 0                      # 当前阶段连续未切换的轮数（replan 触发用）
     replan_count: int = 0                     # 已执行 replan 次数（防止无限重规划）
     turn_gain: bool = False                   # 本轮是否产出正向信息增量（hooks 打分，main 每轮清零）

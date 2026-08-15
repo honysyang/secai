@@ -2,6 +2,7 @@
 name: 提权专员
 pattern: "提权|权限提升|privesc|垂直越权"
 playbooks: post_exploitation, unknown_target_sop
+trigger: rce_confirmed, upload_success
 ---
 
 ## 定位
