@@ -42,7 +42,8 @@ from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFou
 from arsenal.registries.role_registry import assign_role
 from arsenal.registries.skill_registry import load_skills
 from arsenal.registries import sec_tools
-from bench_platform.scheduler import select_challenge, decide_stuck_action, SINGLE_EMPTY_TURNS
+from bench_platform.scheduler import (select_challenge, decide_stuck_action,
+                                      is_endgame, SINGLE_EMPTY_TURNS)
 from solvecraft.solution_templates import append_solution_template, load_solution_hint
 from runtime.status import set_status
 from runtime.deadline import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
@@ -774,7 +775,9 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
             while len(active) < MAX_SLOTS:
                 # 排除已活跃的题，避免重复选题
                 candidates = [c for c in challenges if c.get("unique_code") not in active]
-                chal = select_challenge(candidates, attempts)
+                # 收尾回捞：所有未完成题都至少放弃过一次时，降低衰减逐个回捞
+                endgame = is_endgame(challenges, attempts)
+                chal = select_challenge(candidates, attempts, endgame=endgame)
                 if chal is None:
                     break
                 code = chal.get("unique_code", "")

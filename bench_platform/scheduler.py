@@ -16,6 +16,9 @@ from typing import Dict, List, Optional
 DIFF_COEF = {"easy": 1.3, "medium": 1.0, "hard": 0.7}
 # 死路衰减：同一题每放弃一次，EV 乘 0.3，避免反复撞硬题
 DECAY = 0.3
+# 收尾回捞衰减：进入收尾阶段（所有题都至少放弃过一次）后衰减更温和，
+# 0.6^attempts 比 0.3^attempts 慢得多，让放弃过的题有机会被重新认真对待
+ENDGAME_DECAY = 0.6
 
 # 单题停滞机械前置（报告 P0-4「hint 第 8 轮机械前置」）
 # 轮次预算按难度分级（对齐 SecAI/secai tsec_benchmark：easy≤12 / medium≤20 / hard≤25）。
@@ -37,11 +40,25 @@ _EARLY_HINT_KEYWORDS = ("azure", "azurite", "blob", "sas", "s3", "lambda",
                         "firebase", "supabase", "aws storage", "gcp", "google cloud")
 
 
-def select_challenge(challenges: List[dict], attempts: Dict[str, int]) -> Optional[dict]:
-    """EV 选题：total_score × 难度系数 × 0.3^死路次数，跳过已完成题。
+def is_endgame(challenges: List[dict], attempts: Dict[str, int]) -> bool:
+    """判断是否进入收尾回捞阶段：所有未完成题都至少被放弃过一次。
 
+    此时没有「未尝试」的题可做，应降低衰减，回捞放弃过的题逐个再解决。
+    """
+    unfinished = [c for c in challenges if not c.get("is_completed")]
+    if not unfinished:
+        return False
+    return all(attempts.get(c.get("unique_code", ""), 0) > 0 for c in unfinished)
+
+
+def select_challenge(challenges: List[dict], attempts: Dict[str, int],
+                     endgame: bool = False) -> Optional[dict]:
+    """EV 选题：total_score × 难度系数 × 衰减^死路次数，跳过已完成题。
+
+    endgame=True（收尾回捞阶段）时用更温和的 ENDGAME_DECAY，回捞放弃过的题。
     返回 EV 最高的未完成题目；全部完成返回 None。
     """
+    base = ENDGAME_DECAY if endgame else DECAY
     best: Optional[dict] = None
     best_ev = -1.0
     for c in challenges:
@@ -49,7 +66,7 @@ def select_challenge(challenges: List[dict], attempts: Dict[str, int]) -> Option
             continue
         code = c.get("unique_code", "")
         coef = DIFF_COEF.get(str(c.get("difficulty", "")).lower(), 1.0)
-        ev = float(c.get("total_score", 0) or 0) * coef * (DECAY ** attempts.get(code, 0))
+        ev = float(c.get("total_score", 0) or 0) * coef * (base ** attempts.get(code, 0))
         if ev > best_ev:
             best, best_ev = c, ev
     return best
