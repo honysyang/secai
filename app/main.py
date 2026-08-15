@@ -26,7 +26,8 @@ from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach
                             build_executor, build_subtask_executor)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
-from runtime.model_pool import ModelPool, ModelExhaustedError, is_model_failure
+from runtime.model_pool import (ModelPool, ModelExhaustedError, is_model_failure,
+                                is_permanent_model_failure)
 import runtime.stuck as stuck_mod
 from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
@@ -162,19 +163,21 @@ def _tool_groups_for(role_name: str, desc: str) -> tuple:
 
 async def run_with_model_fallback(agent, input, *, hooks=None, context=None,
                                   session=None, max_turns=None, model_pool=None,
-                                  agent_name=""):
-    """带模型灾备切换的 Runner.run 包装函数（供外层 Agent 使用）。
+                                  agent_name="", max_rounds=6, retry_delay=5):
+    """带模型灾备切换 + 冷却重试的 Runner.run 包装函数（供外层 Agent 使用）。
 
     - model_pool 为 None 时，仅执行一次 Runner.run，不重试；
-    - model_pool 有效时，捕获 is_model_failure 异常后，标记当前模型失败并切换到
-      model_pool.next() 返回的新模型，覆盖 agent.model 后继续重试；
-    - 所有候选模型均失败时抛出 ModelExhaustedError，避免无限重试。
+    - model_pool 有效时，模型失败后区分永久/暂时失败：
+      永久失败（鉴权/模型名错误）拉黑；暂时失败（限流/超时）冷却后重试；
+    - 主/灾备之间可多轮切换，最多 max_rounds 轮；全部不可用抛 ModelExhaustedError。
     """
     if model_pool is None:
         return await Runner.run(agent, input=input, hooks=hooks, context=context,
                                 session=session, max_turns=max_turns)
 
-    while True:
+    rounds = 0
+    while rounds < max_rounds:
+        rounds += 1
         try:
             return await Runner.run(agent, input=input, hooks=hooks, context=context,
                                       session=session, max_turns=max_turns)
@@ -182,16 +185,26 @@ async def run_with_model_fallback(agent, input, *, hooks=None, context=None,
             if not is_model_failure(exc):
                 raise
             current_name = getattr(agent.model, "model", "?")
-            model_pool.mark_failed(current_name)
+            permanent = is_permanent_model_failure(exc)
+            model_pool.mark_failed(current_name, permanent=permanent)
             entry = model_pool.next(current_name=current_name,
                                     reason=f"model_failure:{type(exc).__name__}")
-            if entry is None:
+            if entry is not None:
+                agent.model = entry.model
+                log_warn(f"[model-fallback] {agent_name or '外层 Agent'} {current_name} 失败，"
+                         f"切换到 {entry.name} 继续同一会话：{str(exc)[:300]}")
+                continue
+            # 无可用候选：永久失败立即耗尽；暂时失败等待冷却后重试
+            if permanent or rounds >= max_rounds:
                 log_error(f"[model-exhausted] {agent_name or '外层 Agent'} 所有模型均不可用：{exc}")
                 raise ModelExhaustedError(
                     f"{agent_name or '外层 Agent'} 模型池耗尽") from exc
-            agent.model = entry.model
-            log_warn(f"[model-fallback] {agent_name or '外层 Agent'} {current_name} 失败，"
-                     f"切换到 {entry.name} 继续")
+            log_warn(f"[model-retry] {agent_name or '外层 Agent'} 模型暂时不可用，"
+                     f"{retry_delay}s 后重试（{rounds}/{max_rounds}）：{str(exc)[:200]}")
+            await asyncio.sleep(retry_delay)
+            continue
+    log_error(f"[model-exhausted] {agent_name or '外层 Agent'} 达到最大重试轮数 {max_rounds}")
+    raise ModelExhaustedError(f"{agent_name or '外层 Agent'} 模型池耗尽")
 
 
 async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None) -> None:
@@ -420,7 +433,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 # 模型服务端失败（额度/限流/鉴权/超时）→ 灾备切换模型继续同一会话
                 if is_model_failure(exc):
                     current_name = getattr(executor.model, "model", "?")
-                    model_pool.mark_failed(current_name)
+                    model_pool.mark_failed(current_name,
+                                           permanent=is_permanent_model_failure(exc))
                     entry = model_pool.next(current_name=current_name, reason=f"model_failure:{type(exc).__name__}")
                     if entry is None:
                         log_error(f"[model-exhausted] 单题 {code} 所有模型均不可用：{exc}")
@@ -645,22 +659,28 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         (workdir / f).unlink(missing_ok=True)
     (workdir / "events.jsonl").write_text("", encoding="utf-8")
 
-    # ① 管理者·立法（全局一次）
+    # ① 管理者·立法（全局一次；模型暂时不可用时做阶段级重试）
     log_info("== 管理者：写使命宪章 ==")
     set_status(workdir, "legislate", "running")
-    try:
-        charter_result = await run_with_model_fallback(
-            manager_agent,
-            input=f"用户任务：{task}",
-            hooks=hooks,
-            model_pool=global_model_pool,
-            agent_name="Manager")
-        charter = str(charter_result.final_output)
-    except Exception as e:
-        log_error(f"== 管理者立法失败：{str(e)[:200]}，无法继续 ==")
-        set_status(workdir, "legislate", "error")
-        return {"status": "error", "reason": f"legislate_failed: {type(e).__name__}",
-                "results": [], "report": ""}
+    charter = ""
+    for attempt in range(2):
+        try:
+            charter_result = await run_with_model_fallback(
+                manager_agent,
+                input=f"用户任务：{task}",
+                hooks=hooks,
+                model_pool=global_model_pool,
+                agent_name="Manager")
+            charter = str(charter_result.final_output)
+            break
+        except Exception as e:
+            log_warn(f"[retry] 管理者立法失败（{attempt + 1}/2）：{str(e)[:200]}")
+            if attempt == 1:
+                log_error(f"== 管理者立法失败：{str(e)[:200]}，无法继续 ==")
+                set_status(workdir, "legislate", "error")
+                return {"status": "error", "reason": f"legislate_failed: {type(e).__name__}",
+                        "results": [], "report": ""}
+            await asyncio.sleep(3)
     save_charter(DATA_DIR / "mission_charter.md", charter)
     set_status(workdir, "legislate", "finish")
 
@@ -668,21 +688,27 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     base_role = assign_role(role_hint, task)
     log_info(f"== 全局角色：{base_role['role']} ==")
 
-    # ② 规划师·全局计划（一次，单题复用 + 单题 brief 补充）
+    # ② 规划师·全局计划（一次，单题复用 + 单题 brief 补充；模型暂时不可用时重试）
     log_info("== 规划师：任务深度分析，产出作战计划 ==")
-    try:
-        plan_result = await run_with_model_fallback(
-            planner_agent,
-            input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
-                   f"派任角色：{base_role['role']}\n\n请产出作战计划。"),
-            hooks=hooks,
-            model_pool=global_model_pool,
-            agent_name="Planner")
-        global_plan = str(plan_result.final_output)
-    except Exception as e:
-        log_error(f"== 规划失败：{str(e)[:200]}，无法继续 ==")
-        return {"status": "error", "reason": f"plan_failed: {type(e).__name__}",
-                "results": [], "report": ""}
+    global_plan = ""
+    for attempt in range(2):
+        try:
+            plan_result = await run_with_model_fallback(
+                planner_agent,
+                input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
+                       f"派任角色：{base_role['role']}\n\n请产出作战计划。"),
+                hooks=hooks,
+                model_pool=global_model_pool,
+                agent_name="Planner")
+            global_plan = str(plan_result.final_output)
+            break
+        except Exception as e:
+            log_warn(f"[retry] 规划失败（{attempt + 1}/2）：{str(e)[:200]}")
+            if attempt == 1:
+                log_error(f"== 规划失败：{str(e)[:200]}，无法继续 ==")
+                return {"status": "error", "reason": f"plan_failed: {type(e).__name__}",
+                        "results": [], "report": ""}
+            await asyncio.sleep(3)
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)

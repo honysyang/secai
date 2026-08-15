@@ -9,8 +9,9 @@
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from openai import APIError, APIStatusError, APITimeoutError, AuthenticationError, RateLimitError
 from openai import AsyncOpenAI
@@ -93,13 +94,39 @@ def is_model_failure(exc: Exception) -> bool:
     return False
 
 
+def is_permanent_model_failure(exc: Exception) -> bool:
+    """判断是否「永久性」模型失败（鉴权失败 / 模型名错误），这类失败重试无意义。
+
+    与之相对的是暂时性失败（限流 / 超时 / 5xx），冷却后可重试同模型。
+    """
+    msg = str(exc).lower()
+    # 鉴权 / 密钥 / 模型名错误：永久失败，重试也救不了
+    perm_keywords = (
+        "invalid api key", "unauthorized", "authentication",
+        "invalid_request_error", "model not found", "invalid model",
+        "model not supported", "not exist", "不存在", "鉴权", "key 无效",
+    )
+    if any(k in msg for k in perm_keywords):
+        return True
+    # HTTP 401/403/404（鉴权 / 资源不存在）视为永久失败
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        response = getattr(exc, "response", None) or getattr(exc, "body", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+    return isinstance(status_code, int) and status_code in (401, 403, 404)
+
+
 class ModelPool:
-    """管理主模型 + 候选模型，支持失败时切换。"""
+    """管理主模型 + 候选模型，支持失败时切换与冷却重试。"""
+
+    COOLDOWN_SECONDS = 30  # 暂时性失败后的冷却时间（冷却后可重试同模型）
 
     def __init__(self) -> None:
         self._entries: List[ModelEntry] = []
         self._used: List[str] = []
-        self._failed: Set[str] = set()
+        self._failed: Set[str] = set()                 # 永久失败（鉴权/模型名错误）
+        self._transient_failed: Dict[str, float] = {}  # 暂时失败 name -> 失败时间戳
 
         # 主模型（延迟初始化已触发，这里安全构造真实实例）
         self._entries.append(ModelEntry(
@@ -150,33 +177,44 @@ class ModelPool:
         """是否存在非主候选模型。"""
         return any(not e.is_default for e in self._entries)
 
-    def mark_failed(self, name: str) -> None:
-        """标记某个模型已失败。"""
-        self._failed.add(name)
+    def mark_failed(self, name: str, permanent: bool = False) -> None:
+        """标记模型失败。
+
+        permanent=True：永久失败（鉴权/模型名错误），冷却后也不重试；
+        permanent=False：暂时失败（限流/超时），冷却后可重试同模型。
+        """
+        if permanent:
+            self._failed.add(name)
+        else:
+            self._transient_failed[name] = time.time()
+
+    def _available(self, entry: ModelEntry, current_name: str) -> bool:
+        """判断某模型当前是否可用（非当前、非永久失败、暂时失败已过冷却期）。"""
+        if entry.name == current_name:
+            return False
+        if entry.name in self._failed:
+            return False
+        failed_at = self._transient_failed.get(entry.name)
+        if failed_at is not None and (time.time() - failed_at) < self.COOLDOWN_SECONDS:
+            return False
+        return True
 
     def next(self, *, current_name: str = "", reason: str = "") -> Optional[ModelEntry]:
         """选择下一个可用模型。
 
         逻辑：
-        1. 优先选不是当前模型、且未失败的候选；
-        2. 候选耗尽后回退未失败的主模型；
-        3. 所有模型均失败时返回 None（外层应抛 ModelExhaustedError）。
-
-        允许在多个模型间反复切换，直到全部失败。
+        1. 跳过当前模型、永久失败模型、冷却期内的暂时失败模型；
+        2. 返回第一个可用候选（主/灾备之间可多轮切换）；
+        3. 全部不可用返回 None（暂时失败由外层等待冷却后重试）。
         """
-        # 优先选未失败的非当前候选（支持同一候选被多次复用）
         for entry in self._entries:
-            if entry.name == current_name:
-                continue
-            if entry.name in self._failed:
-                continue
-            if entry.name not in self._used:
-                self._used.append(entry.name)
-            return entry
-
-        # 所有模型都失败或只剩当前模型
+            if self._available(entry, current_name):
+                if entry.name not in self._used:
+                    self._used.append(entry.name)
+                return entry
         return None
 
     def __repr__(self) -> str:
         names = [e.name for e in self._entries]
-        return f"ModelPool(entries={names}, used={self._used}, failed={self._failed})"
+        return (f"ModelPool(entries={names}, used={self._used}, "
+                f"failed={self._failed}, transient={list(self._transient_failed)})")
