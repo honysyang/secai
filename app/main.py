@@ -599,7 +599,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 log_info("[compact] 单题历史已压缩")
 
             # 关键证据自动闭环：把 hooks 写入 notes 的强制利用指令优先注入下一轮
-            close_notes = [n for n in ctx.notes if n.startswith("[闭环]") or n.startswith("已确认")]
+            close_notes = [n for n in ctx.notes
+                           if n.startswith("[闭环]") or n.startswith("已确认")
+                           or n.startswith("已发现")]
             if close_notes:
                 ctx.notes = [n for n in ctx.notes if n not in close_notes]
                 next_input = "系统检测到可利用的关键证据，请立即按以下指令执行（不要继续侦察）：\n\n" + "\n\n".join(close_notes)
