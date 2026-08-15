@@ -497,6 +497,23 @@ def checkpoint(ctx: RunContextWrapper[TaskContext], reason: str = "") -> str:
 
 
 @function_tool
+def think(thought: str) -> str:
+    """记录私有推理（无副作用，不产生新信息，仅作决策缓冲）。
+
+    在关键决策前调用本工具，把「当前已知事实 → 待验证假设 → 下一步动作 → 风险评估」
+    写清楚，避免边想边做导致冲动决策。典型场景：
+    - 分析工具输出（SQL 报错 / 异常栈 / 响应差异）后，判断下一步该换什么 payload；
+    - 构造 exploit 前，梳理攻击链每个环节与预期正/负证据；
+    - 多面 flag 题：梳理「已拿几面、还差几面、下一面从哪个入口找」。
+
+    不要用 think 聊天或输出最终结论——它是推理缓冲，不是输出通道。
+    """
+    if not thought or not thought.strip():
+        return json.dumps({"error": "思考内容不能为空"}, ensure_ascii=False)
+    return json.dumps({"ok": True, "note": "思考已记录"}, ensure_ascii=False)
+
+
+@function_tool
 def remember(ctx: RunContextWrapper[TaskContext], kind: str, name: str,
              summary: str = "", payload: str = "", steps: str = "",
              content: str = "") -> str:
@@ -938,6 +955,7 @@ _TOOL_SPECS = [
     (write_file, True, ()),
     (finalize, True, ()),
     (checkpoint, True, ()),
+    (think, True, ()),
     (remember, True, ()),
     (blackboard, True, ()),
     (set_phase, True, ()),
