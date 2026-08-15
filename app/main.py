@@ -648,13 +648,19 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     # ① 管理者·立法（全局一次）
     log_info("== 管理者：写使命宪章 ==")
     set_status(workdir, "legislate", "running")
-    charter_result = await run_with_model_fallback(
-        manager_agent,
-        input=f"用户任务：{task}",
-        hooks=hooks,
-        model_pool=global_model_pool,
-        agent_name="Manager")
-    charter = str(charter_result.final_output)
+    try:
+        charter_result = await run_with_model_fallback(
+            manager_agent,
+            input=f"用户任务：{task}",
+            hooks=hooks,
+            model_pool=global_model_pool,
+            agent_name="Manager")
+        charter = str(charter_result.final_output)
+    except Exception as e:
+        log_error(f"== 管理者立法失败：{str(e)[:200]}，无法继续 ==")
+        set_status(workdir, "legislate", "error")
+        return {"status": "error", "reason": f"legislate_failed: {type(e).__name__}",
+                "results": [], "report": ""}
     save_charter(DATA_DIR / "mission_charter.md", charter)
     set_status(workdir, "legislate", "finish")
 
@@ -664,14 +670,19 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
     # ② 规划师·全局计划（一次，单题复用 + 单题 brief 补充）
     log_info("== 规划师：任务深度分析，产出作战计划 ==")
-    plan_result = await run_with_model_fallback(
-        planner_agent,
-        input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
-               f"派任角色：{base_role['role']}\n\n请产出作战计划。"),
-        hooks=hooks,
-        model_pool=global_model_pool,
-        agent_name="Planner")
-    global_plan = str(plan_result.final_output)
+    try:
+        plan_result = await run_with_model_fallback(
+            planner_agent,
+            input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
+                   f"派任角色：{base_role['role']}\n\n请产出作战计划。"),
+            hooks=hooks,
+            model_pool=global_model_pool,
+            agent_name="Planner")
+        global_plan = str(plan_result.final_output)
+    except Exception as e:
+        log_error(f"== 规划失败：{str(e)[:200]}，无法继续 ==")
+        return {"status": "error", "reason": f"plan_failed: {type(e).__name__}",
+                "results": [], "report": ""}
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
@@ -680,6 +691,8 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     MAX_SLOTS = int(os.getenv("PLATFORM_MAX_ACTIVE", "3"))  # 软上限保护（默认 3，适配平台活跃容器上限）
     results = []
     fatal_reason = ""
+    list_fail_streak = 0  # 拉题目列表连续失败计数（网络抖动重试，超限停止，不崩溃退出）
+    LIST_RETRY_MAX = int(os.getenv("LIST_RETRY_MAX", "10"))  # 连续失败上限
 
     # 启动前不清理残留容器：依赖平台 max_active 自然淘汰，避免启动阶段
     # 浪费大量时间逐个关闭容器（参考日志 secai-20260814.log #L26-35）。
@@ -712,13 +725,22 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 except ValueError:
                     pass
 
-            # 拉题目列表
+            # 拉题目列表（网络抖动/5xx 重试，不因偶发异常崩溃退出）
             try:
                 challenges = await asyncio.to_thread(client.list_challenges)
+                list_fail_streak = 0
             except (TaskEnded, TaskNotFound) as e:
                 fatal_reason = str(e)
                 log_warn(f"== 平台终止：{fatal_reason} ==")
                 break
+            except Exception as e:
+                list_fail_streak += 1
+                log_warn(f"[retry] 拉取题目列表失败({list_fail_streak})：{str(e)[:200]}")
+                if list_fail_streak >= LIST_RETRY_MAX:
+                    fatal_reason = f"list_challenges 连续失败 {list_fail_streak} 次：{str(e)[:200]}"
+                    break
+                await asyncio.sleep(2)
+                continue
 
             # 自适应并发：持续 start 直到 container_busy（名额满）或没题或软上限
             while len(active) < MAX_SLOTS:
@@ -808,18 +830,25 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
             except Exception:
                 pass
 
-    # ④ 报告者·收尾
+    # ④ 报告者·收尾（报告失败降级，不因模型不可用而崩溃退出）
     set_status(workdir, "report", "running")
-    events_text = (workdir / "events.jsonl").read_text(encoding="utf-8")[-6000:]
+    try:
+        events_text = (workdir / "events.jsonl").read_text(encoding="utf-8")[-6000:]
+    except Exception:
+        events_text = ""
     summary = json.dumps(results, ensure_ascii=False)[:2000]
-    report = await run_with_model_fallback(
-        reporter_agent,
-        input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
-               f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
-        hooks=hooks,
-        model_pool=global_model_pool,
-        agent_name="Reporter")
-    report_text = str(report.final_output)
+    try:
+        report = await run_with_model_fallback(
+            reporter_agent,
+            input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
+                   f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
+            hooks=hooks,
+            model_pool=global_model_pool,
+            agent_name="Reporter")
+        report_text = str(report.final_output)
+    except Exception as e:
+        log_error(f"== 报告生成失败：{str(e)[:200]}，降级为无战报 ==")
+        report_text = f"（战报生成失败：{str(e)[:200]}）"
     (DATA_DIR / "field_notes.md").open("a", encoding="utf-8").write(
         f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{report_text}\n")
     print("\n===== 战报 =====\n" + report_text)
@@ -837,5 +866,13 @@ if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if a != "--resume"]
     task = args[0] if args else build_default_task()
     role_hint = args[1] if len(args) > 1 else ""
-    out = asyncio.run(run_task(task, role_hint, resume=resume))
+    try:
+        out = asyncio.run(run_task(task, role_hint, resume=resume))
+    except KeyboardInterrupt:
+        log_warn("== 已中断 ==")
+        sys.exit(130)
+    except Exception as e:
+        # 兜底：任何未预期异常都不裸崩，记录后以非零码退出
+        log_error(f"== 未预期异常退出：{type(e).__name__}: {str(e)[:300]} ==")
+        sys.exit(1)
     log_info(f"最终状态：{json.dumps({k: v for k, v in out.items() if k != 'report'}, ensure_ascii=False)}")
