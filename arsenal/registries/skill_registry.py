@@ -163,36 +163,13 @@ SKILL_MAX_PER_BODY = 2000    # 单篇技能正文上限（字符），超长截�
 SKILL_MAX_COUNT = 3          # 同屏最多注入的「渐进披露」技能篇数（最新披露优先）
 SKILL_MAX_TOTAL = 50000      # 技能注入总预算（字符），整粒度截断
 
-# 核心常驻技能：全局纪律 + 跑分作战 + 效率 + 百度 Agent+ 攻防挑战赛 22 个沉淀打法
-# 全部开局注入，不参与 SKILL_MAX_COUNT 的 3 篇预算限制。用户要求“不考虑成本，只需解题”。
+# 核心常驻技能：全局纪律 + 跑分作战 + token/提示词效率优化
+# 只保留最通用、无法通过 triggers 精准触发的技能；其他打法由 hooks 渐进披露触发。
 CORE_SKILLS = {
     "arsenal_index",
     "token_optimizer",
     "prompt_optimizer",
     "scoring_runner",
-    # 百度 Agent+ 攻防挑战赛 22 题沉淀打法（全部常驻）
-    "ai-assistant-secret-gate-pickle-rce",
-    "android-apk-flag-extraction",
-    "android-apk-prompt-leak-ctf",
-    "android-apk-static-rev-flag",
-    "android-apk-shuffled-dex-signature-block-xor-key",
-    "blind-cmd-injection-blacklist-bypass",
-    "capability-ref-flag-hiding",
-    "default-password-pattern-derivation",
-    "electron-asar-reverse-license",
-    "file-read-containment-root-bypass",
-    "gateway-path-keyword-bypass-backslash",
-    "go-signed-ref-idor-detail-view",
-    "int32-overflow-price-bypass",
-    "llm-agent-controlled-model-endpoint",
-    "llm-agent-file-preview-abuse",
-    "npm-supply-chain-ci-exfil",
-    "object-storage-signed-url-proxy-read",
-    "payment-callback-sign-forgery",
-    "python-exec-hook-cross-user-capture",
-    "second-order-sqli-waf-unicode-bypass",
-    "shell-injection-blacklist-url-decode-bypass",
-    "vite-dev-server-source-leak",
 }
 
 

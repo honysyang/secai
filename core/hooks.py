@@ -19,7 +19,7 @@ from runtime.log import log_info, log_warn, log_debug
 
 # 无进展工具：这些工具不产生攻击进展，调用它们不计入「本轮工具调用」，
 # 否则 think/todo/checkpoint 会合法绕过「连续 N 轮空转 → 机械换题」防线。
-_NO_PROGRESS_TOOLS = {"think", "todo_add", "todo_list", "todo_mark", "checkpoint"}
+_NO_PROGRESS_TOOLS = {"think", "todo_add", "todo_list", "todo_mark", "checkpoint", "list_tools"}
 
 
 def _boost_role_by_trigger(task_ctx) -> None:

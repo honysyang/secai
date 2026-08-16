@@ -32,7 +32,8 @@ import runtime.stuck as stuck_mod
 from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
 from adapters.config import (BENCHMARK_BASE_URL, BENCHMARK_TOKEN,
-                             BASE_URL, MODEL_NAME, API_KEY, VPN_CONFIG)
+                             BASE_URL, MODEL_NAME, API_KEY, VPN_CONFIG,
+                             FAST_MODEL_NAME, PLANNER_MODEL_NAME)
 
 from core.context_manager import compact_if_needed
 import adapters.db as db_mod
@@ -294,7 +295,8 @@ async def _coach(ctx, brief, hooks) -> str:
 async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                                 task: str, global_plan: str, hooks, workdir: Path,
                                 client: PlatformClient, difficulty: str = "",
-                                flag_total: int = 1, flag_done: int = 0) -> str:
+                                flag_total: int = 1, flag_done: int = 0,
+                                model_pool: Optional[ModelPool] = None) -> str:
     """对一道题执行完整渗透循环，返回 outcome：solved / stuck / fatal。
 
     单题独立 context + 独立 session；停滞时机械看 hint / 换题（调度器决策），
@@ -328,8 +330,11 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         brief += (f"# 历史成功解法参考（同类题，可优先尝试）\n{sol_hint}\n\n")
     brief += ("选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
               "不要自己调用 list_challenges / start_challenge / close_challenge。")
-    # 模型灾备池：默认以主模型（glm-5.2-agent-chanllenge）优先，失败后按 ESCALATION_MODELS 切换 deepseek-v4-flash / deepseek-v4-pro。
-    model_pool = ModelPool()
+    # 模型灾备池：执行者池优先用 FAST_MODEL，未配置则主模型兜底。
+    # 传入 model_pool 表示由外层统一分配（全局共享，避免每题重建）；
+    # 未传入则兜底创建独立池（兼容单测/旧调用）。
+    if model_pool is None:
+        model_pool = ModelPool(preferred_name=FAST_MODEL_NAME)
 
     executor = build_executor(role, charter, brief,
                               field_notes=load_notes_for(code) or _load_field_notes(),
@@ -630,9 +635,10 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     workdir.mkdir(exist_ok=True)
     hooks = EventStreamHooks(workdir, "generic")
 
-    # 外层 Agent 全局模型池（与单题 executor 内部模型池隔离，互不污染）
+    # 外层 Agent 全局模型池（与单题 executor 内部模型池隔离，互不污染）；
+    # 分析型 Agent 用 PLANNER_MODEL（deepseek-v4-pro 等强模型），主模型 glm 兜底。
     global global_model_pool
-    global_model_pool = ModelPool()
+    global_model_pool = ModelPool(preferred_name=PLANNER_MODEL_NAME)
 
     log_info(f"== 模型池就绪：{global_model_pool} ==")
     # 同步更新外层 Agent 默认模型为当前模型池入口，避免首次调用仍用旧默认
@@ -700,6 +706,9 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
+    # 执行者共享模型池：FAST_MODEL（deepseek-v4-flash）优先，主模型 glm 兜底；
+    # 全局共享一份，避免每题新建池导致灾备状态丢失。
+    fast_pool = ModelPool(preferred_name=FAST_MODEL_NAME)
     attempts: Dict[str, int] = {}
     active: Dict[str, asyncio.Task] = {}  # code -> 单题 asyncio 任务
     MAX_SLOTS = int(os.getenv("PLATFORM_MAX_ACTIVE", "3"))  # 软上限保护（默认 3，适配平台活跃容器上限）
@@ -716,7 +725,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     pass
 
     async def _run_one(code: str, desc: str, addrs: list, difficulty: str,
-                       chal: dict) -> str:
+                       chal: dict, model_pool: ModelPool) -> str:
         """运行一道已 start 成功的题，返回 outcome。
 
         start 由主循环同步完成（以便立即感知 container_busy），本函数只负责跑题。
@@ -726,7 +735,8 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
             code, desc, addrs, charter, task, global_plan, hooks, workdir,
             client, difficulty,
             flag_total=chal.get("flag_count") or 1,
-            flag_done=chal.get("correct_flag_count") or 0)
+            flag_done=chal.get("correct_flag_count") or 0,
+            model_pool=model_pool)
         return outcome
 
     try:
@@ -787,7 +797,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                     attempts[code] = attempts.get(code, 0) + 1
                     continue
                 # start 成功：真正占用容器，创建跑题任务
-                t = asyncio.create_task(_run_one(code, desc, addrs, difficulty, chal))
+                t = asyncio.create_task(_run_one(code, desc, addrs, difficulty, chal, fast_pool))
                 active[code] = t
                 log_info(f"[slot] 启动 {code}（活跃 {len(active)}/{MAX_SLOTS}）")
 

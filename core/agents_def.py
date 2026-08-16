@@ -11,7 +11,7 @@ import time
 
 from agents import Agent, ModelSettings, RunContextWrapper
 
-from adapters.config import MODEL
+from adapters.config import MODEL, PLANNER_MODEL, FAST_MODEL
 
 
 
@@ -58,7 +58,7 @@ MANAGER_INSTRUCTIONS = """你是 SecAI 的管理者，负责立法而非执行�
 只输出宪章本身，不要寒暄。宪章将被注入执行者的系统提示，并作为终止核对的依据。"""
 
 manager_agent = Agent(name="Manager", instructions=MANAGER_INSTRUCTIONS,
-                      model=MODEL, model_settings=MANAGER_SETTINGS)
+                      model=PLANNER_MODEL, model_settings=MANAGER_SETTINGS)
 
 
 # ================= 规划师（任务深度分析 → 作战计划） =================
@@ -80,11 +80,13 @@ PLANNER_INSTRUCTIONS = """你是 SecAI 的作战规划师（分析主智能体�
 # 优先级与止损 —— 先易后难、优先已 available 的题目；拿到文件读取后直接读 flag 位置；登录成功/确认漏洞/关键路径必须提醒执行者写黑板
 
 如果遇到无法解决的问题，可以跳过，进行下一个。
-只输出计划本身，不要寒暄。计划将被注入执行者的系统提示，指导其阶段推进。"""
+只输出计划本身，不要寒暄。计划将被注入执行者的系统提示，指导其阶段推进。
+
+纪律：调用 query_skills / list_knowledge / get_knowledge / list_tools 等只读工具最多一次，获取信息后必须立即产出计划，禁止反复调用同一工具空转。"""
 
 planner_agent = Agent(name="Planner", instructions=PLANNER_INSTRUCTIONS,
                       tools=intel_tools(),
-                      model=MODEL, model_settings=PLANNER_SETTINGS)
+                      model=PLANNER_MODEL, model_settings=PLANNER_SETTINGS)
 
 
 # ================= 执行者（按角色组装，渐进披露技能） =================
@@ -224,7 +226,7 @@ def build_executor(role: dict, charter: str, brief: str,
         return _render_executor_instructions(ctx, role, charter, brief, field_notes)
 
     return Agent(name=f"Executor[{role['role']}]", instructions=_instructions,
-                 tools=ALL_TOOLS, model=model or MODEL, model_settings=model_settings or EXECUTOR_SETTINGS)
+                 tools=ALL_TOOLS, model=model or FAST_MODEL, model_settings=model_settings or EXECUTOR_SETTINGS)
 
 
 def build_subtask_executor(role: dict, charter: str, brief: str,
@@ -240,7 +242,7 @@ def build_subtask_executor(role: dict, charter: str, brief: str,
                 + SUBTASK_ENDING)
 
     return Agent(name=f"Subtask[{role['role']}]", instructions=_instructions,
-                 tools=ALL_TOOLS + [finish_subtask], model=model or MODEL,
+                 tools=ALL_TOOLS + [finish_subtask], model=model or FAST_MODEL,
                  model_settings=model_settings or EXECUTOR_SETTINGS)
 
 
@@ -252,7 +254,7 @@ REPORTER_INSTRUCTIONS = """你是 SecAI 的报告者，负责把执行过程翻�
 只输出这两节。不评价、不抒情、不建议。"""
 
 reporter_agent = Agent(name="Reporter", instructions=REPORTER_INSTRUCTIONS,
-                       model=MODEL, model_settings=REPORTER_SETTINGS)
+                       model=PLANNER_MODEL, model_settings=REPORTER_SETTINGS)
 
 
 # ================= 历史压缩器（上下文超阈值时调用） =================
@@ -265,7 +267,7 @@ COMPACTOR_INSTRUCTIONS = """你是对话历史的压缩器。输入包含「更�
 只输出摘要本身，不要寒暄。"""
 
 compactor_agent = Agent(name="Compactor", instructions=COMPACTOR_INSTRUCTIONS,
-                        model=MODEL, model_settings=COMPACTOR_SETTINGS)
+                        model=PLANNER_MODEL, model_settings=COMPACTOR_SETTINGS)
 
 
 # ================= 卡壳教练（软干预：hint 后给具体方向，不重规划） =================
@@ -288,4 +290,4 @@ COACH_INSTRUCTIONS = """你是 SecAI 的卡壳教练（分析型）。执行者�
 
 coach_agent = Agent(name="Coach", instructions=COACH_INSTRUCTIONS,
                     tools=intel_tools(),
-                    model=MODEL, model_settings=COACH_SETTINGS)
+                    model=PLANNER_MODEL, model_settings=COACH_SETTINGS)

@@ -31,6 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gdb binutils \
         hydra john hashcat \
         unzip \
+        openjdk-21-jre-headless apktool \
+        nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
 # ② Go/Rust 单二进制工具（GitHub Release 下载；Kali 专有、不在 Debian trixie 源）
@@ -66,6 +68,18 @@ RUN set -e; \
     wait; \
     rm -rf /tmp/dl_*; \
     ls -lh /usr/local/bin/nuclei /usr/local/bin/amass /usr/local/bin/feroxbuster 2>/dev/null || true
+
+# ②-2 反编译与运行时工具（jadx 单二进制 + asar 全局包）
+#   jadx：Android APK 反编译为 Java/Smali；asar：Electron 解包；npm：Node 供应链/CI 投毒
+RUN set -e; \
+    mkdir -p /tmp/jadx && \
+    curl -fsSL -o /tmp/jadx/jadx.zip \
+        "https://github.com/skylot/jadx/releases/download/v1.4.7/jadx-1.4.7.zip" \
+    && unzip -qo /tmp/jadx/jadx.zip -d /opt/jadx \
+    && ln -s /opt/jadx/bin/jadx /usr/local/bin/jadx \
+    && ln -s /opt/jadx/bin/jadx-gui /usr/local/bin/jadx-gui \
+    && rm -rf /tmp/jadx; \
+    npm install -g asar
 
 WORKDIR /app
 
