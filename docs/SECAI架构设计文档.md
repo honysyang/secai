@@ -739,9 +739,13 @@ SECAI/
 15. **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出不等 LLM finalize；多 flag 题明确告知剩余面数。
 16. **解法模板化（正向复用）**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式；与 field_notes（负向死路）分工，形成正负双向跨题复用。
 17. **软干预教练（Coach）**：hint 后仍卡壳触发 Coach 给 1~2 条具体方向，写题级黑板半持久（verified=False），不重规划不换题，只做轻量纠偏。
-18. **多模型灾备池（ModelPool）**：主模型 + `ESCALATION_MODELS` 候选池，额度/限流/鉴权/状态码失败时自动 `next()` 切换，保持同一 `SQLiteSession` 继续作答；所有模型耗尽抛 `ModelExhaustedError` 交外层调度器。
+18. **多模型灾备池（ModelPool）**：分析型 Agent（Manager/Planner/Reporter/Coach/Compactor）默认主模型（glm），执行型 Agent（Executor/Subtask）默认 fast 模型（deepseek-v4-flash）；主模型额度/限流/鉴权/状态码失败时自动 `next()` 切换候选模型（`ESCALATION_MODELS`），保持同一 `SQLiteSession` 继续作答；所有模型耗尽抛 `ModelExhaustedError` 交外层调度器。
 19. **模型惰性治理（自救优先）**：连续 `MODEL_SWITCH_TURNS` 轮零增量先自救（解锁新技能 + 阶段重置 + 上下文压缩），自救 `MODEL_SELF_RESCUE_MAX` 次无效再切换候选模型接管；阈值均可环境变量配置。
-20. **统一日志系统**：终端 + `data/logs/secai-YYYYMMDD.log` 双写，级别分级（INFO/WARN/ERROR）带颜色；黑板、flag、漏洞、证据等关键结论醒目打印，DEBUG 细节只落盘不刷屏。
+20. **比赛连续性保险**：`app/main.py` 入口对未预期异常退出（模型/网络/工具/进程异常）自动重启，指数退避，默认最多 5 次；平台 `TaskEnded` / `TaskNotFound` 正常终止不触发重启。
+21. **题目列表空值保护**：`list_challenges` 返回空列表或非列表时，不静默误判为「全部完成」，而是抛异常走重试逻辑，避免漏题提前退出。
+22. **错误提交熔断纠偏**：`wrong_submit_count` 叠加「期间无任何信息增量」且阈值 6 次才熔断，避免误杀越权/支付类快题的多次试错得分模式。
+23. **槽位泄漏双保险**：平台侧 running 但本地未活跃容器自动检测并关闭；`close_challenge` 失败进入重试队列，避免名额静默泄漏。
+24. **统一日志系统**：终端 + `data/logs/secai-YYYYMMDD.log` 双写，级别分级（INFO/WARN/ERROR）带颜色；黑板、flag、漏洞、证据等关键结论醒目打印，DEBUG 细节只落盘不刷屏。
 
 ### 16.2 实战教训
 

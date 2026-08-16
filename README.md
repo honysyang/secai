@@ -80,8 +80,9 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 | 特性 | 说明 |
 |---|---|
 | 成本治理 | 爆破/hint 预算 → 无感知换脑（switch）→ 挂起（suspend），token + 时钟双档 |
-| 多模型灾备池 | 额度/限流/鉴权/状态码失败自动切换候选模型，保持同一 session 继续作答 |
+| 多模型灾备池 | 分析型 Agent 默认主模型（glm），执行型 Agent 默认 fast 模型（deepseek-v4-flash）；额度/限流/鉴权/状态码失败自动切换候选模型，保持同一 session 继续作答 |
 | 模型惰性治理 | 连续无进展优先自救换思路，自救无效切换模型接管；自救时压缩上下文防污染历史 |
+| 比赛连续性保险 | 未预期异常退出后自动重启（指数退避，默认最多 5 次），避免单点崩溃导致全程退出 |
 
 ### 2.4 可观测性与声明式内容
 
@@ -200,17 +201,23 @@ pyyaml>=6.0              # 声明式内容解析
 
 ```bash
 cp .env.example .env
-# 编辑 .env，至少填主模型网关：
+# 编辑 .env，主模型网关必填：
 #   LLM_API_KEY=YOUR_API_KEY
-#   LLM_BASE_URL=https://api.deepseek.com/v1   # 可省略末尾 /v1，代码自动补齐
-#   LLM_MODEL=deepseek-chat
+#   LLM_BASE_URL=https://api.deepseek.com/v1
+#   LLM_MODEL=glm-5.2-agent-chanllenge
 #
 # 跑分模式还需：
 #   BENCHMARK_TOKEN=跑分平台 token
 #   BENCHMARK_BASE_URL=跑分平台地址
 #
-# 内网靶场需 VPN：
-#   VPN_CONFIG=/path/to/xxx.ovpn
+# 多模型灾备池（ESCALATION_MODELS 单行 JSON 数组）：
+#   ESCALATION_MODELS=[{"model":"deepseek-v4-flash","base_url":"...","api_key":"...","role":"fast"},{"model":"deepseek-v4-pro","base_url":"...","api_key":"...","role":"strong"}]
+#   - role=fast  执行者首选（快速迭代工具调用）
+#   - role=strong 规划/教练/报告/压缩首选（深度分析）
+#   - 不填 role  默认兜底灾备
+#
+# 内网靶场需 VPN（推荐把 ovpn 完整内容直接写入 VPN_CONFIG 环境变量）：
+#   VPN_CONFIG=<粘贴 ovpn 完整内容>
 ```
 
 > 完整配置项说明见 [docs/USER_GUIDE.md](docs/USER_GUIDE.md#6-配置参考)。
