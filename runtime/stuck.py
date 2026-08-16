@@ -325,7 +325,8 @@ def _format_failed_actions(items: List[Any], max_chars: int = 4000) -> str:
     return text or "（未提取到动作）"
 
 
-async def compact_session(ctx: TaskContext, session, compactor_model=None) -> Optional[str]:
+async def compact_session(ctx: TaskContext, session, compactor_model=None,
+                          model_pool=None) -> Optional[str]:
     """自救时对单题 session 进行历史压缩。
 
     使用 compactor_agent 对当前 session 历史进行摘要；摘要成功后清空 SQLiteSession

@@ -33,7 +33,7 @@ from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
 from adapters.config import (BENCHMARK_BASE_URL, BENCHMARK_TOKEN,
                              BASE_URL, MODEL_NAME, API_KEY, VPN_CONFIG,
-                             FAST_MODEL_NAME, PLANNER_MODEL_NAME)
+                             FAST_MODEL_NAME)
 
 from core.context_manager import compact_if_needed
 import adapters.db as db_mod
@@ -330,7 +330,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         brief += (f"# 历史成功解法参考（同类题，可优先尝试）\n{sol_hint}\n\n")
     brief += ("选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
               "不要自己调用 list_challenges / start_challenge / close_challenge。")
-    # 模型灾备池：执行者池优先用 FAST_MODEL，未配置则主模型兜底。
+    # 模型灾备池：执行者优先 FAST_MODEL（deepseek-v4-flash），glm 兜底。
     # 传入 model_pool 表示由外层统一分配（全局共享，避免每题重建）；
     # 未传入则兜底创建独立池（兼容单测/旧调用）。
     if model_pool is None:
@@ -502,7 +502,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                          f"，解锁技能 {stuck_action.extra_skills}，阶段重置")
                 # 自救时压缩上下文：用 compactor_agent 摘要历史并清空 session
                 summary = await compact_session(
-                    ctx, session, getattr(executor, "model", None))
+                    ctx, session, getattr(executor, "model", None),
+                    model_pool=model_pool)
                 if summary:
                     log_info(f"[self-rescue] 单题 {code} 历史压缩成功")
                 else:
@@ -636,9 +637,9 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     hooks = EventStreamHooks(workdir, "generic")
 
     # 外层 Agent 全局模型池（与单题 executor 内部模型池隔离，互不污染）；
-    # 分析型 Agent 用 PLANNER_MODEL（deepseek-v4-pro 等强模型），主模型 glm 兜底。
+    # 主模型 glm 优先，deepseek（flash/pro）仅作灾备兜底。
     global global_model_pool
-    global_model_pool = ModelPool(preferred_name=PLANNER_MODEL_NAME)
+    global_model_pool = ModelPool()
 
     log_info(f"== 模型池就绪：{global_model_pool} ==")
     # 同步更新外层 Agent 默认模型为当前模型池入口，避免首次调用仍用旧默认
@@ -706,7 +707,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
-    # 执行者共享模型池：FAST_MODEL（deepseek-v4-flash）优先，主模型 glm 兜底；
+    # 执行者共享模型池：FAST_MODEL（deepseek-v4-flash）优先，glm 兜底；
     # 全局共享一份，避免每题新建池导致灾备状态丢失。
     fast_pool = ModelPool(preferred_name=FAST_MODEL_NAME)
     attempts: Dict[str, int] = {}
@@ -750,9 +751,13 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                 except ValueError:
                     pass
 
-            # 拉题目列表（网络抖动/5xx 重试，不因偶发异常崩溃退出）
+            # 拉题目列表（网络抖动/5xx/空列表重试，不因偶发异常崩溃退出）
             try:
                 challenges = await asyncio.to_thread(client.list_challenges)
+                if not isinstance(challenges, list) or not challenges:
+                    # 空列表不是「全部完成」，而是异常（任务未开始/已结束/被清空），
+                    # 必须重试并最终报错，避免静默误判为全部完成而提前退出、漏题。
+                    raise ValueError("题目列表为空")
                 list_fail_streak = 0
             except (TaskEnded, TaskNotFound) as e:
                 fatal_reason = str(e)

@@ -11,7 +11,7 @@ import time
 
 from agents import Agent, ModelSettings, RunContextWrapper
 
-from adapters.config import MODEL, PLANNER_MODEL, FAST_MODEL
+from adapters.config import MODEL, FAST_MODEL
 
 
 
@@ -58,7 +58,7 @@ MANAGER_INSTRUCTIONS = """你是 SecAI 的管理者，负责立法而非执行�
 只输出宪章本身，不要寒暄。宪章将被注入执行者的系统提示，并作为终止核对的依据。"""
 
 manager_agent = Agent(name="Manager", instructions=MANAGER_INSTRUCTIONS,
-                      model=PLANNER_MODEL, model_settings=MANAGER_SETTINGS)
+                      model=MODEL, model_settings=MANAGER_SETTINGS)
 
 
 # ================= 规划师（任务深度分析 → 作战计划） =================
@@ -86,7 +86,7 @@ PLANNER_INSTRUCTIONS = """你是 SecAI 的作战规划师（分析主智能体�
 
 planner_agent = Agent(name="Planner", instructions=PLANNER_INSTRUCTIONS,
                       tools=intel_tools(),
-                      model=PLANNER_MODEL, model_settings=PLANNER_SETTINGS)
+                      model=MODEL, model_settings=PLANNER_SETTINGS)
 
 
 # ================= 执行者（按角色组装，渐进披露技能） =================
@@ -118,7 +118,9 @@ EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的
    多个独立分支用 spawn_subtask。shell 只用于 fuzz 覆盖不了的场景。
 5. 发现 flag 系统会机械代提交并回执：correct=true 且有剩余面数→继续找下一面；
    全部通关系统会自动结束本题。
-6. 卡壳时：先 find_skills / list_knowledge 查打法；提示来了先深度分析再动手。
+6. 卡壳时：先 find_skills / list_knowledge 查打法；查不到现成打法也禁止停下，
+   走第一性原理自己解决——技术栈反推 + 差异实验（distinguish/fuzz 找响应差异点）
+   构造最小探测，直到拿到 flag 或凭证据判死；提示来了先深度分析再动手。
 7. 拿到可复用攻击链后用 remember 沉淀 POC/知识/技能（只在真正有价值时）。
 8. 阶段随进展用 set_phase 切换；任务完成或证据枯竭时调用 finalize 提交结论。
 9. 确认漏洞/凭据/源码后立即沿最短路径拿 flag；系统注入的[闭环]指令优先级最高，按指令执行。
@@ -254,7 +256,7 @@ REPORTER_INSTRUCTIONS = """你是 SecAI 的报告者，负责把执行过程翻�
 只输出这两节。不评价、不抒情、不建议。"""
 
 reporter_agent = Agent(name="Reporter", instructions=REPORTER_INSTRUCTIONS,
-                       model=PLANNER_MODEL, model_settings=REPORTER_SETTINGS)
+                       model=MODEL, model_settings=REPORTER_SETTINGS)
 
 
 # ================= 历史压缩器（上下文超阈值时调用） =================
@@ -267,7 +269,7 @@ COMPACTOR_INSTRUCTIONS = """你是对话历史的压缩器。输入包含「更�
 只输出摘要本身，不要寒暄。"""
 
 compactor_agent = Agent(name="Compactor", instructions=COMPACTOR_INSTRUCTIONS,
-                        model=PLANNER_MODEL, model_settings=COMPACTOR_SETTINGS)
+                        model=MODEL, model_settings=COMPACTOR_SETTINGS)
 
 
 # ================= 卡壳教练（软干预：hint 后给具体方向，不重规划） =================
@@ -290,4 +292,4 @@ COACH_INSTRUCTIONS = """你是 SecAI 的卡壳教练（分析型）。执行者�
 
 coach_agent = Agent(name="Coach", instructions=COACH_INSTRUCTIONS,
                     tools=intel_tools(),
-                    model=PLANNER_MODEL, model_settings=COACH_SETTINGS)
+                    model=MODEL, model_settings=COACH_SETTINGS)
