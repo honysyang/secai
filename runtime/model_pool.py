@@ -17,8 +17,8 @@ from openai import APIError, APIStatusError, APITimeoutError, AuthenticationErro
 from openai import AsyncOpenAI
 from agents import OpenAIChatCompletionsModel
 
-from adapters.config import API_KEY, BASE_URL, MODEL_NAME, get_model
-from runtime.budget import ESCALATION_MODELS
+from adapters.config import (API_KEY, BASE_URL, ESCALATION_MODELS, MODEL_NAME,
+                             PLANNER_MODEL_NAME, FAST_MODEL_NAME, get_model)
 
 
 @dataclass
@@ -118,24 +118,28 @@ def is_permanent_model_failure(exc: Exception) -> bool:
 
 
 class ModelPool:
-    """管理主模型 + 候选模型，支持失败时切换与冷却重试。"""
+    """管理主模型 + 候选模型，支持失败时切换与冷却重试。
+
+    preferred_name：指定首选模型名（如 fast/strong 模型），把它提到池子最前作为当前模型。
+                   双模型分工：执行者池用 fast，外层分析池用 strong，主模型兜底。
+    """
 
     COOLDOWN_SECONDS = 30  # 暂时性失败后的冷却时间（冷却后可重试同模型）
 
-    def __init__(self) -> None:
+    def __init__(self, preferred_name: Optional[str] = None) -> None:
         self._entries: List[ModelEntry] = []
         self._used: List[str] = []
         self._failed: Set[str] = set()                 # 永久失败（鉴权/模型名错误）
         self._transient_failed: Dict[str, float] = {}  # 暂时失败 name -> 失败时间戳
 
         # 主模型（延迟初始化已触发，这里安全构造真实实例）
-        self._entries.append(ModelEntry(
+        entries = [ModelEntry(
             name=MODEL_NAME,
             base_url=BASE_URL,
             api_key=API_KEY,
             model=get_model(),
             is_default=True,
-        ))
+        )]
 
         # 灾备候选模型
         for item in ESCALATION_MODELS:
@@ -151,12 +155,21 @@ class ModelPool:
                 continue
             client = AsyncOpenAI(base_url=base_url, api_key=api_key or None)
             model = OpenAIChatCompletionsModel(model=name, openai_client=client)
-            self._entries.append(ModelEntry(
+            entries.append(ModelEntry(
                 name=name,
                 base_url=base_url,
                 api_key=api_key,
                 model=model,
             ))
+
+        # 双模型分工：把 preferred_name 提到最前作为当前首选模型；主模型仍在池中兜底
+        if preferred_name:
+            preferred_idx = next(
+                (i for i, e in enumerate(entries) if e.name == preferred_name), None)
+            if preferred_idx is not None and preferred_idx > 0:
+                entries.insert(0, entries.pop(preferred_idx))
+
+        self._entries = entries
 
     @property
     def default(self) -> ModelEntry:
@@ -207,6 +220,8 @@ class ModelPool:
         2. 返回第一个可用候选（主/灾备之间可多轮切换）；
         3. 全部不可用返回 None（暂时失败由外层等待冷却后重试）。
         """
+        if not current_name:
+            current_name = self.current.name
         for entry in self._entries:
             if self._available(entry, current_name):
                 if entry.name not in self._used:

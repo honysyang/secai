@@ -1,7 +1,7 @@
 ---
 name: 沙箱逃逸专家
-pattern: "^e2"
-playbooks: sandbox_escape, unknown_target_sop
+pattern: "^e2|sandbox|python exec|ProcessPoolExecutor|builtins.exec|pickle|反序列化|deserialization|flowlab|__reduce__|code execution|code runner|shared worker"
+playbooks: sandbox_escape, python-exec-hook-cross-user-capture, ai-assistant-secret-gate-pickle-rce, unknown_target_sop
 ---
 
 ## 定位

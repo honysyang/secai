@@ -157,37 +157,82 @@ def find_skills(query: str, limit: int = 5) -> List[Dict[str, object]]:
     return matches
 
 
-# 渐进披露注入预算（对齐 SecAI/secai 的 to_prompt 整粒度截断）：
-# 防止技能全文无限膨胀系统提示——单轮 input 曾达 2.5 万 token。
-SKILL_MAX_PER_BODY = 1200    # 单篇技能正文上限（字符），超长截断
-SKILL_MAX_COUNT = 3          # 同屏最多注入的技能篇数（最新披露优先）
-SKILL_MAX_TOTAL = 8000       # 技能注入总预算（字符），整粒度截断
+# 渐进披露注入预算：用户要求“不考虑成本，只需解题”，
+# 因此大幅放宽总预算，让百度 Agent+ 攻防挑战赛全部 22 个沉淀打法都能常驻注入。
+SKILL_MAX_PER_BODY = 2000    # 单篇技能正文上限（字符），超长截断
+SKILL_MAX_COUNT = 3          # 同屏最多注入的「渐进披露」技能篇数（最新披露优先）
+SKILL_MAX_TOTAL = 50000      # 技能注入总预算（字符），整粒度截断
+
+# 核心常驻技能：全局纪律 + 跑分作战 + 效率 + 百度 Agent+ 攻防挑战赛 22 个沉淀打法
+# 全部开局注入，不参与 SKILL_MAX_COUNT 的 3 篇预算限制。用户要求“不考虑成本，只需解题”。
+CORE_SKILLS = {
+    "arsenal_index",
+    "token_optimizer",
+    "prompt_optimizer",
+    "scoring_runner",
+    # 百度 Agent+ 攻防挑战赛 22 题沉淀打法（全部常驻）
+    "ai-assistant-secret-gate-pickle-rce",
+    "android-apk-flag-extraction",
+    "android-apk-prompt-leak-ctf",
+    "android-apk-static-rev-flag",
+    "android-apk-shuffled-dex-signature-block-xor-key",
+    "blind-cmd-injection-blacklist-bypass",
+    "capability-ref-flag-hiding",
+    "default-password-pattern-derivation",
+    "electron-asar-reverse-license",
+    "file-read-containment-root-bypass",
+    "gateway-path-keyword-bypass-backslash",
+    "go-signed-ref-idor-detail-view",
+    "int32-overflow-price-bypass",
+    "llm-agent-controlled-model-endpoint",
+    "llm-agent-file-preview-abuse",
+    "npm-supply-chain-ci-exfil",
+    "object-storage-signed-url-proxy-read",
+    "payment-callback-sign-forgery",
+    "python-exec-hook-cross-user-capture",
+    "second-order-sqli-waf-unicode-bypass",
+    "shell-injection-blacklist-url-decode-bypass",
+    "vite-dev-server-source-leak",
+}
 
 
 def load_skill_bodies(names: List[str]) -> str:
     """把若干技能名拼成一段注入文本（用于执行者系统提示），带预算。
 
-    预算策略：同屏最多 SKILL_MAX_COUNT 篇、每篇最多 SKILL_MAX_PER_BODY 字、
-    总预算 SKILL_MAX_TOTAL 字符；最新披露的优先；装不下整个技能就跳过，
-    不从中途切半篇（避免把打法切成无法执行的半截）。
+    策略：所有 CORE_SKILLS 无条件开局注入（用户要求“不考虑成本，只需解题”），
+    不受 SKILL_MAX_COUNT 限制；names 中不在 CORE_SKILLS 的技能作为渐进披露，
+    同屏最多 SKILL_MAX_COUNT 篇、每篇最多 SKILL_MAX_PER_BODY 字，最新披露优先。
     """
     parts = []
     char_count = 0
-    for name in list(names)[-SKILL_MAX_COUNT:]:  # 最新披露的优先
+
+    def _append(name: str) -> bool:
+        nonlocal char_count
         s = get_skill(name)
         if s is None or not s.body:
-            continue
+            return False
         body = s.body
         if len(body) > SKILL_MAX_PER_BODY:
             body = body[:SKILL_MAX_PER_BODY] + "\n…[截断，完整打法用 find_skills 按需取]"
         title = f"{s.name}" + (f"（{s.category}）" if s.category else "")
         block = f"## 打法《{title}》\n{body}"
         if char_count + len(block) > SKILL_MAX_TOTAL:
-            break  # 整粒度截断：装不下就跳过，不从中间切
+            return False  # 整粒度截断：装不下就跳过，不从中间切
         parts.append(block)
         char_count += len(block) + 2
+        return True
+
+    # 核心常驻技能：无条件全部注入（优先，确保关键打法常驻）
+    for name in CORE_SKILLS:
+        _append(name)
+
+    # 渐进披露技能：最新披露优先，最多 SKILL_MAX_COUNT 篇
+    progressive = [n for n in names if n not in CORE_SKILLS]
+    for name in progressive[-SKILL_MAX_COUNT:]:
+        _append(name)
+
     result = "\n\n".join(parts)
-    if parts and len(names) > len(parts):
+    if parts and char_count >= SKILL_MAX_TOTAL:
         result += "\n\n[技能上下文已截断：更多打法用 find_skills 按需检索]"
     return result
 

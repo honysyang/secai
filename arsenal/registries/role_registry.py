@@ -35,6 +35,12 @@ TOOL_USAGE_HINT = (
 )
 
 
+# 核心常驻 playbook：通用纪律/导航类技能，开局就解锁且全程在线
+# （arsenal_index=武器库导航；token_optimizer=上下文经济；prompt_optimizer=精准指令）。
+# 与 skill_registry.CORE_SKILLS 保持一致（同一组技能名，勿单改）。
+CORE_PLAYBOOKS = ["arsenal_index", "token_optimizer", "prompt_optimizer", "scoring_runner"]
+
+
 # 所有角色共用的第一性原理探索提示：技能库无现成打法时的兜底方法论。
 # 常驻注入（追加到 role.style），不占 playbook 名额——playbook 走渐进披露，
 # 会被 load_skill_bodies 的 3 篇同屏预算挤掉，兜底方法论必须全程在线。
@@ -88,8 +94,8 @@ def assign_role(code: str, description: str = "",
     fallback: dict | None = None
 
     def _build(r: dict, matched_by: str) -> dict:
-        # 所有角色统一注入「武器库导航」基础技能（告知 POC/载荷/知识/工具等资产怎么用）
-        playbooks = ["arsenal_index"] + [p for p in r["playbooks"] if p != "arsenal_index"]
+        # 所有角色统一注入核心常驻 playbook（导航 + 提效纪律），开局就解锁且全程在线
+        playbooks = CORE_PLAYBOOKS + [p for p in r["playbooks"] if p not in CORE_PLAYBOOKS]
         return {"role": r["role"],
                 "style": r["style"] + TOOL_USAGE_HINT,
                 "playbooks": playbooks, "matched_by": matched_by}

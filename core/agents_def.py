@@ -12,6 +12,9 @@ import time
 from agents import Agent, ModelSettings, RunContextWrapper
 
 from adapters.config import MODEL
+
+
+
 from demo_tools import (ALL_TOOLS, finish_subtask, query_skills, list_knowledge,
                         get_knowledge, list_tools)
 from arsenal.registries.skill_registry import load_skill_bodies
@@ -215,6 +218,7 @@ def build_executor(role: dict, charter: str, brief: str,
     这样 hooks.py 在运行时追加技能后，下一轮系统提示会自动带上新打法。
 
     可通过 model/model_settings 注入模型池当前模型，支持灾备切换。
+    默认使用主模型 MODEL（glm-5.2-agent-chanllenge 优先），调用方传入 model 时覆盖。
     """
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
         return _render_executor_instructions(ctx, role, charter, brief, field_notes)
@@ -229,6 +233,7 @@ def build_subtask_executor(role: dict, charter: str, brief: str,
 
     子任务用独立 session（上下文隔离），结果通过 finish_subtask 结构化回传，
     主 Agent 只拿到 summary/findings/flag，不接触子任务的海量工具输出。
+    默认使用主模型 MODEL（glm-5.2-agent-chanllenge 优先），调用方传入 model 时覆盖。
     """
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
         return (_render_executor_instructions(ctx, role, charter, brief, field_notes)

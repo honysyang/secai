@@ -1,7 +1,7 @@
 ---
 name: TSecBench跑分专员
 pattern: "TSec|Benchmark|跑分|BENCHMARK_TOKEN|tsecbench"
-playbooks: unknown_target_sop
+playbooks: scoring_runner, unknown_target_sop
 ---
 
 ## 定位

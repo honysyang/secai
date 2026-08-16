@@ -1,7 +1,7 @@
 ---
 name: 云攻击专员
-pattern: "aws|azure|azurite|blob|s3|lambda|firebase|supabase|gcp|kubernetes|k8s|bucket|对象存储|云存储"
-playbooks: aws, azure_blob_storage, kubernetes, unknown_target_sop
+pattern: "aws|azure|azurite|blob|s3|lambda|firebase|supabase|gcp|kubernetes|k8s|bucket|桶|对象存储|云存储|signed url|oss|bos|storage"
+playbooks: aws, azure_blob_storage, object-storage-signed-url-proxy-read, unknown_target_sop
 ---
 
 ## 定位

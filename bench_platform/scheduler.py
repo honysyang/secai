@@ -27,12 +27,12 @@ ENDGAME_DECAY = 0.6
 _HINT_EARLY_TURNS = 2
 _SKIP_EARLY_TURNS = 4
 _HINT_DIFF_BUDGET = {
-    "easy":   {"hint": 6,  "skip": 12},
-    "medium": {"hint": 8,  "skip": 20},
-    "hard":   {"hint": 10, "skip": 25},
+    "easy":   {"hint": 4,  "skip": 8},
+    "medium": {"hint": 6,  "skip": 12},
+    "hard":   {"hint": 8,  "skip": 18},
 }
-_DEFAULT_HINT_BUDGET = {"hint": 8, "skip": 16}   # 难度未知时的兜底
-SINGLE_EMPTY_TURNS = 6   # 单题连续 N 轮无工具调用 → 机械换题（空转也放弃，与难度无关）
+_DEFAULT_HINT_BUDGET = {"hint": 6, "skip": 12}   # 难度未知时的兜底
+SINGLE_EMPTY_TURNS = 4   # 单题连续 N 轮无工具调用 → 机械换题（空转也放弃，与难度无关）
 
 # 触发“提前放弃”的题目指纹关键词（云存储 / SaaS / 二元结果类）
 # 注意：不要加入过于宽泛的词（如 container），避免误触发普通 Web 题

@@ -138,6 +138,7 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
 
         notes.append(f"[系统·提交铁律] {f} → {json.dumps(r, ensure_ascii=False)[:200]}")
         if not r.get("correct"):
+            c.wrong_submit_count += 1
             continue
 
         # ---- R1 核心：correct=true 后的机械判决，不等 LLM finalize ----

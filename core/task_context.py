@@ -50,3 +50,7 @@ class TaskContext:
     fatal: str = ""                           # 致命错误标记（task_ended/task_not_found），主循环检测后终止
     turn_net_fail: bool = False               # 本轮是否命中网络不可达（hooks 检测，main 每轮清零）
     net_fail_turns: int = 0                   # 连续网络不可达轮数（≥2 快速换题，防 VPN 死磕）
+    # ---- 单题墙上时钟 + 提交错误熔断（高分作战硬约束） ----
+    challenge_start_ts: float = 0.0           # 本题开始攻击的 monotonic 时间戳
+    wallclock_budget: int = 0                 # 本题墙上时间预算（秒），由主循环按 difficulty 设置
+    wrong_submit_count: int = 0               # 本题累计错误提交次数（≥3 全错则标记 stuck）

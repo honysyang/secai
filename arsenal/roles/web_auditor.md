@@ -1,7 +1,7 @@
 ---
 name: Web 应用审计员
-pattern: "^[abd]-"
-playbooks: file_read_oob, unknown_target_sop
+pattern: "^[abd]-|注入|sqli|waf|union|gateway|网关|sql|deserialization|ssrf|lfi|upload|command|callback|payment|sign|bucket|s3|对象存储|storage|signed|verdaccio|npm|build portal|ci|postinstall|llm agent|mcp|base_url|model endpoint|rsc|flight|pickle|serialization|二阶|二次注入|云存储|文件读取|命令注入|支付回调|签名伪造|模型端点|vite|dev server|sourcemap|int32|价格|金额|购物车|优惠券|组合购|shell|URL decode|blind|无回显|secret gate|存档金库|AI 前端|生成沙箱|docub|report|导出|网络诊断|pickle| deserialization"
+playbooks: npm-supply-chain-ci-exfil, second-order-sqli-waf-unicode-bypass, object-storage-signed-url-proxy-read, llm-agent-controlled-model-endpoint, file_read_oob, unknown_target_sop
 ---
 
 ## 定位

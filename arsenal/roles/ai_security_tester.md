@@ -1,7 +1,7 @@
 ---
-name: AI 安全测试员
-pattern: "ai_security|prompt|llm"
-playbooks: ai_security, tool_misuse, unknown_target_sop
+name: AI 系统安全测试员
+pattern: "ai_security|prompt|llm|agent|mcp|base_url|model endpoint|模型端点|sentinel|ai coach|ai assistant|总结型注入|system prompt|pickle|model|存档金库|secret gate|file preview|session download|会话下载"
+playbooks: ai_security, tool_misuse, llm-agent-controlled-model-endpoint, llm-agent-file-preview-abuse, ai-assistant-secret-gate-pickle-rce, unknown_target_sop
 ---
 
 ## 定位

@@ -33,6 +33,7 @@ from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from core.charter import save_charter
 from adapters.config import (BENCHMARK_BASE_URL, BENCHMARK_TOKEN,
                              BASE_URL, MODEL_NAME, API_KEY, VPN_CONFIG)
+
 from core.context_manager import compact_if_needed
 import adapters.db as db_mod
 from demo_tools import build_default_tools
@@ -327,8 +328,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         brief += (f"# 历史成功解法参考（同类题，可优先尝试）\n{sol_hint}\n\n")
     brief += ("选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
               "不要自己调用 list_challenges / start_challenge / close_challenge。")
-    # 模型池：主模型 + ESCALATION_MODELS 灾备候选
+    # 模型灾备池：默认以主模型（glm-5.2-agent-chanllenge）优先，失败后按 ESCALATION_MODELS 切换 deepseek-v4-flash / deepseek-v4-pro。
     model_pool = ModelPool()
+
     executor = build_executor(role, charter, brief,
                               field_notes=load_notes_for(code) or _load_field_notes(),
                               model=model_pool.current.model)
@@ -354,10 +356,35 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     db = db_mod.get_db()
     if db is not None:
         db.task_started(code, desc)  # 登记题目生命周期（监控页任务列表/状态）
+
+    # 单题墙上时间预算：按难度分档硬顶（高分作战硬约束）
+    _WALLCLOCK_BUDGET = {
+        "easy": 10 * 60,    # 10 分钟
+        "medium": 15 * 60,  # 15 分钟
+        "hard": 25 * 60,    # 25 分钟
+    }
+    ctx.wallclock_budget = _WALLCLOCK_BUDGET.get(str(difficulty).lower(), 15 * 60)
+    ctx.challenge_start_ts = time.monotonic()
+    ctx.wrong_submit_count = 0
+
     next_input = f"开始攻击本题容器：{addrs}。先做信息收集，识别技术栈与入口。"
     try:
         while True:
             turn_count += 1
+
+            # 墙上时钟硬顶：单题超时强制 stuck，释放槽位
+            elapsed = time.monotonic() - ctx.challenge_start_ts
+            if elapsed >= ctx.wallclock_budget:
+                log_warn(f"[skip] 单题 {code} 墙上时间 {elapsed:.0f}s 超过预算 {ctx.wallclock_budget}s，机械换题")
+                outcome = "stuck"
+                break
+
+            # 错误提交熔断：同一题连续 3 次错误提交（不是重复）说明方向错误
+            if ctx.wrong_submit_count >= 3:
+                log_warn(f"[skip] 单题 {code} 错误提交已达 {ctx.wrong_submit_count} 次，机械换题")
+                outcome = "stuck"
+                break
+
             # 成本治理：挂起档（token / 时钟到档即停止本次尝试腾槽）
             used = ctx.token_usage.get("total", 0) - cost_base_tokens
             # token 成本档位触发无感知换脑（灾备池）
@@ -606,6 +633,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     # 外层 Agent 全局模型池（与单题 executor 内部模型池隔离，互不污染）
     global global_model_pool
     global_model_pool = ModelPool()
+
     log_info(f"== 模型池就绪：{global_model_pool} ==")
     # 同步更新外层 Agent 默认模型为当前模型池入口，避免首次调用仍用旧默认
     if global_model_pool is not None:
@@ -888,13 +916,30 @@ if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if a != "--resume"]
     task = args[0] if args else build_default_task()
     role_hint = args[1] if len(args) > 1 else ""
-    try:
-        out = asyncio.run(run_task(task, role_hint, resume=resume))
-    except KeyboardInterrupt:
-        log_warn("== 已中断 ==")
-        sys.exit(130)
-    except Exception as e:
-        # 兜底：任何未预期异常都不裸崩，记录后以非零码退出
-        log_error(f"== 未预期异常退出：{type(e).__name__}: {str(e)[:300]} ==")
-        sys.exit(1)
-    log_info(f"最终状态：{json.dumps({k: v for k, v in out.items() if k != 'report'}, ensure_ascii=False)}")
+
+    # 比赛连续性保险：未预期异常退出后自动重启（指数退避），避免单点崩溃导致全程退出。
+    # 注意：平台 TaskEnded / TaskNotFound 已在 run_task 内部正常终止，不会触发此重启；
+    # 只有真正未捕获异常（模型/网络/工具/进程异常）才重启。
+    SECAI_MAX_RESTARTS = int(os.getenv("SECAI_MAX_RESTARTS", "5"))
+    SECAI_RESTART_DELAY = float(os.getenv("SECAI_RESTART_DELAY", "2"))
+    out = None
+    for restart in range(SECAI_MAX_RESTARTS + 1):
+        try:
+            out = asyncio.run(run_task(task, role_hint, resume=resume))
+            break  # 正常结束
+        except KeyboardInterrupt:
+            log_warn("== 已中断 ==")
+            sys.exit(130)
+        except Exception as e:
+            if restart >= SECAI_MAX_RESTARTS:
+                log_error(f"== 已达最大重启次数 {SECAI_MAX_RESTARTS}，终止 ==")
+                sys.exit(1)
+            delay = SECAI_RESTART_DELAY * (2 ** restart)
+            log_error(f"== 未预期异常退出（{restart + 1}/{SECAI_MAX_RESTARTS}）："
+                      f"{type(e).__name__}: {str(e)[:300]}；{delay:.1f}s 后重启 ==")
+            time.sleep(delay)
+            # 保留 resume 参数，让重启后尽可能复用现场（field_notes / 平台状态）
+            resume = True
+
+    if out is not None:
+        log_info(f"最终状态：{json.dumps({k: v for k, v in out.items() if k != 'report'}, ensure_ascii=False)}")

@@ -86,11 +86,19 @@ def submit_flag(ctx: RunContextWrapper[TaskContext], unique_code: str, flag: str
     """提交 flag。返回 correct（是否正确）/awarded（得分）/cumulative_score 等。
 
     重复提交同一正确 flag 返回 duplicate（幂等，跳过即可）。
+    错误提交会累计到本题的 wrong_submit_count，用于熔断恋战。
     """
+    c = ctx.context
+    if flag in c.submitted:
+        return _ok({"note": "该 flag 已提交过，跳过", "duplicate": True, "flag": flag})
+    c.submitted.add(flag)
     try:
-        return _ok(_client().submit_flag(unique_code, flag))
+        r = _client().submit_flag(unique_code, flag)
     except Exception as e:
         return _err(ctx, e)
+    if not r.get("correct") and not r.get("duplicate"):
+        c.wrong_submit_count += 1
+    return _ok(r)
 
 
 @function_tool
