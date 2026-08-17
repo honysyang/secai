@@ -8,6 +8,7 @@ TaskContext 通过 Runner.run(context=...) 注入；disclosed_skills 是「多 S
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -35,7 +36,7 @@ from adapters.config import (VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL,
 from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFound
 
 PREVIEW = 4000
-ARTIFACT_SPILL_THRESHOLD = 800  # 工具输出超过此字符数就外置到 artifacts/
+ARTIFACT_SPILL_THRESHOLD = 4000  # 工具输出超过此字符数才外置到 artifacts/
 BLACKBOARD_MAX_ENTRIES = 50     # 黑板容量上限，超出淘汰最旧条目（优先淘汰 done/failed）
 BLACKBOARD_FILE = "blackboard.json"  # 黑板落盘文件名（跨尝试/挂起恢复用）
 
@@ -189,6 +190,38 @@ def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     if note:
         tail += f"\n{note}"
     return text[:ARTIFACT_SPILL_THRESHOLD] + tail
+
+
+@function_tool
+def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 120) -> str:
+    """程序化批量探测：一个脚本内部完成「枚举→筛选→追加验证」多步逻辑，只返回结论。
+
+    适用：目录枚举后对 200 的逐个试 payload；差分实验（基线+变体族）；
+    任意需要多步串联但只把结论回传 Agent 的场景。
+    脚本用 python3 执行，print 输出结论；flag 出现系统机械提交。
+    """
+    c = ctx.context
+    blocked = brute_gate(ctx, "run_batch", script)
+    if blocked:
+        return blocked
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
+                                     dir=str(c.workdir)) as f:
+        f.write(script)
+        path = f.name
+    try:
+        env = os.environ.copy()
+        env["TARGET_WORKDIR"] = str(c.workdir)
+        p = subprocess.run(["python3", path], capture_output=True, text=True,
+                           timeout=min(timeout, 300), cwd=str(c.workdir), env=env)
+        out = f"rc={p.returncode}\nstdout:\n{p.stdout}\nstderr:\n{p.stderr[-2000:]}"
+    except subprocess.TimeoutExpired:
+        out = "[error] run_batch 超时——拆小脚本或加内部超时"
+    finally:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return _spill_output(ctx, out)
 
 
 # ================= 基础执行 / 侦察工具 =================
@@ -1049,6 +1082,7 @@ def fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
 _TOOL_SPECS = [
     # 核心工具（常驻，任何任务都需要，不参与按需分组）
     (shell, True, ()),
+    (run_batch, True, ()),
     (http_request, True, ()),
     (read_artifact, True, ()),
     (write_file, True, ()),

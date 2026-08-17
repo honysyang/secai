@@ -13,10 +13,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
 from typing import Dict, Optional
+
+import requests
 
 from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
@@ -162,6 +165,41 @@ def _tool_groups_for(role_name: str, desc: str) -> tuple:
         return tuple(groups)  # 二进制/协议题：去掉 web 组，避免差分实验/联网干扰
     groups.append("web")       # Web/通用题：distinguish + web_search
     return tuple(groups)
+
+
+async def _first_strike(addrs: list) -> str:
+    """首轮机械预侦察：在 LLM 介入前发起常见入口/敏感路径/状态码探测，省一轮 LLM 回合。
+
+    目前只扫描首个 http 地址：根路径 + 常见入口路径的 GET 状态码/标题/长度；
+    后续可扩展到 robots/sitemap/.git/health 等。
+    """
+    if not addrs:
+        return ""
+    addr = next((a for a in addrs if a.startswith(("http://", "https://"))), None)
+    if not addr:
+        return ""
+    base = addr.rstrip("/")
+    paths = ["/", "/robots.txt", "/.git/HEAD", "/index.php", "/index.html",
+             "/login", "/admin", "/api", "/upload", "/flag", "/flag.txt",
+             "/.env", "/config.php", "/includes/config.php", "/health"]
+    rows = []
+    seen = set()
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        url = base + path
+        try:
+            r = requests.get(url, timeout=8, verify=False, allow_redirects=False)
+            title = re.search(r"<title>([^<]*)</title>", r.text, re.I)
+            rows.append({
+                "path": path, "status": r.status_code, "len": len(r.content),
+                "title": (title.group(1) if title else "")[:80],
+                "server": r.headers.get("Server", "")[:40],
+            })
+        except Exception as e:
+            rows.append({"path": path, "error": str(e)[:80]})
+    return "首轮预侦察:\n" + json.dumps(rows, ensure_ascii=False, indent=2)
 
 
 async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None, model_pool=None) -> None:
@@ -336,6 +374,26 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     if model_pool is None:
         model_pool = ModelPool(preferred_name=FAST_MODEL_NAME)
 
+    # 首轮机械预侦察：在 LLM 介入前先收集常见入口/敏感路径/状态码，省一轮 LLM 回合
+    recon0 = ""
+    try:
+        recon0 = await _first_strike(addrs)
+        log_info(f"[first-strike] 单题 {code} 预侦察完成：{len(recon0)} 字符")
+    except Exception as e:
+        log_warn(f"[first-strike] 单题 {code} 预侦察失败：{str(e)[:120]}")
+
+    # 缓存命中率观测：本题是否有现成打法/历史笔记可复用
+    has_template = bool(sol_hint)
+    has_notes = bool(load_notes_for(code))
+    has_role_playbooks = bool(role.get("playbooks"))
+    if has_template or has_notes or has_role_playbooks:
+        ctx.cache_hits += 1
+        ctx.cache_notes.append(
+            f"hit: code={code} template={has_template} notes={has_notes} playbooks={has_role_playbooks}")
+    else:
+        ctx.cache_misses += 1
+        ctx.cache_notes.append(f"miss: code={code} 无历史模板/笔记/角色打法")
+
     executor = build_executor(role, charter, brief,
                               field_notes=load_notes_for(code) or _load_field_notes(),
                               model=model_pool.current.model)
@@ -374,7 +432,11 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     ctx.hint_grace_active = False
     HINT_GRACE_TURNS = 5
 
-    next_input = f"开始攻击本题容器：{addrs}。先做信息收集，识别技术栈与入口。"
+    next_input = f"开始攻击本题容器：{addrs}。"
+    if recon0:
+        next_input += f"\n\n系统已完成首轮机械预侦察，直接分析以下结果制定攻击路径：\n{recon0}"
+    else:
+        next_input += "先做信息收集，识别技术栈与入口。"
     try:
         while True:
             turn_count += 1
@@ -637,6 +699,14 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     if outcome == "solved" and ctx.final_payload:
         answer = str(ctx.final_payload.get("findings", ""))[:500]
     _append_mechanical_note(code, outcome, ctx)  # 题级机械沉淀（零 LLM，按题写档案）
+    # 写入缓存命中率到 field notes（赛后分析用）
+    try:
+        with FIELD_NOTES_FILE.open("a", encoding="utf-8") as f:
+            f.write(f"- cache_hits={ctx.cache_hits} cache_misses={ctx.cache_misses}\n")
+            for note in ctx.cache_notes[-5:]:
+                f.write(f"  {note}\n")
+    except Exception:
+        pass
     if outcome == "solved":
         append_solution_template(code, desc, ctx)  # 正向解法模板沉淀（同类题复用）
     if db is not None:

@@ -54,3 +54,7 @@ class TaskContext:
     challenge_start_ts: float = 0.0           # 本题开始攻击的 monotonic 时间戳
     wallclock_budget: int = 0                 # 本题墙上时间预算（秒），由主循环按 difficulty 设置
     wrong_submit_count: int = 0               # 本题累计错误提交次数（≥3 全错则标记 stuck）
+    # ---- 缓存/复用命中率观测（用于赛后优化数据沉淀） ----
+    cache_hits: int = 0                       # 命中历史成功解法 / 同前缀笔记 / 已披露技能即可见解法
+    cache_misses: int = 0                     # 未能命中现成解法，需要从头推导的题数
+    cache_notes: List[str] = field(default_factory=list)  # 命中/未命中的具体记录（赛后分析用）
