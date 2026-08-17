@@ -9,9 +9,28 @@ transcript 落盘（events.jsonl）仍由 hooks.py 完成（保留现有文件�
 """
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Callable
+
+
+def format_events_tail(events: list[dict], max_chars: int = 4000) -> str:
+    """把事件列表格式化为可读文本摘要，优先保留最近事件。"""
+    if not events:
+        return ""
+    lines = []
+    total = 0
+    for ev in reversed(events):
+        kind = ev.get("kind", "unknown")
+        ts = ev.get("ts", 0)
+        data = ev.get("data", {})
+        line = f"[{ts:.1f}] {kind}: {json.dumps(data, ensure_ascii=False)}"
+        if total + len(line) + 1 > max_chars and lines:
+            break
+        lines.append(line)
+        total += len(line) + 1
+    return "\n".join(reversed(lines))
 
 
 class EventBus:

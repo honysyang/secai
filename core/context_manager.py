@@ -12,17 +12,16 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 
-from agents import Runner
+from agents import Runner, Agent
 
-from core.agents_def import compactor_agent
 from core.task_context import TaskContext
 
 # 会话 L2 层 token 量超过此值触发压缩
-COMPACT_TOKEN_THRESHOLD = 30000
+COMPACT_TOKEN_THRESHOLD = 20000
 # token 估算系数：混合中英文约 2.5 字符 ≈ 1 token（偏保守，宁可早压）
 CHARS_PER_TOKEN = 2.5
 # 压缩时保留最近原文的 token 预算（从最新往旧累加，超过即摘要）
-COMPACT_KEEP_RECENT_TOKENS = 16000
+COMPACT_KEEP_RECENT_TOKENS = 12000
 # 至少保留的回合边界数（下限兜底，防止交接块后毫无衔接）
 COMPACT_KEEP_MIN_ROUNDS = 2
 # 送给摘要器的旧历史文本上限（字符）
@@ -174,20 +173,40 @@ def _archive_items(ctx: TaskContext, items: List[Any]) -> None:
         pass
 
 
-async def _summarize(old_text: str, prev_summary: str) -> str:
-    prompt = (f"更早的历史摘要（可能为空）：\n{prev_summary or '（无）'}\n\n"
-              f"需要并入的新历史：\n{old_text}")
-    result = await Runner.run(compactor_agent, input=prompt)
+async def _summarize(agent: Agent, old_items: List[Any], prev_summary: str) -> str:
+    """复用当前 Agent 的 system 与 tools，把压缩指令作为最后一条 user message，
+
+    使摘要请求成为上一次对话请求的**前缀扩展**，从而最大化服务端 KV cache 命中。
+    """
+    user_text = (
+        "请把下面这段历史对话压缩成关键事实摘要，用于后续轮次继续推进任务。\n\n"
+        "要求：\n"
+        "1. 保留所有已确认漏洞/入口/凭证/路径/flag 线索；\n"
+        "2. 保留已失败方向和判死结论，避免重复尝试；\n"
+        "3. 保留黑板上 confirmed 状态的关键条目；\n"
+        "4. 不要编造未证实内容；\n"
+        "5. 控制在 800 字以内。\n\n"
+        f"更早的历史摘要（可能为空）：\n{prev_summary or '（无）'}\n\n"
+        f"需要并入的新历史：\n"
+        + "\n".join(_item_text(i) for i in old_items)[-SUMMARY_INPUT_CHARS:]
+    )
+    # 复用同一个 agent，SDK 会自动把其 system + tools 放最前，old_items 作历史，user_text 追加。
+    result = await Runner.run(agent, input=user_text)
     return str(result.final_output)
 
 
-async def compact_if_needed(session, ctx: TaskContext) -> bool:
+async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None) -> bool:
     """会话过大时压缩：旧历史→摘要（写 ctx.compaction_summary），按 token 预算保留最近原文。
 
     触发用 items 粗估 token（会话 L2 层口径）；ctx.last_prompt_tokens 是 SDK 返回的
     真实 prompt_tokens（含系统提示与工具 schema 的固定开销），仅作观测上报，不参与
     触发——避免把固定开销混入 items 阈值导致压缩时机漂移。
+
+    当传入 agent 时，摘要复用该 agent 的 system + tools + 历史消息前缀，使压缩请求
+    成为原请求的前缀扩展，最大化 KV cache 命中。未传 agent 则直接返回 False（保守策略）。
     """
+    if agent is None:
+        return False
     items = await session.get_items()
     estimate = _estimate_tokens(items)
     _emit_token_estimate(ctx, estimate, ctx.last_prompt_tokens)
@@ -202,8 +221,7 @@ async def compact_if_needed(session, ctx: TaskContext) -> bool:
     # 被摘要掉的旧 items 归档，压缩只是让 session 瘦身，原始轨迹不丢
     _archive_items(ctx, old)
 
-    old_text = "\n".join(_item_text(i) for i in old)[-SUMMARY_INPUT_CHARS:]
-    summary = await _summarize(old_text, ctx.compaction_summary)
+    summary = await _summarize(agent, old, ctx.compaction_summary)
     if len(summary) > COMPACTION_SUMMARY_CHARS:
         summary = summary[:COMPACTION_SUMMARY_CHARS]
 

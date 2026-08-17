@@ -3,7 +3,8 @@
 TaskContext 通过 Runner.run(context=...) 注入；disclosed_skills 是「多 Skills 渐进披露」
 的技能缓冲，初始包在派任时写入，运行中由 hooks.py 按事件证据逐步追加。
 
-（提交铁律：shell/http_request 等工具返回前机械扫描 flag 并自动提交，见 _spill_output。）
+（提交铁律：shell/http_request 等工具返回前机械扫描 flag 并自动提交，已由 core.tool_pipeline
+ 的 AutoSubmitFlagMiddleware / ArtifactSpillMiddleware 统一处理。）
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +24,7 @@ import requests
 from agents import function_tool, RunContextWrapper
 
 from core.task_context import TaskContext
+from core.tool_pipeline import with_pipeline, DEFAULT_PIPELINE
 
 from arsenal.registries import sec_tools
 from arsenal.registries import poc_registry
@@ -39,6 +42,15 @@ PREVIEW = 4000
 ARTIFACT_SPILL_THRESHOLD = 4000  # 工具输出超过此字符数才外置到 artifacts/
 BLACKBOARD_MAX_ENTRIES = 50     # 黑板容量上限，超出淘汰最旧条目（优先淘汰 done/failed）
 BLACKBOARD_FILE = "blackboard.json"  # 黑板落盘文件名（跨尝试/挂起恢复用）
+
+
+# 把实际提交函数绑定到默认管线的 flag 扫描 middleware，保持铁律提交不丢失。
+# 使用 _late_bind_submit 在 _submit_flags_if_any 定义后再设置。
+def _late_bind_submit() -> None:
+    for _mw in DEFAULT_PIPELINE.middlewares:
+        if getattr(_mw, "name", "") == "auto_submit_flag":
+            _mw.submit_fn = _submit_flags_if_any  # type: ignore
+            break
 
 
 def _persist_blackboard(ctx: RunContextWrapper[TaskContext]) -> None:
@@ -107,7 +119,8 @@ def _is_completed(client: PlatformClient, code: str) -> bool:
 def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     """提交铁律：扫描完整输出中的 flag，机械提交 + 机械通关判决。
 
-    必须在 _spill_output 截断前调用（全文扫描），否则 flag 落在截断点之后会被埋没。
+    被 core.tool_pipeline.AutoSubmitFlagMiddleware / ArtifactSpillMiddleware 调用，
+    作为统一工具管线的后置动作。
     """
     flags = _scan_flags(text)
     if not flags:
@@ -168,12 +181,15 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     return "\n".join(notes)
 
 
-def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
-    """工具输出超长时写入 artifacts/ 文件，只返回预览 + 引用，避免撑爆会话上下文。
+# 定义后立即把实际提交函数绑定到默认管线，让管线工具复用同一套铁律提交逻辑。
+_late_bind_submit()
 
-    大段源码/扫描结果不再整段塞进 session，改为落盘 + 摘要，需要全文时用
-    read_artifact 按需读取。截断前先扫描全文 flag（提交铁律）与 prompt injection
-    特征（注入防御）——两者都必须在截断前全文扫描，否则会落在截断点之后。
+
+def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
+    """（兼容旧非管线工具）工具输出超长时写入 artifacts/ 文件并返回预览。
+
+    已接入管线的工具由 ArtifactSpillMiddleware 统一处理，本函数保留给未接入
+    管线的只读工具（distinguish / run_tool / read_artifact 等）使用。
     """
     submit_note = _submit_flags_if_any(ctx, text)  # 先扫全文 flag 再截断
     guard_note = _guard_output(text)               # 先扫全文注入特征再截断
@@ -192,7 +208,10 @@ def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     return text[:ARTIFACT_SPILL_THRESHOLD] + tail
 
 
+# 以下核心执行工具已纳入统一管线：横切关注点（预算/提交/注入/台账/打分/落盘）
+# 由 DEFAULT_PIPELINE 处理，工具本体只负责业务逻辑与原始输出。
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 120) -> str:
     """程序化批量探测：一个脚本内部完成「枚举→筛选→追加验证」多步逻辑，只返回结论。
 
@@ -201,9 +220,6 @@ def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 1
     脚本用 python3 执行，print 输出结论；flag 出现系统机械提交。
     """
     c = ctx.context
-    blocked = brute_gate(ctx, "run_batch", script)
-    if blocked:
-        return blocked
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
                                      dir=str(c.workdir)) as f:
         f.write(script)
@@ -221,17 +237,12 @@ def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 1
             Path(path).unlink(missing_ok=True)
         except Exception:
             pass
-    return _spill_output(ctx, out)
+    return out
 
 
 # ================= 基础执行 / 侦察工具 =================
 def _python_traceback_hint(command: str, stderr: str, rc: int) -> str:
-    """Python 脚本执行失败时，提炼 traceback 关键错误并给出修复指引。
-
-    模型经 write_file 写脚本 + `python3 xxx.py` 执行，常见 NameError/路径/编码
-    错误；这里把最后一行的错误类型+消息提炼出来，引导模型针对性修脚本，
-    而不是看到报错后换方向或反复试探。
-    """
+    """Python 脚本执行失败时，提炼 traceback 关键错误并给出修复指引。"""
     if rc == 0 or "Traceback" not in stderr:
         return ""
     if not re.search(r"\bpython3?(?:\s|$)", command):
@@ -245,22 +256,19 @@ def _python_traceback_hint(command: str, stderr: str, rc: int) -> str:
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def shell(ctx: RunContextWrapper[TaskContext], command: str, timeout: int = 30) -> str:
     """在工作目录执行 shell 命令。探测请打包：一条命令完成多个动作。
     复杂逻辑（多行 python3 脚本）请先用 write_file 写到文件，再执行 `python3 <文件>`，避免命令参数过长撑爆上下文。
     """
-    c = ctx.context
-    blocked = brute_gate(ctx, "shell", command)
-    if blocked:
-        return blocked
     try:
         p = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
-                           timeout=min(timeout, 120), cwd=str(c.workdir))
+                           timeout=min(timeout, 120), cwd=str(ctx.context.workdir))
         out = f"rc={p.returncode}\nstdout:\n{p.stdout[:PREVIEW]}\nstderr:\n{p.stderr[:1000]}"
         hint = _python_traceback_hint(command, p.stderr, p.returncode)
         if hint:
             out += hint
-        return _spill_output(ctx, out)
+        return out
     except subprocess.TimeoutExpired:
         return f"命令超时（{timeout}s）。hint: 缩短范围或加 --max-time"
     except Exception as e:
@@ -268,6 +276,7 @@ def shell(ctx: RunContextWrapper[TaskContext], command: str, timeout: int = 30) 
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def http_request(ctx: RunContextWrapper[TaskContext], url: str, method: str = "GET",
                  body: str = "", timeout: int = 15) -> str:
     """发送单次 HTTP 请求，返回状态码/响应头/正文预览。批量探测请用 shell+python3。"""
@@ -276,7 +285,7 @@ def http_request(ctx: RunContextWrapper[TaskContext], url: str, method: str = "G
                              timeout=min(timeout, 60), verify=False)
         head = "; ".join(f"{k}: {v}" for k, v in list(r.headers.items())[:8])
         out = f"status={r.status_code}\nheaders: {head}\nbody:\n{r.text[:PREVIEW]}"
-        return _spill_output(ctx, out)
+        return out
     except Exception as e:
         return f"请求失败: {str(e)[:300]}"
 
@@ -834,15 +843,13 @@ def blackboard(ctx: RunContextWrapper[TaskContext], action: str, key: str = "",
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
                    timeout: int = 60, max_workers: int = 8) -> str:
     """并发执行多条独立 shell 命令（换行分隔），用于路径爆破/端口扫描/多 payload 测试等互不依赖的探测。
 
     commands 用换行分隔，每条独立并发执行，返回各自 rc/输出预览。
     """
-    blocked = brute_gate(ctx, "parallel_shell")
-    if blocked:
-        return blocked
     cmds = [c.strip() for c in (commands or "").split("\n") if c.strip()]
     if not cmds:
         return json.dumps({"error": "commands 为空"}, ensure_ascii=False)
@@ -860,8 +867,7 @@ def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
 
     with ThreadPoolExecutor(max_workers=min(max_workers, len(cmds))) as ex:
         results = list(ex.map(_run, cmds))
-    result = json.dumps({"results": results}, ensure_ascii=False)
-    return result + _guard_output(result)
+    return json.dumps({"results": results}, ensure_ascii=False)
 
 
 @function_tool
@@ -1028,6 +1034,7 @@ def _parse_payloads(payloads: str, payload_type: str) -> List[str]:
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
          payloads: str = "", payload_type: str = "", placeholder: str = "{FUZZ}",
          max_workers: int = 10, timeout: int = 15) -> str:
@@ -1042,9 +1049,6 @@ def fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
     payload_type 可用 sqli/path/lfi/xss/ssti/rce/idor/upload/xxe 等内置字典；
     或 payloads 传逗号分隔列表 / 数值范围（如 1-100）。
     """
-    blocked = brute_gate(ctx, "fuzz")
-    if blocked:
-        return blocked
     try:
         req = json.loads(request_template)
     except Exception as e:
@@ -1069,17 +1073,13 @@ def fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
 
     rows = [{"payloads": v, "response": k} for k, v in groups.items()]
     diff = len(groups) > 1
-    result_text = json.dumps({
+    return json.dumps({
         "tested": len(pl),
         "groups": rows,
         "differentiated": diff,
         "verdict": ("响应存在差异 → 攻击面有效，聚焦差异组深入" if diff
                     else "所有载荷响应一致 → 该位置/参数无差异，换攻击面"),
     }, ensure_ascii=False)
-    submit_note = _submit_flags_if_any(ctx, result_text)  # 提交铁律：扫描 fuzz 响应中的 flag
-    guard_note = _guard_output(result_text)               # 注入防御：扫描 fuzz 响应
-    note = "\n".join(x for x in (submit_note, guard_note) if x)
-    return result_text + (f"\n{note}" if note else "")
 
 
 # ================= 工具按需加载（分桶） =================

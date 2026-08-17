@@ -486,20 +486,32 @@ class EventStreamHooks(RunHooks):
         # 统计 token 用量（累计到 TaskContext，供 status.json / 最终总结展示）
         usage = getattr(response, "usage", None)
         task_ctx = getattr(context, "context", None)
-        cur = {"input": 0, "output": 0, "total": 0}
+        cur = {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0}
         if usage is not None:
             cur["input"] = int(getattr(usage, "input_tokens", 0) or 0)
             cur["output"] = int(getattr(usage, "output_tokens", 0) or 0)
             cur["total"] = int(getattr(usage, "total_tokens", 0) or 0)
+            # 真实 prompt cache 命中读取（OpenAI / DeepSeek 等模型返回的 details）
+            details = getattr(usage, "prompt_tokens_details", None) or {}
+            if isinstance(details, dict):
+                cur["cache_read"] = int(details.get("cached_tokens") or 0)
+                cur["cache_write"] = int(details.get("cache_write_tokens") or 0)
+            # 兼容 DeepSeek 直返字段
+            if not cur["cache_read"]:
+                cur["cache_read"] = int(getattr(usage, "prompt_cache_hit_tokens", 0) or 0)
+            if not cur["cache_write"]:
+                cur["cache_write"] = int(getattr(usage, "prompt_cache_miss_tokens", 0) or 0)
         if task_ctx is not None:
             task_ctx.token_usage["input"] += cur["input"]
             task_ctx.token_usage["output"] += cur["output"]
             task_ctx.token_usage["total"] += cur["total"]
             task_ctx.token_usage["requests"] += 1
+            task_ctx.token_usage["cache_read"] = task_ctx.token_usage.get("cache_read", 0) + cur["cache_read"]
+            task_ctx.token_usage["cache_write"] = task_ctx.token_usage.get("cache_write", 0) + cur["cache_write"]
             # 记录最近一次请求的真实 prompt_tokens（上下文真实大小），供压缩观测/校准
             task_ctx.last_prompt_tokens = cur["input"]
 
-        # 完整文本进事件流（不截断），另发一条 token 事件供 UI 实时显示用量
+        # 完整文本进事件流（不截断），另发一条 token 事件供 UI 实时显示用量与 cache 命中
         text = _output_text(response)
         self._emit("thought", agent=agent.name, text=text, usage=cur)
         if task_ctx is not None:

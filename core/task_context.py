@@ -61,5 +61,12 @@ class TaskContext:
     cache_hits: int = 0                       # 命中历史成功解法 / 同前缀笔记 / 已披露技能即可见解法
     cache_misses: int = 0                     # 未能命中现成解法，需要从头推导的题数
     cache_notes: List[str] = field(default_factory=list)  # 命中/未命中的具体记录（赛后分析用）
+    # ---- Plan Mode 二态开关（进入时只输出/更新计划，不执行工具） ----
+    plan_mode: bool = False
+    plan_mode_history: int = 0  # 进入 plan mode 后已消耗的轮次（防无限 plan）
     # ---- exploit 阶段 payload 台账（差分基线纪律，避免重复同一失败变体） ----
     payload_ledger: List[Dict[str, Any]] = field(default_factory=list)  # [{target, signature, hit, count, last_text_hash}]
+
+
+# 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness）
+SUBTASK_MAX_CONCURRENT = 3

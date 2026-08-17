@@ -135,6 +135,11 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
         ("# 历史压缩摘要（超长对话压缩后保留的关键事实）", c.compaction_summary or "（无）"),
         ("# 全局黑板（已完成事项 / 全局变量，跨轮共享）", _format_blackboard(c.blackboard)),
     ]
+    if c.plan_mode:
+        parts.append(("# PLAN MODE 激活", """你当前处于 PLAN MODE。
+本回合你只能输出/修正作战计划，禁止调用任何工具。
+计划必须包含：假设、验证动作、预期结果、失败判据。
+输出完成后系统会自动退出 PLAN MODE 并按新计划执行。"""))
     if role_boost:
         parts.append(("# 阶段增强（证据触发，随战况注入）", role_boost))
     if ledger_text:
@@ -186,6 +191,38 @@ def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
     )
 
 
+# ---------------------------------------------------------------------------
+# Agent Preset 运行时组合：同一 build_executor 接口按场景动态叠加风格与工具
+# ---------------------------------------------------------------------------
+AGENT_PRESETS: Dict[str, Dict[str, Any]] = {
+    "default": {
+        "instructions_suffix": "",
+        "extra_tools": [],
+    },
+    "recon_focused": {
+        "instructions_suffix": (
+            "\n# 侦察专精模式\n"
+            "本阶段优先完成：服务识别、技术栈指纹、入口枚举、敏感路径发现。"
+            "不要过早构造 exploit；所有发现必须写黑板并附证据。"),
+        "extra_tools": [],
+    },
+    "exploit_focused": {
+        "instructions_suffix": (
+            "\n# 利用专精模式\n"
+            "你已确认攻击面，本阶段只聚焦最小可利用链：构造稳定 PoC、验证 RCE/注入/越权、"
+            "拿到 flag 后立即走 finalize。不要发散侦察。"),
+        "extra_tools": [],
+    },
+    "analyst": {
+        "instructions_suffix": (
+            "\n# 分析型模式\n"
+            "你只读不写：调用 query_skills / list_knowledge / get_knowledge / list_tools"
+            "做情报分析，输出结论与下一步建议，禁止调用会改变状态或靶场的工具。"),
+        "extra_tools": ["query_skills", "list_knowledge", "get_knowledge", "list_tools"],
+    },
+}
+
+
 # 子任务结束协议：追加到执行者系统提示，要求结构化回传（而非只输出文字）
 SUBTASK_ENDING = """
 
@@ -203,23 +240,36 @@ SUBTASK_ENDING = """
 
 def build_executor(role: dict, charter: str, brief: str,
                    field_notes: str = "", model=None, model_settings=None,
-                   is_subtask: bool = False) -> Agent:
+                   is_subtask: bool = False,
+                   preset: str = "default") -> Agent:
     """构建执行者。静态系统提示只含角色/纪律/任务书；动态上下文（阶段/计划/黑板/打法）
     每轮通过 Runner.run input 前置注入，实现动静分离，减少 SDK 每轮重建完整系统提示的开销。
 
     当 is_subtask=True 时追加子任务结束协议与 finish_subtask 工具，结果结构化回传，
     主 Agent 只拿到 summary/findings/flag，不接触子任务的海量工具输出。
 
+    新增 preset 参数：运行时按场景组合 instructions 后缀与额外工具（如侦察/利用/分析师）。
     可通过 model/model_settings 注入模型池当前模型，支持灾备切换。
     默认使用 FAST_MODEL（deepseek-v4-flash），调用方传入 model 时覆盖。
     """
+    p = AGENT_PRESETS.get(preset, AGENT_PRESETS["default"])
+    preset_suffix = p.get("instructions_suffix", "")
     subtask_suffix = ("\n\n" + SUBTASK_ENDING) if is_subtask else ""
 
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
-        return _render_executor_instructions(ctx, role, brief) + subtask_suffix
+        return _render_executor_instructions(ctx, role, brief) + preset_suffix + subtask_suffix
 
-    tools = ALL_TOOLS + ([finish_subtask] if is_subtask else [])
+    extra_tools = []
+    for tname in p.get("extra_tools", []):
+        # 按名称从 ALL_TOOLS 查找对应 tool 对象
+        for t in ALL_TOOLS:
+            if getattr(t, "name", "") == tname:
+                extra_tools.append(t)
+                break
+    tools = list(ALL_TOOLS) + extra_tools + ([finish_subtask] if is_subtask else [])
     name = f"Subtask[{role['role']}]" if is_subtask else f"Executor[{role['role']}]"
+    if preset != "default":
+        name += f"[{preset}]"
     return Agent(name=name, instructions=_instructions,
                  tools=tools, model=model or FAST_MODEL,
                  model_settings=model_settings or EXECUTOR_SETTINGS)

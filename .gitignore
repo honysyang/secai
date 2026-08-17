@@ -22,6 +22,13 @@ data/
 nohup.out
 *.out
 
+# Docker 构建产物（大体积镜像包）
+docker/*.tar.gz
+docker/*.tar
+
+# 本地参考文档/手册（用户按需自行管理）
+docs/deepseek-harness-analysis.md
+
 # IDE / 系统
 .DS_Store
 .idea/
