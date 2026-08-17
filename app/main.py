@@ -26,7 +26,8 @@ from agents.exceptions import MaxTurnsExceeded
 from agents.memory import SQLiteSession
 
 from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach_agent,
-                            build_executor, build_subtask_executor)
+                            build_executor, build_subtask_executor,
+                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
 from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
@@ -394,8 +395,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         ctx.cache_misses += 1
         ctx.cache_notes.append(f"miss: code={code} 无历史模板/笔记/角色打法")
 
+    field_notes = load_notes_for(code) or _load_field_notes()
     executor = build_executor(role, charter, brief,
-                              field_notes=load_notes_for(code) or _load_field_notes(),
+                              field_notes=field_notes,
                               model=model_pool.current.model)
     log_info(f"单题 {code} 模型池：{model_pool}，起始模型 {model_pool.current.name}")
     session = SQLiteSession(session_id=f"challenge_{code}",
@@ -483,8 +485,15 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             ctx.turn_gain = False
             ctx.turn_net_fail = False  # 本轮网络不可达清零（hooks 命中时置位）
             prev_phase = ctx.phase
+
+            # 动静分离：动态上下文作为 input 前缀注入，静态系统提示复用同一 Agent
+            dynamic_ctx = _build_dynamic_context(
+                RunContextWrapper(context=ctx), charter, ctx.plan or global_plan,
+                field_notes, role_boost=getattr(ctx, "role_boost", ""))
+            full_input = f"{EXECUTOR_DYNAMIC_PREFIX}{dynamic_ctx}\n\n{next_input}"
+
             try:
-                await Runner.run(executor, input=next_input, context=ctx,
+                await Runner.run(executor, input=full_input, context=ctx,
                                  hooks=challenge_hooks, session=session, max_turns=1)
             except MaxTurnsExceeded:
                 pass

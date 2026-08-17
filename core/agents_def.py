@@ -89,24 +89,11 @@ planner_agent = Agent(name="Planner", instructions=PLANNER_INSTRUCTIONS,
                       model=MODEL, model_settings=PLANNER_SETTINGS)
 
 
-# ================= 执行者（按角色组装，渐进披露技能） =================
-EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的职责是执行管理者立下的使命，产出可复用的证据与结论。
+# ================= 执行者（静态系统提示 + 每轮动态上下文注入） =================
+EXECUTOR_STATIC_INSTRUCTIONS = """你是 SecAI 的执行者，负责执行管理者立下的使命，产出可复用的证据与结论。
 
 # 角色思维风格
 {role_style}
-
-# 当前阶段（阶段机：由 set_phase 动态切换）
-阶段：{phase_name}
-目标：{phase_goal}
-当前焦点：{phase_focus}
-达成后切换：{phase_next}
-（目标达成后调用 set_phase 切到下一阶段；发现 flag 线索立即切 post；别在旧阶段空转）
-
-# 使命宪章（管理者立法，必须遵守）
-{charter}
-
-# 作战计划（规划师深度分析，指导阶段推进）
-{plan}
 
 # 工作纪律
 1. 每轮必须产出至少一个新信息（证据增量），禁止空转与重复已失败方向。
@@ -114,7 +101,7 @@ EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的
 3. 边渗透边记录（强制节奏）：每确认一条新认知（端口/版本/入口/认证态/漏洞点）
    立即写 blackboard 并附 evidence，不等会话结束或收尾，避免上下文压缩后丢细节；
    判死结论必须附证据，被证伪的旧结论用 supersedes 取代。
-4. 批量探测（多 payload/路径/参数）一律用 fuzz；互不依赖的动作用 parallel_shell；
+4. 批量探测（多 payload/路径/参数）一律用 fuzz / run_batch；互不依赖的动作用 parallel_shell；
    多个独立分支用 spawn_subtask。shell 只用于 fuzz 覆盖不了的场景。
 5. 发现 flag 系统会机械代提交并回执：correct=true 且有剩余面数→继续找下一面；
    全部通关系统会自动结束本题。
@@ -125,20 +112,46 @@ EXECUTOR_TEMPLATE = """你是 SecAI 的执行者，角色：{role_name}。你的
 8. 阶段随进展用 set_phase 切换；任务完成或证据枯竭时调用 finalize 提交结论。
 9. 确认漏洞/凭据/源码后立即沿最短路径拿 flag；系统注入的[闭环]指令优先级最高，按指令执行。
 
-# 可用打法（随战况渐进披露，当前已解锁）
-{playbooks}
-
-# 历史作战档案
-{field_notes}
-
-# 历史压缩摘要（超长对话压缩后保留的关键事实）
-{compaction_summary}
-
-# 全局黑板（已完成事项 / 全局变量，跨轮共享）
-{blackboard}
-
 # 当前任务书
 {brief}
+"""
+
+
+def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
+                           plan: str, field_notes: str, role_boost: str = "") -> str:
+    """组装每轮变化的动态上下文，作为 Runner.run input 的前置消息注入。
+
+    静态系统提示只包含角色风格、工作纪律、任务书等不变内容；动态部分包含：
+    当前阶段、宪章、作战计划、已解锁打法、历史档案、压缩摘要、黑板、阶段增强。
+    这样同一个 Agent 实例可复用，SDK 不必每轮重建完整系统提示。
+    """
+    c = ctx.context
+    playbooks_text = load_skill_bodies(c.disclosed_skills)
+    phase = PHASE_DEFS.get(c.phase, PHASE_DEFS["recon"])
+    parts = [
+        ("# 当前阶段", f"""阶段：{c.phase}
+目标：{phase['goal']}
+当前焦点：{phase['focus']}
+达成后切换：{phase.get('next', '')}
+（目标达成后调用 set_phase 切到下一阶段；发现 flag 线索立即切 post；别在旧阶段空转）"""),
+        ("# 使命宪章（管理者立法，必须遵守）", charter or "（无）"),
+        ("# 作战计划（规划师深度分析，指导阶段推进）", plan or "（无：未规划）"),
+        ("# 可用打法（随战况渐进披露，当前已解锁）",
+         playbooks_text or "（暂无可用打法，先用通用侦察）"),
+        ("# 历史作战档案", field_notes or "（无：首次执行）"),
+        ("# 历史压缩摘要（超长对话压缩后保留的关键事实）", c.compaction_summary or "（无）"),
+        ("# 全局黑板（已完成事项 / 全局变量，跨轮共享）", _format_blackboard(c.blackboard)),
+    ]
+    if role_boost:
+        parts.append(("# 阶段增强（证据触发，随战况注入）", role_boost))
+    return "\n\n".join(f"{title}\n{body}" for title, body in parts)
+
+
+EXECUTOR_DYNAMIC_PREFIX = "【动态上下文】\n"
+
+
+EXECUTOR_TEMPLATE = """{static}
+{dynamic}
 """
 
 
@@ -173,32 +186,47 @@ def _format_blackboard(board: dict) -> str:
     return "\n".join(lines) + "\n（黑板仅列摘要；取完整值用 blackboard get <key>）"
 
 
-def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
-                                  role: dict, charter: str, brief: str,
-                                  field_notes: str) -> str:
-    """渲染执行者系统提示（主 / 子任务共用）。"""
+def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
+                           plan: str, field_notes: str, role_boost: str = "") -> str:
+    """组装每轮变化的动态上下文，作为 Runner.run input 的前置消息注入。
+
+    静态系统提示只包含角色风格、工作纪律、任务书等不变内容；动态部分包含：
+    当前阶段、宪章、作战计划、已解锁打法、历史档案、压缩摘要、黑板、阶段增强。
+    这样同一个 Agent 实例可复用，SDK 不必每轮重建完整系统提示。
+    """
     c = ctx.context
     playbooks_text = load_skill_bodies(c.disclosed_skills)
     phase = PHASE_DEFS.get(c.phase, PHASE_DEFS["recon"])
-    rendered = EXECUTOR_TEMPLATE.format(
+    parts = [
+        ("# 当前阶段", f"""阶段：{c.phase}
+目标：{phase['goal']}
+当前焦点：{phase['focus']}
+达成后切换：{phase.get('next', '')}
+（目标达成后调用 set_phase 切到下一阶段；发现 flag 线索立即切 post；别在旧阶段空转）"""),
+        ("# 使命宪章（管理者立法，必须遵守）", charter or "（无）"),
+        ("# 作战计划（规划师深度分析，指导阶段推进）", plan or "（无：未规划）"),
+        ("# 可用打法（随战况渐进披露，当前已解锁）",
+         playbooks_text or "（暂无可用打法，先用通用侦察）"),
+        ("# 历史作战档案", field_notes or "（无：首次执行）"),
+        ("# 历史压缩摘要（超长对话压缩后保留的关键事实）", c.compaction_summary or "（无）"),
+        ("# 全局黑板（已完成事项 / 全局变量，跨轮共享）", _format_blackboard(c.blackboard)),
+    ]
+    if role_boost:
+        parts.append(("# 阶段增强（证据触发，随战况注入）", role_boost))
+    return "\n\n".join(f"{title}\n{body}" for title, body in parts)
+
+
+EXECUTOR_DYNAMIC_PREFIX = "【动态上下文】\n"
+
+
+def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
+                                  role: dict, brief: str) -> str:
+    """渲染执行者静态系统提示（只包含角色风格、工作纪律、任务书）。"""
+    return EXECUTOR_STATIC_INSTRUCTIONS.format(
         role_name=role["role"],
         role_style=role["style"],
-        phase_name=c.phase,
-        phase_goal=phase["goal"],
-        phase_focus=phase["focus"],
-        phase_next=phase.get("next", ""),
-        charter=charter,
-        plan=c.plan or "（无：未规划）",
-        playbooks=playbooks_text or "（暂无可用打法，先用通用侦察）",
-        field_notes=field_notes or "（无：首次执行）",
-        compaction_summary=c.compaction_summary or "（无）",
-        blackboard=_format_blackboard(c.blackboard),
         brief=brief,
     )
-    # 阶段增强角色（证据触发）：hooks 置位 role_boost 后，追加进执行者系统提示
-    if getattr(c, "role_boost", ""):
-        rendered += "\n\n# 阶段增强（证据触发，随战况注入）\n" + c.role_boost
-    return rendered
 
 
 # 子任务结束协议：追加到执行者系统提示，要求结构化回传（而非只输出文字）
@@ -218,14 +246,14 @@ SUBTASK_ENDING = """
 
 def build_executor(role: dict, charter: str, brief: str,
                    field_notes: str = "", model=None, model_settings=None) -> Agent:
-    """构建执行者。instructions 用动态函数：每轮读 ctx.context.disclosed_skills，
-    这样 hooks.py 在运行时追加技能后，下一轮系统提示会自动带上新打法。
+    """构建执行者。静态系统提示只含角色/纪律/任务书；动态上下文（阶段/计划/黑板/打法）
+    每轮通过 Runner.run input 前置注入，实现动静分离，减少 SDK 每轮重建完整系统提示的开销。
 
     可通过 model/model_settings 注入模型池当前模型，支持灾备切换。
     默认使用主模型 MODEL（glm-5.2-agent-chanllenge 优先），调用方传入 model 时覆盖。
     """
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
-        return _render_executor_instructions(ctx, role, charter, brief, field_notes)
+        return _render_executor_instructions(ctx, role, brief)
 
     return Agent(name=f"Executor[{role['role']}]", instructions=_instructions,
                  tools=ALL_TOOLS, model=model or FAST_MODEL, model_settings=model_settings or EXECUTOR_SETTINGS)
@@ -233,14 +261,14 @@ def build_executor(role: dict, charter: str, brief: str,
 
 def build_subtask_executor(role: dict, charter: str, brief: str,
                            field_notes: str = "", model=None, model_settings=None) -> Agent:
-    """构建子任务执行者：复用执行者模板 + finish_subtask 结束协议 + 专用结束工具。
+    """构建子任务执行者：复用执行者静态模板 + 子任务结束协议 + 专用结束工具。
 
     子任务用独立 session（上下文隔离），结果通过 finish_subtask 结构化回传，
     主 Agent 只拿到 summary/findings/flag，不接触子任务的海量工具输出。
     默认使用主模型 MODEL（glm-5.2-agent-chanllenge 优先），调用方传入 model 时覆盖。
     """
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
-        return (_render_executor_instructions(ctx, role, charter, brief, field_notes)
+        return (_render_executor_instructions(ctx, role, brief)
                 + SUBTASK_ENDING)
 
     return Agent(name=f"Subtask[{role['role']}]", instructions=_instructions,
