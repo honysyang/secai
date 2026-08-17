@@ -230,11 +230,11 @@ class ToolPipeline:
         self.middlewares.append(mw)
         return self
 
-    def _run_pre(self, ctx, tool, args):
+    async def _run_pre(self, ctx, tool, args):
         for mw in self.middlewares:
             try:
                 if asyncio.iscoroutinefunction(mw.pre):
-                    args = asyncio.get_event_loop().run_until_complete(mw.pre(ctx, tool, args))
+                    args = await mw.pre(ctx, tool, args)
                 else:
                     args = mw.pre(ctx, tool, args)
             except Exception as e:
@@ -244,7 +244,7 @@ class ToolPipeline:
     async def execute(self, ctx: RunContextWrapper[TaskContext], tool: str,
                       args: Dict[str, Any], body: Callable[[], Awaitable[str]]) -> str:
         # pre
-        args = self._run_pre(ctx, tool, args)
+        args = await self._run_pre(ctx, tool, args)
 
         # guard
         for mw in self.middlewares:
@@ -285,6 +285,7 @@ def with_pipeline(pipeline: ToolPipeline):
     """装饰器：把 async/sync 工具函数纳入统一管线。
 
     被装饰函数签名必须是 (ctx: RunContextWrapper, **kwargs) -> str。
+    同步阻塞型工具函数会自动在 asyncio.to_thread 中执行，避免阻塞事件循环。
     """
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
@@ -292,7 +293,8 @@ def with_pipeline(pipeline: ToolPipeline):
             async def body():
                 if asyncio.iscoroutinefunction(func):
                     return await func(ctx, **kwargs)
-                return func(ctx, **kwargs)
+                # 同步阻塞型工具体放到后台线程执行
+                return await asyncio.to_thread(func, ctx, **kwargs)
             return await pipeline.execute(ctx, func.__name__, kwargs, body)
         return wrapper
     return decorator
@@ -443,22 +445,5 @@ class TimeoutAroundMiddleware(ToolMiddleware):
             return await asyncio.wait_for(execute(), timeout=float(timeout))
         except asyncio.TimeoutError:
             return f"[error] {tool} 执行超时（{timeout}s）"
-
-
-class CancellableThreadAroundMiddleware(ToolMiddleware):
-    """把同步工具体放到线程池执行，并支持取消传播。"""
-    name = "cancellable_thread"
-
-    def __init__(self, executor: Optional[ThreadPoolExecutor] = None):
-        self._executor = executor
-
-    async def around(self, ctx, tool, args, execute):
-        loop = asyncio.get_event_loop()
-        executor = self._executor or ThreadPoolExecutor(max_workers=8)
-        # execute() 是 async；在线程池里无法直接运行协程。这里仅作为同步 body 的包装器。
-        future = loop.run_in_executor(executor, lambda: asyncio.run(execute()))
-        try:
-            return await future
         except asyncio.CancelledError:
-            future.cancel()
-            raise
+            return f"[error] {tool} 执行被取消"

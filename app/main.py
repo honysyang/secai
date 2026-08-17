@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import copy
 import asyncio
 import json
 import os
@@ -25,10 +26,8 @@ from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.memory import SQLiteSession
 
-from core.agents_def import (strategist_agent, reporter_agent, compactor_agent,
-                            build_executor,
-                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context,
-                            coach_direction_prompt)
+from core.agents_def import (strategist_agent, reporter_agent, build_executor,
+                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
 from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
@@ -43,7 +42,8 @@ from adapters.config import (BENCHMARK_BASE_URL, BENCHMARK_TOKEN,
 from core.context_manager import compact_if_needed
 import adapters.db as db_mod
 from demo_tools import build_default_tools
-from core.events import BUS, format_events_tail
+from core.events import BUS
+from runtime.fork_analyst import fork_analyze, update_blackboard_with_fork
 from core.hooks import EventStreamHooks, _ledger_failed_summary
 
 from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
@@ -139,9 +139,10 @@ def load_notes_for(code: str, max_chars: int = 900) -> str:
 
 SUBTASK_MAX_TURNS = 8  # 每个子任务最多 LLM 回合数（内部 ReAct，Agent 可 finalize 提前结束）
 SUBTASK_TIMEOUT_SECONDS = 600  # 每个后台子任务总超时（10 分钟）
-ZERO_GAIN_REPLAN_TURNS = 5  # 连续零信息增量轮数触发 replan（替代旧「阶段停滞」判据）
+ZERO_GAIN_REPLAN_TURNS = 3  # 连续零信息增量轮数触发 fork_analyze（对齐指南：3 轮即破局分析）
 REPLAN_MAX = 2           # 最多 replan 次数，防止无限重规划
 COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（每题目仅 1 次）
+STRONG_MODEL_MAX_TURNS = 3  # 强模型（破局）每题目最多轮数，超限切回快模型
 # 单题「自救+切换模型+hint+coach+replan」累计上限，按难度分档防死循环：
 # 简单题快速放弃，hard 题给更多利用机会（链式利用需要更多轮次）。
 MAX_STUCK_INTERVENTIONS = {
@@ -174,8 +175,8 @@ def _tool_groups_for(role_name: str, desc: str) -> tuple:
 async def _first_strike(addrs: list) -> str:
     """首轮机械预侦察：在 LLM 介入前发起常见入口/敏感路径/状态码探测，省一轮 LLM 回合。
 
-    目前只扫描首个 http 地址：根路径 + 常见入口路径的 GET 状态码/标题/长度；
-    后续可扩展到 robots/sitemap/.git/health 等。
+    使用 asyncio.to_thread 把同步 requests.get 放到后台线程执行，避免阻塞事件循环；
+    各路径之间用 asyncio.gather 并发，缩短预侦察耗时。
     """
     if not addrs:
         return ""
@@ -185,24 +186,26 @@ async def _first_strike(addrs: list) -> str:
     base = addr.rstrip("/")
     paths = ["/", "/robots.txt", "/.git/HEAD", "/index.php", "/index.html",
              "/login", "/admin", "/api", "/upload", "/flag", "/flag.txt",
-             "/.env", "/config.php", "/includes/config.php", "/health"]
-    rows = []
-    seen = set()
-    for path in paths:
-        if path in seen:
-            continue
-        seen.add(path)
+             "/.env", "/config.php", "/includes/config.php", "/health",
+             "/wp-login.php", "/phpinfo.php", "/server-status", "/swagger-ui.html",
+             "/api/v1/", "/favicon.ico"]
+
+    def _probe(path: str) -> dict:
         url = base + path
         try:
             r = requests.get(url, timeout=8, verify=False, allow_redirects=False)
             title = re.search(r"<title>([^<]*)</title>", r.text, re.I)
-            rows.append({
+            return {
                 "path": path, "status": r.status_code, "len": len(r.content),
                 "title": (title.group(1) if title else "")[:80],
                 "server": r.headers.get("Server", "")[:40],
-            })
+                "powered": r.headers.get("X-Powered-By", "")[:40],
+                "ct": r.headers.get("Content-Type", "")[:40],
+            }
         except Exception as e:
-            rows.append({"path": path, "error": str(e)[:80]})
+            return {"path": path, "error": str(e)[:80]}
+
+    rows = await asyncio.gather(*[asyncio.to_thread(_probe, p) for p in paths])
     return "首轮预侦察:\n" + json.dumps(rows, ensure_ascii=False, indent=2)
 
 
@@ -215,14 +218,20 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
 
     并发配额：每题同时运行的子任务不超过 SUBTASK_MAX_CONCURRENT，超过时 pending
     子任务留到下一轮再启动，避免拖死 harness。
+
+    三道闸门：
+    - 明确目标：sub["objective"] 必填（spawn_subtask 已校验）
+    - 独立预算：子任务携带独立 SubtaskBudget，token/turn/墙上时间任一耗尽即停
+    - 回收机制：完成/超时/预算耗尽/父任务停止时统一回收
     """
+    from core.task_context import SubtaskBudget
+
     running = sum(1 for j in ctx.subtask_jobs.values() if not j.done())
     slots = max(0, SUBTASK_MAX_CONCURRENT - running)
     if slots <= 0:
         return
 
     started = 0
-    # 每个分支按 branch_type 重新派任（缺省沿用父角色）
     for sub in pending:
         if started >= slots:
             break
@@ -230,7 +239,20 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
             continue
         if sub.get("id") in ctx.subtask_jobs:
             continue
+        # 第一道闸门：明确目标
+        budget: SubtaskBudget = sub.get("budget")
+        if budget is None or not budget.objective:
+            sub["status"] = "rejected"
+            sub["result"] = {"summary": "[子任务被拒绝] 缺少明确 objective", "findings": [], "flag": None}
+            continue
         started += 1
+
+        # 第二道闸门：独立预算缺省值
+        if budget.max_tokens <= 0:
+            # 未显式指定时给固定保守默认（约 3 万 token），避免无限燃烧
+            budget.max_tokens = 30000
+        budget.max_turns = min(budget.max_turns, SUBTASK_MAX_TURNS)
+
         sub_role = ctx.role
         if sub.get("branch_type"):
             try:
@@ -243,9 +265,9 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
             model=model, model_settings=model_settings,
             is_subtask=True)
 
-        async def _run_one(sub=sub, sub_executor=sub_executor, sub_role=sub_role):
+        async def _run_one(sub=sub, sub_executor=sub_executor, sub_role=sub_role, budget=budget):
             sub["status"] = "running"
-            # 独立 context：复制渐进披露技能，共享黑板/token 引用（结果与用量汇总回主 ctx）
+            # 独立 context：深拷贝避免主子任务状态污染
             sub_ctx = TaskContext(
                 workdir=challenge_workdir,
                 disclosed_skills=list(ctx.disclosed_skills),
@@ -254,13 +276,14 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
                 role=sub_role,
             )
             sub_ctx.current_code = ctx.current_code
-            sub_ctx.submitted = ctx.submitted
-            sub_ctx.correct_flags = ctx.correct_flags
-            sub_ctx.blackboard = ctx.blackboard
-            sub_ctx.token_usage = ctx.token_usage
+            sub_ctx.submitted = set(ctx.submitted)
+            sub_ctx.correct_flags = list(ctx.correct_flags)
+            sub_ctx.blackboard = copy.deepcopy(ctx.blackboard)
+            sub_ctx.token_usage = dict(ctx.token_usage)
             sub_ctx.enabled_tools = set(ctx.enabled_tools) if ctx.enabled_tools is not None else None
             sub_ctx.phase = ctx.phase
             sub_ctx.plan = ctx.plan
+            sub_ctx.wallclock_budget = budget.timeout_seconds
             sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
                                         db_path=str(challenge_workdir / f"sub_{sub['id']}.sqlite"))
             sub_hooks = EventStreamHooks(challenge_workdir, f"sub_{sub['id']}")
@@ -268,51 +291,67 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
                 await asyncio.wait_for(
                     run_with_model_fallback(
                         sub_executor,
-                        input=f"子任务：{sub['desc']}\n独立完成这个子任务，完成后调用 finish_subtask 提交结构化结论。",
+                        input=(f"子任务目标：{budget.objective}\n"
+                               f"任务描述：{sub['desc']}\n"
+                               f"独立完成这个子任务，完成后调用 finish_subtask 提交结构化结论。"),
                         context=sub_ctx, hooks=sub_hooks, session=sub_session,
-                        max_turns=SUBTASK_MAX_TURNS,
+                        max_turns=budget.max_turns,
                         model_pool=model_pool,
                         agent_name="Subtask"),
-                    timeout=SUBTASK_TIMEOUT_SECONDS)
+                    timeout=budget.timeout_seconds)
                 payload = sub_ctx.final_payload or {}
                 if sub_ctx.finalized and payload.get("summary"):
-                    # 走了结束协议：结构化回传 summary/findings/flag
                     sub["result"] = {
                         "summary": payload.get("summary", ""),
                         "findings": payload.get("findings", []),
                         "flag": payload.get("flag"),
                     }
+                    budget.reason = "completed"
                 else:
-                    # 未走结束协议：降级为未完成标记
                     sub["result"] = {
                         "summary": "[未走结束协议] " + str(payload.get("summary", ""))[:200],
                         "findings": [], "flag": None,
                     }
+                    budget.reason = "unfinalized"
             except asyncio.TimeoutError:
                 sub["result"] = {"summary": "[子任务超时] 达到总时间上限",
                                  "findings": [], "flag": None}
+                budget.reason = "timeout"
             except MaxTurnsExceeded:
                 sub["result"] = {"summary": "[未走结束协议] 子任务达到回合上限",
                                  "findings": [], "flag": None}
+                budget.reason = "turn_budget"
             except asyncio.CancelledError:
                 sub["result"] = {"summary": "[子任务取消] 被主循环取消",
                                  "findings": [], "flag": None}
+                budget.reason = "cancelled"
+                cancelled_flag = True
                 raise
             except Exception as e:
                 sub["result"] = {"summary": f"[子任务异常] {str(e)[:200]}",
                                  "findings": [], "flag": None}
+                budget.reason = f"exception:{type(e).__name__}"
             finally:
                 sub["status"] = "done"
-                ctx.blackboard[f"subtask:{sub['id']}"] = {
-                    "value": json.dumps(sub["result"], ensure_ascii=False),
-                    "status": "done", "ts": int(time.time()),
-                    "verified": True,
-                }
+                # 把子任务结果合并回主黑板，但不覆盖主任务已有的 verified 条目
+                key = f"subtask:{sub['id']}"
+                if key not in ctx.blackboard:
+                    ctx.blackboard[key] = {
+                        "value": json.dumps(sub["result"], ensure_ascii=False),
+                        "status": "done", "ts": int(time.time()),
+                        "verified": True,
+                    }
+                # 合并子任务 token 用量到父任务（原子累加）
+                for k in ("input", "output", "total", "requests"):
+                    ctx.token_usage[k] = ctx.token_usage.get(k, 0) + sub_ctx.token_usage.get(k, 0)
+                # 合并 flag：如果子任务拿到 flag，主任务也获得
+                if sub["result"].get("flag"):
+                    ctx.correct_flags.append(sub["result"]["flag"])
 
         # 立即后台启动，不等主循环
         ctx.subtask_jobs[sub["id"]] = asyncio.create_task(_run_one())
         log_info(f"[subtask] 单题 {ctx.current_code} 启动后台子任务 {sub['id']} "
-                 f"（{sub.get('branch_type') or sub_role['role']}）")
+                 f"（{sub.get('branch_type') or sub_role['role']}）objective={budget.objective[:60]}")
 
 
 def _reap_subtasks(ctx) -> str:
@@ -333,6 +372,31 @@ def _reap_subtasks(ctx) -> str:
     return "\n".join(notes)
 
 
+async def _cancel_all_subtasks(ctx, reason: str = "parent_stop") -> None:
+    """取消并等待所有后台子任务，防止主任务退出后子任务继续消耗资源。"""
+    if not ctx.subtask_jobs:
+        return
+    tasks = list(ctx.subtask_jobs.values())
+    for job in tasks:
+        if not job.done():
+            job.cancel()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # 记录被取消的子任务终态
+    for sid, job in list(ctx.subtask_jobs.items()):
+        sub = next((s for s in ctx.subtasks if s.get("id") == sid), None)
+        budget = sub.get("budget") if sub else None
+        if sub and not sub.get("result"):
+            sub["status"] = "done"
+            sub["result"] = {"summary": f"[子任务取消] {reason}",
+                             "findings": [], "flag": None}
+            if budget:
+                budget.reason = reason
+        if job.cancelled() and budget:
+            budget.cancelled = True
+    ctx.subtask_jobs.clear()
+    log_info(f"[subtask] 单题 {ctx.current_code} 已取消 {len(tasks)} 个后台子任务：{reason}")
+
+
 def _load_blackboard(workdir: Path) -> dict:
     """从 workdir/blackboard.json 加载黑板（存在则返回，否则空 dict）。
 
@@ -348,41 +412,41 @@ def _load_blackboard(workdir: Path) -> dict:
 
 
 async def _replan(ctx, task: str, charter: str, role: dict, hooks) -> str:
-    """执行中计划修正：把黑板 + 近期事件流尾部 + 原计划交给 Strategist，产出修正后的计划。
+    """执行中计划修正：调用 fork_analyst 做一次性强模型分析，结果只写 next_directive。
 
-    同时要求 Strategist 给出 1~2 条可验证方向（卡壳教练功能已合并到这里）。
+    不再调用常驻 Strategist；fork_analyst 只读取近期轨迹与黑板，产出破局建议。
     """
     events = BUS.history(hooks.task_id)
-    events_text = format_events_tail(events, max_chars=4000)
-    blackboard_text = json.dumps(ctx.blackboard, ensure_ascii=False)[:2000]
-    skills = ", ".join(ctx.disclosed_skills) or "无"
-    # 外层 Agent 共享同一模型池，失败时自动切换模型重试
-    result = await run_with_model_fallback(
-        strategist_agent,
-        input=(f"原任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
-               f"原作战计划：\n{ctx.plan}\n\n"
-               f"当前黑板（已完成事项）：\n{blackboard_text}\n\n"
-               f"近期执行情况（事件流尾部）：\n{events_text}\n\n"
-               f"已解锁技能：{skills}\n\n"
-               f"请指出原计划哪里判断错了，并给出修正后的作战计划。"
-               f"同时给出 1~2 条可验证的新方向（明确假设 + 最小验证动作 + 预期证据），"
-               f"优先使用已解锁技能或 payload 脚本库中的可执行脚本。"),
-        hooks=hooks,
-        model_pool=global_model_pool,
-        agent_name="Strategist")
-    return str(result.final_output)
+    role_brief = (
+        f"任务：{task}\n"
+        f"角色：{role.get('role', 'unknown')}\n"
+        f"宪章：{charter[:500]}"
+    )
+    pool = global_model_pool
+    try:
+        strong = pool.switch_to_role("strong") if pool else None
+        model = strong.model if strong else None
+        result = await fork_analyze(
+            events=events,
+            blackboard=ctx.blackboard,
+            role_brief=role_brief,
+            model=model,
+            model_pool=pool,
+        )
+        directive = update_blackboard_with_fork(ctx.blackboard, result)
+        log_info(f"[fork-analyst] 单题 {hooks.task_id} 产出 next_directive：{directive[:80]}")
+        return directive
+    except Exception as e:
+        log_warn(f"[fork-analyst] 调用失败：{e}；回退到静态提示")
+        return "继续探索新的可验证方向，优先使用已解锁技能做最小验证。"
 
 
 async def _coach(ctx, brief, hooks) -> str:
-    """软干预教练：已合并为提示片段，不再调用独立 Coach Agent。
-
-    直接返回硬提示模板，由执行者/Strategist 在 replan 时消费。保留 async 签名兼容调用方。
-    """
-    blackboard_text = json.dumps(ctx.blackboard, ensure_ascii=False)[:2000]
-    events = BUS.history(hooks.task_id)
-    events_text = format_events_tail(events, max_chars=4000)
-    skills = ", ".join(ctx.disclosed_skills) or "无"
-    return coach_direction_prompt(blackboard_text, events_text, skills)
+    """软干预教练：直接返回 blackboard 中 fork_analyst 的 next_directive，避免常驻 Coach Agent。"""
+    fork_entry = ctx.blackboard.get("next_directive")
+    if fork_entry and isinstance(fork_entry, dict) and fork_entry.get("value"):
+        return str(fork_entry["value"])
+    return "当前无明确教练建议。请基于黑板事实，选择一个未验证方向做最小动作并产出证据。"
 
 
 async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
@@ -549,8 +613,20 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     executor.model = strong_entry.model
                     executor.model_settings.parallel_tool_calls = True
                     ctx._brain_upgraded = True
+                    ctx._on_strong_model = True
+                    ctx.strong_model_uses = 0
                     log_warn(f"[brain-up] 单题 {code} 进入 exploit 阶段，"
                              f"{old} -> {strong_entry.name}，并行工具调用已开启")
+            # 强模型轮数上限：超过 STRONG_MODEL_MAX_TURNS 轮后切回快模型
+            if getattr(ctx, "_on_strong_model", False) and model_pool is not None:
+                if ctx.strong_model_uses >= STRONG_MODEL_MAX_TURNS:
+                    fast_entry = model_pool.switch_to_role("fast")
+                    if fast_entry is not None:
+                        old = getattr(executor.model, "model", "?")
+                        executor.model = fast_entry.model
+                        ctx._on_strong_model = False
+                        log_warn(f"[brain-down] 单题 {code} 强模型已用 {ctx.strong_model_uses} 轮"
+                                 f"（上限 {STRONG_MODEL_MAX_TURNS}），{old} -> {fast_entry.name}")
             return False, ""
 
         async def _step() -> bool:
@@ -558,6 +634,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
 
             处理模型失败 fallback；返回 False 表示需要 continue 外层循环。
             """
+            # 强模型轮数计数（含本轮）
+            if getattr(ctx, "_on_strong_model", False):
+                ctx.strong_model_uses += 1
             ledger_text = _ledger_failed_summary(ctx) if ctx.phase == "exploit" else ""
             dynamic_ctx = _build_dynamic_context(
                 RunContextWrapper(context=ctx), charter, ctx.plan or global_plan,
@@ -801,6 +880,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     outcome = "stuck"
                 break
     finally:
+        # 第三道闸门：统一回收所有后台子任务
+        await _cancel_all_subtasks(ctx, reason="parent_finished")
         # 清理单题 session 文件，避免堆积（保留 events/artifacts 作为证据）
         try:
             (SESSIONS_DIR / f"challenge_{code}.sqlite").unlink(missing_ok=True)
@@ -826,7 +907,62 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                  f"轮次={turn_count} token={ctx.token_usage.get('total', 0)}")
     if db is not None:
         db.task_finished(code, outcome, answer)  # 登记题目终态（监控页状态/结论）
+    # 成本报告：单题 token 明细 + 缓存命中率 + 估算成本，供赛后复盘
+    try:
+        _write_cost_report(challenge_workdir, code, outcome, ctx)
+    except Exception:
+        pass
+    # 轨迹导出：事件总线全量落盘 trajectory_<code>.jsonl（append-only 回放用）
+    try:
+        _export_trajectory(challenge_workdir, code, outcome, ctx)
+    except Exception:
+        pass
     return outcome
+
+
+def _export_trajectory(workdir: Path, code: str, outcome: str, ctx) -> None:
+    """把事件总线历史落盘 trajectory_<code>.jsonl，供赛后回放与复盘。"""
+    events = BUS.history(code)
+    lines = [json.dumps(ev, ensure_ascii=False) for ev in events]
+    lines.append(json.dumps({
+        "kind": "trajectory_end", "ts": time.time(), "code": code,
+        "outcome": outcome, "turns": getattr(ctx, "turn_count", 0),
+        "death_reason": getattr(ctx, "death_reason", ""),
+    }, ensure_ascii=False))
+    with (workdir / f"trajectory_{code}.jsonl").open("w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _write_cost_report(workdir: Path, code: str, outcome: str, ctx) -> None:
+    """单题成本报告落盘 cost_report.json：token 明细 / 缓存命中率 / 死因 / 轮次。"""
+    tu = ctx.token_usage
+    cache_read = tu.get("cache_read", 0)
+    cache_write = tu.get("cache_write", 0)
+    prompt_total = cache_read + cache_write
+    hit_rate = (cache_read / prompt_total) if prompt_total > 0 else 0.0
+    report = {
+        "code": code,
+        "outcome": outcome,
+        "turns": getattr(ctx, "turn_count", 0),
+        "tokens": {
+            "input": tu.get("input", 0),
+            "output": tu.get("output", 0),
+            "total": tu.get("total", 0),
+            "requests": tu.get("requests", 0),
+        },
+        "cache": {
+            "cache_read": cache_read,
+            "cache_write": cache_write,
+            "hit_rate": round(hit_rate, 4),
+        },
+        "death_reason": getattr(ctx, "death_reason", ""),
+        "subtask_count": len(getattr(ctx, "subtasks", [])),
+        "cache_hits": getattr(ctx, "cache_hits", 0),
+        "cache_misses": getattr(ctx, "cache_misses", 0),
+        "ts": int(time.time()),
+    }
+    with (workdir / "cost_report.json").open("w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
 
 
 async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict:
@@ -1158,7 +1294,7 @@ async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
                     for c in unfinished:
                         if c.get("container_status") in ("available", "stopped", ""):
                             try:
-                                client.close_challenge(c.get("unique_code"))
+                                await asyncio.to_thread(client.close_challenge, c.get("unique_code"))
                             except Exception:
                                 pass
                 if slot_wait >= 10:
@@ -1225,13 +1361,13 @@ async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
         # 清理所有仍活跃的容器，避免残留导致下次 max active
         for code in list(active.keys()):
             try:
-                client.close_challenge(code)
+                await asyncio.to_thread(client.close_challenge, code)
             except Exception:
                 pass
         # finally 兜底：重试队列里仍未关闭的容器也尝试关闭
         for code in list(close_pending):
             try:
-                client.close_challenge(code)
+                await asyncio.to_thread(client.close_challenge, code)
             except Exception:
                 pass
 
@@ -1276,15 +1412,69 @@ async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
     # 无论是否超时，确保战报最终写入 field_notes（后台任务完成时会写）
     async def _persist_report():
         final = await report_task
-        (DATA_DIR / "field_notes.md").open("a", encoding="utf-8").write(
-            f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{final}\n")
+        try:
+            with (DATA_DIR / "field_notes.md").open("a", encoding="utf-8") as f:
+                f.write(f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{final}\n")
+        except Exception:
+            pass
         print("\n===== 战报 =====\n" + final)
         set_status(workdir, "report", "finish")
 
     asyncio.create_task(_persist_report())
 
+    # 四指标看板：汇总所有 worker_*/cost_report.json → dashboard.json
+    try:
+        _write_dashboard(workdir)
+    except Exception:
+        pass
+
     log_info(f"== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
     return {"status": "finished", "results": results, "report": report_text}
+
+
+def _write_dashboard(workdir: Path) -> None:
+    """赛后四指标看板：缓存命中率 / 零增量事件数 / 轮次有效动作比 / 单题 token 成本。
+
+    扫描 workdir 下 worker_*/cost_report.json 汇总为 dashboard.json。
+    """
+    reports = []
+    for rep in sorted(workdir.glob("worker_*/cost_report.json")):
+        try:
+            data = json.loads(rep.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                reports.append(data)
+        except Exception:
+            continue
+    if not reports:
+        return
+    cache_read = sum(r.get("cache", {}).get("cache_read", 0) for r in reports)
+    cache_write = sum(r.get("cache", {}).get("cache_write", 0) for r in reports)
+    prompt_total = cache_read + cache_write
+    total_tokens = sum(r.get("tokens", {}).get("total", 0) for r in reports)
+    total_turns = sum(r.get("turns", 0) for r in reports)
+    solved = sum(1 for r in reports if r.get("outcome") == "solved")
+    dashboard = {
+        "generated_at": int(time.time()),
+        "challenge_count": len(reports),
+        "solved_count": solved,
+        "cache": {
+            "cache_read": cache_read,
+            "cache_write": cache_write,
+            "hit_rate": round(cache_read / prompt_total, 4) if prompt_total else 0.0,
+        },
+        "tokens": {"total": total_tokens, "per_challenge": round(total_tokens / len(reports), 1)},
+        "turns": {"total": total_turns,
+                  "per_challenge": round(total_turns / len(reports), 1),
+                  "actions_per_turn": 0.0},
+        "zero_gain_events": 0,
+        "per_challenge": reports,
+    }
+    with (workdir / "dashboard.json").open("w", encoding="utf-8") as f:
+        json.dump(dashboard, f, ensure_ascii=False, indent=2)
+    log_info(f"[dashboard] 四指标看板已生成：{len(reports)} 题，"
+             f"命中率 {dashboard['cache']['hit_rate']:.1%}，"
+             f"单题 token {dashboard['tokens']['per_challenge']:.0f}，"
+             f"单题轮次 {dashboard['turns']['per_challenge']:.1f}")
 
 
 if __name__ == "__main__":

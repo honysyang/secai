@@ -468,6 +468,8 @@ class EventStreamHooks(RunHooks):
         self.workdir = workdir
         self.code = code
         self.task_id = code  # 事件总线/落库的 task 标识（题目 unique_code 或 "generic"/"sub_<id>"）
+        # system prompt 字节级稳定性断言：同一 agent 首个 prompt 的 hash 作为基线
+        self._prompt_hashes: dict = {}
 
     def _emit(self, kind: str, **data):
         # 保留文件留痕（向后兼容，main.py 读 events.jsonl 的地方不变）
@@ -480,6 +482,21 @@ class EventStreamHooks(RunHooks):
         BUS.emit(self.task_id, kind, **data)
 
     async def on_llm_start(self, context, agent, system_prompt, input_items):
+        # system prompt hash 断言：同一 agent 的静态指令必须字节级稳定，
+        # 否则缓存击穿（prompt cache 命中率骤降），记录并告警。
+        try:
+            import hashlib
+            sp = str(system_prompt)
+            h = hashlib.sha256(sp.encode("utf-8")).hexdigest()[:16]
+            base = self._prompt_hashes.get(agent.name)
+            if base is None:
+                self._prompt_hashes[agent.name] = h
+            elif base != h:
+                log_warn(f"[prompt-drift] {agent.name} system prompt 字节级漂移！"
+                         f"基线 {base} 现 {h}，缓存命中将受损")
+                self._emit("prompt_drift", agent=agent.name, base=base, now=h)
+        except Exception:
+            pass
         self._emit("llm_call", agent=agent.name)
 
     async def on_llm_end(self, context, agent, response):

@@ -844,11 +844,12 @@ def blackboard(ctx: RunContextWrapper[TaskContext], action: str, key: str = "",
 
 @function_tool
 @with_pipeline(DEFAULT_PIPELINE)
-def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
-                   timeout: int = 60, max_workers: int = 8) -> str:
+async def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
+                         timeout: int = 60, max_workers: int = 8) -> str:
     """并发执行多条独立 shell 命令（换行分隔），用于路径爆破/端口扫描/多 payload 测试等互不依赖的探测。
 
     commands 用换行分隔，每条独立并发执行，返回各自 rc/输出预览。
+    使用 asyncio.to_thread 避免阻塞事件循环。
     """
     cmds = [c.strip() for c in (commands or "").split("\n") if c.strip()]
     if not cmds:
@@ -857,7 +858,7 @@ def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
     def _run(cmd):
         try:
             p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
-                               timeout=min(timeout, 120))
+                               timeout=min(timeout, 120), cwd=str(ctx.context.workdir))
             out = (p.stdout or p.stderr or "")[:200]
             return {"cmd": cmd[:80], "rc": p.returncode, "out": out}
         except subprocess.TimeoutExpired:
@@ -865,8 +866,14 @@ def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
         except Exception as e:
             return {"cmd": cmd[:80], "error": str(e)[:100]}
 
-    with ThreadPoolExecutor(max_workers=min(max_workers, len(cmds))) as ex:
-        results = list(ex.map(_run, cmds))
+    max_workers = max(1, min(max_workers, len(cmds)))
+    semaphore = asyncio.Semaphore(max_workers)
+
+    async def _bounded(cmd):
+        async with semaphore:
+            return await asyncio.to_thread(_run, cmd)
+
+    results = await asyncio.gather(*[_bounded(cmd) for cmd in cmds])
     return json.dumps({"results": results}, ensure_ascii=False)
 
 
@@ -926,22 +933,48 @@ def get_payload(ctx: RunContextWrapper[TaskContext], payload_type: str) -> str:
 
 @function_tool
 def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str,
-                  branch_type: str = "") -> str:
+                  objective: str = "", branch_type: str = "",
+                  max_tokens: int = 0, max_turns: int = 8) -> str:
     """声明一个独立子任务（互不依赖的探测点/线），主循环会后台并发调度执行。
 
     当任务同时出现多个独立的探测分支（如 3 个端口、3 个独立漏洞点）时，
     用本工具分别声明子任务；每个子任务用独立会话后台执行，结果写回黑板（subtask:<id>）。
-    建议每题最多声明 3 个并行分支，desc 必须包含明确目标（URL/IP/路径）。
+    建议每题最多声明 3 个并行分支，desc 必须包含具体目标（URL/IP/路径）。
+
+    三道闸门：
+    - 明确目标：objective 必填，空则拒绝创建
+    - 独立预算：max_tokens / max_turns 限制子任务资源
+    - 回收机制：完成/超时/预算耗尽/父任务停止时强制回收
 
     Args:
         desc: 子任务描述，必须包含具体目标、范围边界、成功标准。
+        objective: 子任务明确目标（必填），如"验证 /api/login 是否存在 SQLi"。
         branch_type: 分支类型（如 web/pwn/crypto/reverse/web3），子任务会按此派任角色。
+        max_tokens: 子任务 token 预算上限（0=继承父任务剩余预算）。
+        max_turns: 子任务回合预算上限（默认 8）。
     """
     c = ctx.context
-    sub = {"id": uuid.uuid4().hex[:8], "desc": desc, "branch_type": branch_type,
-           "status": "pending", "result": ""}
+    objective = (objective or "").strip()
+    if not objective:
+        return json.dumps({"error": "objective 不能为空：子任务必须填写明确目标"}, ensure_ascii=False)
+    from core.task_context import SubtaskBudget
+    sub = {
+        "id": uuid.uuid4().hex[:8],
+        "desc": desc,
+        "objective": objective,
+        "branch_type": branch_type,
+        "status": "pending",
+        "result": "",
+        "budget": SubtaskBudget(
+            objective=objective,
+            max_tokens=max_tokens,
+            max_turns=max_turns,
+        ),
+    }
     c.subtasks.append(sub)
-    return json.dumps({"spawned": sub}, ensure_ascii=False)
+    return json.dumps({"spawned": {"id": sub["id"], "objective": objective,
+                                   "max_turns": max_turns, "max_tokens": max_tokens}},
+                      ensure_ascii=False)
 
 
 @function_tool
@@ -1082,6 +1115,66 @@ def fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
     }, ensure_ascii=False)
 
 
+@function_tool
+@with_pipeline(DEFAULT_PIPELINE)
+def exploit_fuzz(ctx: RunContextWrapper[TaskContext], request_template: str,
+                 payloads: str = "", payload_type: str = "", placeholder: str = "{FUZZ}",
+                 baseline: str = "", max_workers: int = 10, timeout: int = 15) -> str:
+    """利用阶段差分迭代器：带基线响应的 fuzz，逐 payload 标注相对基线的差异。
+
+    与 fuzz 的区别：fuzz 做「响应归一化归组」发现攻击面；exploit_fuzz 在已确认攻击面
+    上做「基线差分」，把每个 payload 的响应与 baseline 对比，命中明显差异（状态码/长度/
+    关键词）的载荷单独列出，便于直接构造利用链。
+
+    request_template 是 JSON 字符串（同 fuzz），如：
+      {"url": "http://host/exec.php?cmd={FUZZ}", "method": "POST", "body": "x={FUZZ}"}
+    baseline 可选：期望的基线响应文本（默认取第一个 payload 的响应）。
+    payloads/payload_type 同 fuzz（sqli/path/lfi/xss/ssti/rce/idor/upload/xxe 或逗号列表/数值范围）。
+    """
+    try:
+        req = json.loads(request_template)
+    except Exception as e:
+        return json.dumps({"error": f"request_template 不是合法 JSON：{str(e)[:120]}"},
+                          ensure_ascii=False)
+    pl = _parse_payloads(payloads, payload_type)
+    if not pl:
+        return json.dumps({"error": "未提供 payloads 或 payload_type"}, ensure_ascii=False)
+    pl = pl[:200]
+
+    def _test(p):
+        return _run_http(_replace_placeholder(req, placeholder, p), timeout)
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(pl))) as ex:
+        results = list(ex.map(_test, pl))
+
+    base = baseline or (results[0] if results else "")
+    diff_rows = []
+    for p, resp in zip(pl, results):
+        if resp == base:
+            continue
+        status_mark = ""
+        low = resp.lower()
+        for kw in ("flag{", "root:", "uid=", "error", "warning", "admin", "s3cret",
+                   "session=", "token=", "sql", "stack trace"):
+            if kw in low:
+                status_mark = kw
+                break
+        diff_rows.append({
+            "payload": p,
+            "len": len(resp),
+            "marker": status_mark,
+            "preview": resp[:200],
+        })
+    return json.dumps({
+        "tested": len(pl),
+        "baseline_len": len(base),
+        "diff_count": len(diff_rows),
+        "diffs": diff_rows,
+        "verdict": (f"发现 {len(diff_rows)} 个相对基线差异的载荷，优先验证 marker 命中的载荷"
+                    if diff_rows else "所有载荷响应与基线一致，该攻击面可能已封堵，换方向"),
+    }, ensure_ascii=False)
+
+
 # ================= 工具按需加载（分桶） =================
 # 声明式工具清单（单一事实源）：工具对象 + 是否核心 + 归属分组。
 # CORE_TOOL_NAMES / TOOL_GROUPS / _BASE_TOOLS 均由此自动派生，避免多份清单漂移
@@ -1104,6 +1197,7 @@ _TOOL_SPECS = [
     (set_phase, True, ()),
     (find_skills, True, ()),
     (fuzz, True, ()),
+    (exploit_fuzz, True, ()),
     (spawn_subtask, True, ()),
     (parallel_shell, True, ()),
     # 按需工具（分组建制，enable_tool 可整组启用）

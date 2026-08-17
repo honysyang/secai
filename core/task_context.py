@@ -13,6 +13,19 @@ import asyncio
 
 
 @dataclass
+class SubtaskBudget:
+    """子任务独立预算与回收闸门。"""
+    objective: str = ""                        # 明确目标（必填）
+    max_tokens: int = 0                        # token 预算上限，0=不限制
+    max_turns: int = 8                         # 回合预算上限
+    timeout_seconds: float = 600.0             # 墙上时间预算
+    used_tokens: int = 0                       # 已用 token（由主循环/ hooks 累计）
+    used_turns: int = 0                        # 已用回合
+    cancelled: bool = False                    # 是否已被取消
+    reason: str = ""                           # 终态原因（completed / timeout / budget / cancelled / parent_stop）
+
+
+@dataclass
 class TaskContext:
     """通用任务上下文：只承载「执行现场 + 渐进披露」，与任何具体靶场解耦。"""
     workdir: Path
@@ -66,6 +79,9 @@ class TaskContext:
     plan_mode_history: int = 0  # 进入 plan mode 后已消耗的轮次（防无限 plan）
     # ---- exploit 阶段 payload 台账（差分基线纪律，避免重复同一失败变体） ----
     payload_ledger: List[Dict[str, Any]] = field(default_factory=list)  # [{target, signature, hit, count, last_text_hash}]
+    # ---- 强弱模型分工：强模型（破局）每题目最多 STRONG_MODEL_MAX_TURNS 轮 ----
+    strong_model_uses: int = 0            # 已用强模型轮数（主循环计数，超限切回快模型）
+    _on_strong_model: bool = False        # 当前是否处于强模型接管状态
 
 
 # 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness）

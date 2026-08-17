@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 from agents import Runner, Agent
 
 from core.task_context import TaskContext
+from core.memory import render_blackboard_snapshot
 
 # 会话 L2 层 token 量超过此值触发压缩
 COMPACT_TOKEN_THRESHOLD = 20000
@@ -89,6 +90,12 @@ def _split_for_compact(items: List[Any], keep_recent_tokens: int,
     # 回退 recent 起点到最近的 user/assistant 边界，避免拆散 tool_calls 配对
     while cut > 0 and not _is_boundary(items[cut]):
         cut -= 1
+    # 兜底：若退到 0 仍不是边界（整个 recent 都是游离工具输出），说明这些是孤儿，
+    # 直接丢弃前导孤儿（交给调用方处理），确保 recent 首条始终是回合边界
+    if cut == 0 and items and not _is_boundary(items[0]):
+        cut = 1
+        while cut < len(items) and not _is_boundary(items[cut]):
+            cut += 1
     return list(items[:cut]), list(items[cut:])
 
 
@@ -225,17 +232,32 @@ async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None) -> b
     if len(summary) > COMPACTION_SUMMARY_CHARS:
         summary = summary[:COMPACTION_SUMMARY_CHARS]
 
-    # 清空会话，只保留最近若干条；摘要走系统提示，不占 session item
-    await session.clear_session()
     # 防孤儿：recent 首条若是 tool 响应（function_call_output），
     # 其配对的 assistant tool_calls 已被裁掉，OpenAI 会 400——丢弃前导孤儿
     while recent and _is_orphan_tool_output(recent[0]):
         recent = recent[1:]
+
+    # 黑板快照锚点：把当前已确认关键事实作为一条 user 消息前置插入，确保
+    # 压缩后关键事实（flag/死路/hint/next_directive）100% 在场，避免依赖 AI 摘要自觉。
+    snapshot = _render_blackboard_snapshot(ctx)
+    if snapshot:
+        recent.insert(0, {
+            "role": "user",
+            "content": f"【压缩锚点·黑板快照】\n{snapshot}",
+        })
+
+    # 清空会话后重写：原轨迹已归档，session 只保留「黑板快照 + 最近原文」
+    await session.clear_session()
     await session.add_items(recent)
     ctx.compaction_summary = summary
     _emit_compact(ctx, estimate_before=estimate, items_before=len(items),
                   items_after=len(recent))
     return True
+
+
+def _render_blackboard_snapshot(ctx: TaskContext) -> str:
+    """复用 core.memory 的统一快照渲染，避免重复逻辑。"""
+    return render_blackboard_snapshot(ctx)
 
 
 # ================= 断点续跑 =================
@@ -275,7 +297,11 @@ def load_state(workdir: Path) -> Dict[str, Any] | None:
     p = workdir / STATE_FILE
     if not p.exists():
         return None
-    return json.loads(p.read_text(encoding="utf-8"))
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[warn] 读取 {STATE_FILE} 失败，忽略损坏的 checkpoint：{e}")
+        return None
 
 
 def has_checkpoint(workdir: Path) -> bool:

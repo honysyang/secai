@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 
@@ -127,6 +128,15 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
 当前焦点：{phase['focus']}
 达成后切换：{phase.get('next', '')}
 （目标达成后调用 set_phase 切到下一阶段；发现 flag 线索立即切 post；别在旧阶段空转）"""),
+    ]
+    # 破局指令：fork_analyst 一次性分析产出，优先级最高
+    directive = ""
+    nd = c.blackboard.get("next_directive")
+    if isinstance(nd, dict) and nd.get("value"):
+        directive = str(nd.get("value", "")).strip()
+    if directive:
+        parts.append(("# 破局指令（fork_analyst 给出，优先执行）", directive))
+    parts.extend([
         ("# 使命宪章（管理者立法，必须遵守）", charter or "（无）"),
         ("# 作战计划（规划师深度分析，指导阶段推进）", plan or "（无：未规划）"),
         ("# 可用打法（随战况渐进披露，当前已解锁）",
@@ -134,7 +144,7 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
         ("# 历史作战档案", field_notes or "（无：首次执行）"),
         ("# 历史压缩摘要（超长对话压缩后保留的关键事实）", c.compaction_summary or "（无）"),
         ("# 全局黑板（已完成事项 / 全局变量，跨轮共享）", _format_blackboard(c.blackboard)),
-    ]
+    ])
     if c.plan_mode:
         parts.append(("# PLAN MODE 激活", """你当前处于 PLAN MODE。
 本回合你只能输出/修正作战计划，禁止调用任何工具。
@@ -238,6 +248,11 @@ SUBTASK_ENDING = """
 所以 summary 必须自包含、写清结论；flag 没拿到就留空，禁止编造。"""
 
 
+def _prompt_hash(text: str) -> str:
+    """对静态 system prompt 源文本做 sha256，用于断言每轮字节级不变。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def build_executor(role: dict, charter: str, brief: str,
                    field_notes: str = "", model=None, model_settings=None,
                    is_subtask: bool = False,
@@ -251,6 +266,9 @@ def build_executor(role: dict, charter: str, brief: str,
     新增 preset 参数：运行时按场景组合 instructions 后缀与额外工具（如侦察/利用/分析师）。
     可通过 model/model_settings 注入模型池当前模型，支持灾备切换。
     默认使用 FAST_MODEL（deepseek-v4-flash），调用方传入 model 时覆盖。
+
+    成本工程：静态指令 + 工具 schema 的 hash 存入 executor.static_prompt_hash，
+    主循环每轮断言不变，确保 system prompt 字节级稳定，最大化 prompt cache 命中。
     """
     p = AGENT_PRESETS.get(preset, AGENT_PRESETS["default"])
     preset_suffix = p.get("instructions_suffix", "")
@@ -258,6 +276,14 @@ def build_executor(role: dict, charter: str, brief: str,
 
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
         return _render_executor_instructions(ctx, role, brief) + preset_suffix + subtask_suffix
+
+    # 静态指令 hash（不含每轮动态上下文），供主循环断言 system prompt 字节级稳定
+    static_src = "\n".join([
+        role.get("role", ""), role.get("style", ""), brief,
+        preset_suffix, subtask_suffix,
+    ])
+    static_hash = _prompt_hash(static_src + "\n" +
+                               ",".join(sorted(getattr(t, "name", "") for t in ALL_TOOLS)))
 
     extra_tools = []
     for tname in p.get("extra_tools", []):
@@ -270,9 +296,13 @@ def build_executor(role: dict, charter: str, brief: str,
     name = f"Subtask[{role['role']}]" if is_subtask else f"Executor[{role['role']}]"
     if preset != "default":
         name += f"[{preset}]"
-    return Agent(name=name, instructions=_instructions,
-                 tools=tools, model=model or FAST_MODEL,
-                 model_settings=model_settings or EXECUTOR_SETTINGS)
+    executor = Agent(name=name, instructions=_instructions,
+                     tools=tools, model=model or FAST_MODEL,
+                     model_settings=model_settings or EXECUTOR_SETTINGS)
+    # 挂静态 hash，供主循环每轮断言 system prompt 字节级稳定
+    setattr(executor, "static_prompt_hash", static_hash)
+    setattr(executor, "static_prompt_src", static_src)
+    return executor
 
 
 # 为保持旧代码/外部引用的兼容性，保留旧函数名（指向同一个函数）
