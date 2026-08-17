@@ -229,14 +229,19 @@ if ctx.phase == "exploit" and not getattr(ctx, "_brain_upgraded", False):
 
 `.env`：`fast` 位 DeepSeek V4-Flash、`strong` 位 V4-Pro、主模型兜底。冒烟实测 `EXECUTOR_PARALLEL=true`（V4 系对官方 harness 后训练对齐，工具调用稳定性好）：跑一道快题 10 轮无非法 JSON 则全开，**一轮多工具速度翻倍**。
 
-### 2.6 技能披露加权 + 检索修复
+### 2.6 技能披露加权 + 检索修复（已实施）
+
+实现位置：`arsenal/registries/skill_registry.py`
+
+- **检索字段**：`find_skills` 已使用 `name + display_name + category + description + triggers` 作为检索空间，description 已自然纳入。
+- **渐进披露加权**：`detect_skill_triggers` 改为至少命中 **2 个不同 triggers** 才自动披露该技能；触发器少于 2 个的技能要求全部命中。防止单个通用词（如 "file"、"upload"）误触发无关技能。
+- 二进制/PWN/协议、智能合约技能的上下文过滤保留。
 
 ```python
-# skill_registry.py：单篇至少命中 2 个不同 trigger 词才披露全文（防 e2 题披露 IDOR 的误触发）
-hits = sum(1 for t in s.triggers if t and t.lower() in text.lower())
-if hits >= 2: out.append(name)
-# search_skills 检索字段纳入 tldr
-# list_tools 空列表 bug：检查 keyword 为空时的分页短路（available:50 但 tools:[] 是 bug）
+matched = [k for k in keywords if k.lower() in low]
+threshold = min(2, len(keywords))
+if len(matched) >= threshold:
+    hits.append(name)
 ```
 
 ### 2.7 缓存命中率观测（已实施简化版）

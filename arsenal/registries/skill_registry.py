@@ -99,7 +99,10 @@ def skill_triggers() -> Dict[str, List[str]]:
 
 def detect_skill_triggers(text: str, already_disclosed: List[str],
                           task_type: str = "") -> List[str]:
-    """扫描一段事件文本，返回命中但尚未披露的技能名清单（保持注册表顺序）。
+    """扫描一段事件文本，返回命中但尚未披露的技能名清单（按命中 trigger 数排序）。
+
+    加权：至少命中 2 个不同的 triggers 才披露该技能，防止单个通用词（如
+    "file"、"upload"）误触发无关技能。触发器少于 2 个的技能需要全部命中。
 
     增加简单上下文过滤：二进制/PWN/协议技能只在输出包含二进制特征
     （ELF、段、栈/canary/ret/shellcode/端口状态等）时才触发；智能合约
@@ -133,7 +136,10 @@ def detect_skill_triggers(text: str, already_disclosed: List[str],
             ))
             if not sol_ctx:
                 continue
-        if any(k.lower() in low for k in keywords):
+        matched = [k for k in keywords if k.lower() in low]
+        # 加权：至少命中 2 个不同 trigger，或该技能 trigger 不足 2 个时全部命中
+        threshold = min(2, len(keywords))
+        if len(matched) >= threshold:
             hits.append(name)
     return hits
 
