@@ -11,7 +11,6 @@ import argparse
 import re
 import requests
 import sys
-import urllib.parse
 
 
 MARKER = "CMDI_MARKER"

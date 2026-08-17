@@ -67,6 +67,8 @@ def select_challenge(challenges: List[dict], attempts: Dict[str, int],
         code = c.get("unique_code", "")
         coef = DIFF_COEF.get(str(c.get("difficulty", "")).lower(), 1.0)
         ev = float(c.get("total_score", 0) or 0) * coef * (base ** attempts.get(code, 0))
+        if attempts.get(code, 0) == 0:
+            ev *= 3.0  # 零启动倾斜：从未做过的题优先破零（上届 63 题 23 题零启动）
         if ev > best_ev:
             best, best_ev = c, ev
     return best

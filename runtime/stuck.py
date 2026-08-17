@@ -12,11 +12,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from agents import Runner
+from agents.memory import SQLiteSession
 
 from arsenal.registries.skill_registry import load_skills
 from core.agents_def import compactor_agent
 from core.task_context import TaskContext
+from runtime.log import log_info, log_warn, log_error
 
 
 # 模型惰性检测阈值（可通过环境变量覆盖）
@@ -324,17 +325,79 @@ def _format_failed_actions(items: List[Any], max_chars: int = 4000) -> str:
     return text or "（未提取到动作）"
 
 
+def _truncate_old_tool_outputs(session, keep_recent: int = 12,
+                               max_output_len: int = 300) -> int:
+    """对 session 中较旧的工具输出做定点截断（保留结论行），不删任何消息。
+
+    直接 UPDATE SQLite 的 message_data：把 keep_recent 条之前、超过
+    max_output_len 的工具输出正文替换为截断标记。消息条数、顺序、id 全部不变，
+    截断点之前的前缀字节不变 → 前缀缓存仍然命中截断点之前的部分。
+
+    返回截断的消息条数。任何异常都返回 0（宁可不截，不可破坏历史）。
+    """
+    import json as _json
+    import sqlite3 as _sql
+
+    db_path = getattr(session, "db_path", None)
+    if not db_path:
+        return 0
+    table = getattr(session, "messages_table", "session_messages")
+    sid = session.session_id
+    truncated = 0
+    try:
+        conn = _sql.connect(str(db_path))
+        try:
+            rows = conn.execute(
+                f"SELECT id, message_data FROM {table} "
+                f"WHERE session_id = ? ORDER BY id ASC", (sid,)).fetchall()
+            cutoff = max(0, len(rows) - keep_recent)  # 只动旧消息，最近的原样保留
+            for row_id, raw in rows[:cutoff]:
+                try:
+                    item = _json.loads(raw)
+                except Exception:
+                    continue
+                changed = False
+                # function_call_output 是工具结果的主要载体
+                content = item.get("content") if isinstance(item, dict) else None
+                if item.get("type") == "function_call_output":
+                    out = item.get("output", "")
+                    if isinstance(out, str) and len(out) > max_output_len:
+                        head = out[:120].split("\n")[0]  # 保留结论行
+                        item["output"] = (
+                            f"{head}\n…[压缩截断，原文 {len(out)} 字符，"
+                            f"全文见 artifacts/ 或黑板]")
+                        changed = True
+                elif isinstance(content, list):
+                    for part in content:
+                        if (isinstance(part, dict)
+                                and part.get("type") in ("input_text", "output_text")
+                                and len(str(part.get("text", ""))) > 4000):
+                            text = str(part["text"])
+                            part["text"] = (text[:200] +
+                                            f"\n…[压缩截断，原文 {len(text)} 字符]")
+                            changed = True
+                if changed:
+                    conn.execute(f"UPDATE {table} SET message_data = ? WHERE id = ?",
+                                 (_json.dumps(item, ensure_ascii=False), row_id))
+                    truncated += 1
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+    return truncated
+
+
 async def compact_session(ctx: TaskContext, session, compactor_model=None,
                           model_pool=None) -> Optional[str]:
     """自救时对单题 session 进行历史压缩。
 
     复用 context_manager._summarize 的统一摘要指令（与主循环 compact_if_needed
-    同一口径），避免两条压缩路径指令漂移；摘要成功后清空 SQLiteSession 中的历史
-    消息（保留任务元信息在 ctx 中），并把摘要写入 ctx.compaction_summary。
+    同一口径），避免两条压缩路径指令漂移；摘要成功后不再 clear_session 清空历史，
+    而是「定点截断旧工具输出 + 摘要锚点追加到尾部」（append-only），保住截断点
+    之前的前缀缓存；仅当截断后仍超超长硬阈值时才 clear_session 兜底。
     失败时返回 None，不抛出异常，避免中断外层主循环。
     """
-    from agents.memory import SQLiteSession
-
     # 仅支持 SQLiteSession；其他 session 类型直接跳过
     if not isinstance(session, SQLiteSession):
         return None
@@ -368,7 +431,33 @@ async def compact_session(ctx: TaskContext, session, compactor_model=None,
         if not summary or not str(summary).strip():
             return None
         ctx.compaction_summary = str(summary)[:2000]
-        await session.clear_session()
+        # 摘要成功：① 定点截断旧工具输出（不动消息结构，保住截断点前的前缀缓存）
+        #           ② 摘要作为黑板快照追加进上下文尾部（append-only，不重建历史）
+        # 仅当截断后仍超超长硬阈值时，才允许 clear_session 兜底（记 ERROR，赛后追责）。
+        truncated = _truncate_old_tool_outputs(session)
+        log_info(f"[compact] 单题 {ctx.current_code} 定点截断 {truncated} 条旧输出，"
+                 f"历史结构保留（append-only）")
+        # 摘要锚点：作为普通消息追加到尾部，模型下一轮自然看到
+        try:
+            await session.add_items([{
+                "role": "user",
+                "content": (f"[黑板快照·压缩锚点]\n{ctx.compaction_summary}\n"
+                            f"（以上是对更早历史的压缩；被截断的工具输出全文可查 artifacts/ "
+                            f"或黑板；禁止重复已证伪方向）")
+            }])
+        except Exception:
+            pass
+        # 超长硬阈值兜底：截断后历史仍失控才允许全清（应几乎不触发）
+        try:
+            items_after = await session.get_items()
+            total_chars = sum(len(str(i)) for i in items_after)
+            HARD_CAP = 400_000  # 约 10 万 token 量级，按模型上下文调整
+            if total_chars > HARD_CAP:
+                log_error(f"[compact] 单题 {ctx.current_code} 截断后仍 {total_chars} 字符 "
+                          f"> {HARD_CAP}，被迫 clear_session（前缀缓存归零，赛后排查）")
+                await session.clear_session()
+        except Exception:
+            pass
         return ctx.compaction_summary
     except Exception as e:
         log_warn(f"[compact] 自救压缩失败：{str(e)[:200]}")

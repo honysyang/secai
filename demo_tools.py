@@ -8,6 +8,7 @@ TaskContext 通过 Runner.run(context=...) 注入；disclosed_skills 是「多 S
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re

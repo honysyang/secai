@@ -17,8 +17,7 @@ from openai import APIError, APIStatusError, APITimeoutError, AuthenticationErro
 from openai import AsyncOpenAI
 from agents import OpenAIChatCompletionsModel
 
-from adapters.config import (API_KEY, BASE_URL, MODEL_NAME,
-                             PLANNER_MODEL_NAME, FAST_MODEL_NAME, get_model)
+from adapters.config import (API_KEY, BASE_URL, MODEL_NAME, get_model)
 from runtime.budget import ESCALATION_MODELS
 
 

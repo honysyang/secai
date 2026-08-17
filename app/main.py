@@ -15,20 +15,18 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
-import requests
-
-from agents import Runner
+from agents import Runner, RunContextWrapper
 from agents.exceptions import MaxTurnsExceeded
 from agents.memory import SQLiteSession
 
 from core.agents_def import (strategist_agent, reporter_agent, build_executor,
-                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context)
+                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context,
+                            _prompt_hash)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
 from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
@@ -291,7 +289,6 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
                 sub["result"] = {"summary": "[子任务取消] 被主循环取消",
                                  "findings": [], "flag": None}
                 budget.reason = "cancelled"
-                cancelled_flag = True
                 raise
             except Exception as e:
                 sub["result"] = {"summary": f"[子任务异常] {str(e)[:200]}",
@@ -346,7 +343,7 @@ async def _cancel_all_subtasks(ctx, reason: str = "parent_stop") -> None:
     for job in tasks:
         if not job.done():
             job.cancel()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*tasks, return_exceptions=True)
     # 记录被取消的子任务终态
     for sid, job in list(ctx.subtask_jobs.items()):
         sub = next((s for s in ctx.subtasks if s.get("id") == sid), None)
@@ -534,6 +531,23 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             返回 (break_flag, death_reason)。break_flag=True 时外层应终止单题循环。
             """
             nonlocal switched
+
+            # ── 静态 prompt 字节级断言（缓存防线关门） ─────────────────────
+            # build_executor 时计算的 hash 必须全赛程不变；变了说明静态模板
+            # 被每轮变量污染，前缀缓存已断，必须立刻暴露而不是默默烧钱。
+            _src_now = getattr(executor, "static_prompt_src", None)
+            _hash_expect = getattr(executor, "static_prompt_hash", None)
+            if _src_now is not None and _hash_expect is not None:
+                _hash_now = _prompt_hash(_src_now + "\n" + ",".join(
+                    sorted(getattr(t, "name", "") for t in executor.tools)))
+                if _hash_now != _hash_expect:
+                    log_error(f"[cache-guard] 单题 {code} 静态 prompt hash 漂移："
+                              f"{_hash_expect} -> {_hash_now}，前缀缓存已断！"
+                              f"检查是否有人往静态模板拼了每轮变量。")
+                    ctx.cache_guard_violations = getattr(
+                        ctx, "cache_guard_violations", 0) + 1
+            # ── 断言结束 ─────────────────────────────────────────────────
+
             # 墙上时钟硬顶：单题超时强制 stuck，释放槽位
             elapsed = time.monotonic() - ctx.challenge_start_ts
             if elapsed >= ctx.wallclock_budget:
@@ -639,7 +653,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
 
             返回 (break_flag, next_input, death_reason)。
             """
-            nonlocal next_input, intervention_count, hint_used, coach_used
+            nonlocal intervention_count, hint_used, coach_used
             prev_phase = getattr(ctx, "_prev_phase", ctx.phase)
             if ctx.phase == prev_phase:
                 ctx.stuck_turns += 1
@@ -866,6 +880,12 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     try:
         with FIELD_NOTES_FILE.open("a", encoding="utf-8") as f:
             f.write(f"- cache_hits={ctx.cache_hits} cache_misses={ctx.cache_misses}\n")
+            f.write(f"- cache_guard_violations="
+                    f"{getattr(ctx, 'cache_guard_violations', 0)}\n")
+            _cr = ctx.token_usage.get("cache_read", 0)
+            _cw = ctx.token_usage.get("cache_write", 0)
+            _rate = _cr / (_cr + _cw) if (_cr + _cw) else 0
+            f.write(f"- prefix_hit_rate={_rate:.1%} (read={_cr} write={_cw})\n")
             for note in ctx.cache_notes[-5:]:
                 f.write(f"  {note}\n")
     except Exception:
@@ -1028,109 +1048,6 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
             flag_done=chal.get("correct_flag_count") or 0,
             model_pool=model_pool)
         return outcome
-
-
-async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
-                         active: Dict[str, asyncio.Task], attempts: Dict[str, int],
-                         results: List[dict], charter: str, task: str,
-                         global_plan: str, hooks, workdir: Path,
-                         max_retries: int = 2) -> None:
-    """终局重扫：主循环退出后再次拉题目列表，尝试未完成的题或重试 stuck 题。
-
-    - 只有在 `TASK_DEADLINE_TS` 配置且剩余时间 >= DEADLINE_SAFE_MARGIN + 60s 时才执行；
-    - 优先选「未完成且未做过」的题，其次选「之前 stuck/outcome 为 stuck 或 suspended」的题；
-    - 每道题最多重试 max_retries 次，避免无限循环；
-    - 全程同步 start 并等单题跑完，不额外占用并发槽位（重扫阶段保守策略）。
-    """
-    try:
-        ts = float(TASK_DEADLINE_TS)
-    except ValueError:
-        return
-    if time.time() >= ts - DEADLINE_SAFE_MARGIN - 60:
-        log_info("[endgame] 剩余时间不足，跳过终局重扫")
-        return
-
-    log_info("[endgame] 开始终局重扫：拉取题目列表检查是否漏题...")
-    try:
-        challenges = await asyncio.to_thread(client.list_challenges)
-    except Exception as e:
-        log_warn(f"[endgame] 拉取题目列表失败：{str(e)[:200]}")
-        return
-    if not isinstance(challenges, list) or not challenges:
-        return
-
-    # 已收录结果
-    done_codes = {r["code"] for r in results}
-    # 平台侧未完成的题
-    not_completed = [c for c in challenges if not c.get("is_completed")
-                     and c.get("unique_code")]
-    # 优先顺序：未做过的 > stuck 过的 > 其他
-    def _score(c):
-        code = c.get("unique_code")
-        if code not in done_codes:
-            return 0
-        r = next((x for x in results if x["code"] == code), None)
-        if r and r.get("outcome") in ("stuck", "suspended"):
-            return 1
-        return 2
-
-    not_completed.sort(key=_score)
-
-    for chal in not_completed:
-        code = chal.get("unique_code", "")
-        if not code:
-            continue
-        if time.time() >= ts - DEADLINE_SAFE_MARGIN - 30:
-            log_info("[endgame] 剩余时间不足，停止重扫")
-            break
-        # 超过重试上限不再碰
-        if attempts.get(code, 0) >= max_retries:
-            continue
-        desc = chal.get("description", "") or ""
-        difficulty = chal.get("difficulty", "")
-        log_info(f"[endgame] 重扫 {code}（已尝试 {attempts.get(code, 0)} 次）")
-        try:
-            addrs = await asyncio.to_thread(client.start_challenge, code)
-        except Exception as e:
-            log_warn(f"[endgame] start {code} 失败：{str(e)[:200]}")
-            continue
-        if not addrs:
-            attempts[code] = attempts.get(code, 0) + 1
-            continue
-        try:
-            outcome = await _run_single_challenge(
-                code, desc, addrs, charter, task, global_plan, hooks, workdir,
-                client, difficulty,
-                flag_total=chal.get("flag_count") or 1,
-                flag_done=chal.get("correct_flag_count") or 0,
-                model_pool=model_pool)
-            results.append({"code": code, "outcome": outcome})
-            if outcome in ("stuck", "suspended", "error"):
-                attempts[code] = attempts.get(code, 0) + 1
-            log_info(f"[endgame] 单题 {code} 结果：{outcome}")
-        except Exception as e:
-            log_error(f"[endgame] 单题 {code} 异常：{str(e)[:200]}")
-            results.append({"code": code, "outcome": "error"})
-            attempts[code] = attempts.get(code, 0) + 1
-        finally:
-            # 尽力关闭容器释放名额
-            for _ in range(3):
-                try:
-                    if await asyncio.to_thread(client.close_challenge, code):
-                        break
-                except Exception:
-                    pass
-                await asyncio.sleep(1)
-
-    try:
-        challenges2 = await asyncio.to_thread(client.list_challenges)
-        still_unfinished = [c.get("unique_code") for c in (challenges2 or [])
-                            if not c.get("is_completed")]
-        log_info(f"[endgame] 重扫结束，仍显示未完成：{still_unfinished[:20]}")
-    except Exception:
-        pass
-
-
     try:
         while True:
             # 全局 deadline 检查（比赛硬时限，含安全余量）
@@ -1387,6 +1304,109 @@ async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
 
     log_info(f"== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
     return {"status": "finished", "results": results, "report": report_text}
+
+
+async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
+                         active: Dict[str, asyncio.Task], attempts: Dict[str, int],
+                         results: List[dict], charter: str, task: str,
+                         global_plan: str, hooks, workdir: Path,
+                         max_retries: int = 2) -> None:
+    """终局重扫：主循环退出后再次拉题目列表，尝试未完成的题或重试 stuck 题。
+
+    - 只有在 `TASK_DEADLINE_TS` 配置且剩余时间 >= DEADLINE_SAFE_MARGIN + 60s 时才执行；
+    - 优先选「未完成且未做过」的题，其次选「之前 stuck/outcome 为 stuck 或 suspended」的题；
+    - 每道题最多重试 max_retries 次，避免无限循环；
+    - 全程同步 start 并等单题跑完，不额外占用并发槽位（重扫阶段保守策略）。
+    """
+    try:
+        ts = float(TASK_DEADLINE_TS)
+    except ValueError:
+        return
+    if time.time() >= ts - DEADLINE_SAFE_MARGIN - 60:
+        log_info("[endgame] 剩余时间不足，跳过终局重扫")
+        return
+
+    log_info("[endgame] 开始终局重扫：拉取题目列表检查是否漏题...")
+    try:
+        challenges = await asyncio.to_thread(client.list_challenges)
+    except Exception as e:
+        log_warn(f"[endgame] 拉取题目列表失败：{str(e)[:200]}")
+        return
+    if not isinstance(challenges, list) or not challenges:
+        return
+
+    # 已收录结果
+    done_codes = {r["code"] for r in results}
+    # 平台侧未完成的题
+    not_completed = [c for c in challenges if not c.get("is_completed")
+                     and c.get("unique_code")]
+    # 优先顺序：未做过的 > stuck 过的 > 其他
+    def _score(c):
+        code = c.get("unique_code")
+        if code not in done_codes:
+            return 0
+        r = next((x for x in results if x["code"] == code), None)
+        if r and r.get("outcome") in ("stuck", "suspended"):
+            return 1
+        return 2
+
+    not_completed.sort(key=_score)
+
+    for chal in not_completed:
+        code = chal.get("unique_code", "")
+        if not code:
+            continue
+        if time.time() >= ts - DEADLINE_SAFE_MARGIN - 30:
+            log_info("[endgame] 剩余时间不足，停止重扫")
+            break
+        # 超过重试上限不再碰
+        if attempts.get(code, 0) >= max_retries:
+            continue
+        desc = chal.get("description", "") or ""
+        difficulty = chal.get("difficulty", "")
+        log_info(f"[endgame] 重扫 {code}（已尝试 {attempts.get(code, 0)} 次）")
+        try:
+            addrs = await asyncio.to_thread(client.start_challenge, code)
+        except Exception as e:
+            log_warn(f"[endgame] start {code} 失败：{str(e)[:200]}")
+            continue
+        if not addrs:
+            attempts[code] = attempts.get(code, 0) + 1
+            continue
+        try:
+            outcome = await _run_single_challenge(
+                code, desc, addrs, charter, task, global_plan, hooks, workdir,
+                client, difficulty,
+                flag_total=chal.get("flag_count") or 1,
+                flag_done=chal.get("correct_flag_count") or 0,
+                model_pool=model_pool)
+            results.append({"code": code, "outcome": outcome})
+            if outcome in ("stuck", "suspended", "error"):
+                attempts[code] = attempts.get(code, 0) + 1
+            log_info(f"[endgame] 单题 {code} 结果：{outcome}")
+        except Exception as e:
+            log_error(f"[endgame] 单题 {code} 异常：{str(e)[:200]}")
+            results.append({"code": code, "outcome": "error"})
+            attempts[code] = attempts.get(code, 0) + 1
+        finally:
+            # 尽力关闭容器释放名额
+            for _ in range(3):
+                try:
+                    if await asyncio.to_thread(client.close_challenge, code):
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(1)
+
+    try:
+        challenges2 = await asyncio.to_thread(client.list_challenges)
+        still_unfinished = [c.get("unique_code") for c in (challenges2 or [])
+                            if not c.get("is_completed")]
+        log_info(f"[endgame] 重扫结束，仍显示未完成：{still_unfinished[:20]}")
+    except Exception:
+        pass
+
+
 
 
 if __name__ == "__main__":

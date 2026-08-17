@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import random
 from typing import Dict
 
 from agents import OpenAIChatCompletionsModel, RunContextWrapper

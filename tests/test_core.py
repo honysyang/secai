@@ -132,5 +132,41 @@ class TestReporting(unittest.TestCase):
             self.assertAlmostEqual(data["cache"]["hit_rate"], 80 / 150, places=4)
 
 
+class TestMainStructure(unittest.TestCase):
+    """调度器主循环结构回归测试（AST 级，防重构再次破坏函数边界）。
+
+    历史教训：主循环曾整体错入 _endgame_sweep 函数体，导致 run_task 只立法不跑题、
+    _endgame_sweep 引用 run_task 局部变量（NameError）。此测试锁死结构：
+    - run_task 必须包含主循环 while + _run_one + 最终 return；
+    - _endgame_sweep 必须只含终局重扫，不得引用 run_task 局部变量。
+    """
+
+    MAIN_SRC = Path(__file__).parent.parent / "app" / "main.py"
+
+    @classmethod
+    def _src_of(cls, func_name: str) -> str:
+        import ast
+        src = cls.MAIN_SRC.read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        node = next(n for n in ast.walk(tree)
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and n.name == func_name)
+        return ast.get_source_segment(src, node)
+
+    def test_run_task_contains_scheduler_loop(self):
+        rt = self._src_of("run_task")
+        self.assertIn("while True", rt)            # 调度主循环
+        self.assertIn("async def _run_one", rt)    # 单题跑题封装
+        self.assertIn("await _endgame_sweep(", rt)  # 终局重扫调用
+        self.assertIn('return {"status": "finished"', rt)  # 最终 return
+
+    def test_endgame_sweep_is_pure_sweep(self):
+        es = self._src_of("_endgame_sweep")
+        self.assertNotIn("while True", es)          # 主循环不在重扫里
+        for var in ("LIST_RETRY_MAX", "fast_pool", "close_pending",
+                    "slot_wait", "leak_streak", "_run_one"):
+            self.assertNotIn(var, es)               # 不得引用 run_task 局部变量
+
+
 if __name__ == "__main__":
     unittest.main()

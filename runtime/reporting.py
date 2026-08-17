@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 import requests
 
 from core.events import BUS
-from runtime.log import log_info, log_warn
+from runtime.log import log_info
 
 
 # ---------------------------------------------------------------------------

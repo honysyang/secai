@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from agents import Agent, ModelSettings, RunContextWrapper
 
@@ -278,14 +278,6 @@ def build_executor(role: dict, charter: str, brief: str,
     def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
         return _render_executor_instructions(ctx, role, brief) + preset_suffix + subtask_suffix
 
-    # 静态指令 hash（不含每轮动态上下文），供主循环断言 system prompt 字节级稳定
-    static_src = "\n".join([
-        role.get("role", ""), role.get("style", ""), brief,
-        preset_suffix, subtask_suffix,
-    ])
-    static_hash = _prompt_hash(static_src + "\n" +
-                               ",".join(sorted(getattr(t, "name", "") for t in ALL_TOOLS)))
-
     extra_tools = []
     for tname in p.get("extra_tools", []):
         # 按名称从 ALL_TOOLS 查找对应 tool 对象
@@ -294,6 +286,16 @@ def build_executor(role: dict, charter: str, brief: str,
                 extra_tools.append(t)
                 break
     tools = list(ALL_TOOLS) + extra_tools + ([finish_subtask] if is_subtask else [])
+
+    # 静态指令 hash（不含每轮动态上下文，与 executor.tools 完全一致），
+    # 供主循环断言 system prompt 字节级稳定
+    static_src = "\n".join([
+        role.get("role", ""), role.get("style", ""), brief,
+        preset_suffix, subtask_suffix,
+    ])
+    static_hash = _prompt_hash(static_src + "\n" +
+                               ",".join(sorted(getattr(t, "name", "") for t in tools)))
+
     name = f"Subtask[{role['role']}]" if is_subtask else f"Executor[{role['role']}]"
     if preset != "default":
         name += f"[{preset}]"
