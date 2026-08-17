@@ -25,9 +25,10 @@ from agents import Runner
 from agents.exceptions import MaxTurnsExceeded
 from agents.memory import SQLiteSession
 
-from core.agents_def import (manager_agent, planner_agent, reporter_agent, coach_agent,
-                            build_executor, build_subtask_executor,
-                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context)
+from core.agents_def import (strategist_agent, reporter_agent, compactor_agent,
+                            build_executor,
+                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context,
+                            coach_direction_prompt)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
                             should_pull_hint_by_budget)
 from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
@@ -222,10 +223,11 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
                 sub_role = assign_role(sub.get("branch_type", ""), sub["desc"])
             except Exception:
                 pass
-        sub_executor = build_subtask_executor(
+        sub_executor = build_executor(
             sub_role, ctx.charter, brief,
             field_notes=_load_field_notes(),
-            model=model, model_settings=model_settings)
+            model=model, model_settings=model_settings,
+            is_subtask=True)
 
         async def _run_one(sub=sub, sub_executor=sub_executor, sub_role=sub_role):
             sub["status"] = "running"
@@ -323,28 +325,34 @@ def _load_blackboard(workdir: Path) -> dict:
 
 
 async def _replan(ctx, task: str, charter: str, role: dict, hooks) -> str:
-    """执行中计划修正：把黑板 + 近期事件流尾部 + 原计划交给 Planner，产出修正后的计划。"""
+    """执行中计划修正：把黑板 + 近期事件流尾部 + 原计划交给 Strategist，产出修正后的计划。
+
+    同时要求 Strategist 给出 1~2 条可验证方向（卡壳教练功能已合并到这里）。
+    """
     events_text = (ctx.workdir / "events.jsonl").read_text(encoding="utf-8")[-4000:]
     blackboard_text = json.dumps(ctx.blackboard, ensure_ascii=False)[:2000]
+    skills = ", ".join(ctx.disclosed_skills) or "无"
     # 外层 Agent 共享同一模型池，失败时自动切换模型重试
     result = await run_with_model_fallback(
-        planner_agent,
+        strategist_agent,
         input=(f"原任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
                f"原作战计划：\n{ctx.plan}\n\n"
                f"当前黑板（已完成事项）：\n{blackboard_text}\n\n"
                f"近期执行情况（事件流尾部）：\n{events_text}\n\n"
-               f"请指出原计划哪里判断错了，并给出修正后的作战计划。"),
+               f"已解锁技能：{skills}\n\n"
+               f"请指出原计划哪里判断错了，并给出修正后的作战计划。"
+               f"同时给出 1~2 条可验证的新方向（明确假设 + 最小验证动作 + 预期证据），"
+               f"优先使用已解锁技能或 payload 脚本库中的可执行脚本。"),
         hooks=hooks,
         model_pool=global_model_pool,
-        agent_name="Planner")
+        agent_name="Strategist")
     return str(result.final_output)
 
 
 async def _coach(ctx, brief, hooks) -> str:
-    """软干预教练：基于黑板 + 事件流尾部给 1~2 条具体可试方向（轻量，单轮）。
+    """软干预教练：已合并为提示片段，不再调用独立 Coach Agent。
 
-    与 _replan 分工：replan 产出完整作战计划（重），coach 只给方向建议（轻）。
-    输入裁剪（黑板 2000 字符 + 事件流尾 4000 字符）控制 token 成本。
+    直接返回硬提示模板，由执行者/Strategist 在 replan 时消费。保留 async 签名兼容调用方。
     """
     blackboard_text = json.dumps(ctx.blackboard, ensure_ascii=False)[:2000]
     try:
@@ -352,18 +360,7 @@ async def _coach(ctx, brief, hooks) -> str:
     except Exception:
         events_text = ""
     skills = ", ".join(ctx.disclosed_skills) or "无"
-    # 外层 Coach 共享全局模型池，失败时自动切换模型重试
-    result = await run_with_model_fallback(
-        coach_agent,
-        input=(f"题目：\n{brief}\n\n"
-               f"已解锁技能：{skills}\n\n"
-               f"当前黑板（已尝试/已完成）：\n{blackboard_text}\n\n"
-               f"近期执行动作（事件流尾部）：\n{events_text}\n\n"
-               f"请给出 1~2 条具体可执行的新方向。"),
-        hooks=hooks,
-        model_pool=global_model_pool,
-        agent_name="Coach")
-    return str(result.final_output)
+    return coach_direction_prompt(blackboard_text, events_text, skills)
 
 
 async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
@@ -826,66 +823,54 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     log_info(f"== 模型池就绪：{global_model_pool} ==")
     # 同步更新外层 Agent 默认模型为当前模型池入口，避免首次调用仍用旧默认
     if global_model_pool is not None:
-        manager_agent.model = global_model_pool.current.model
-        planner_agent.model = global_model_pool.current.model
+        strategist_agent.model = global_model_pool.current.model
         reporter_agent.model = global_model_pool.current.model
-        coach_agent.model = global_model_pool.current.model
 
     # 清理旧 checkpoint / 事件流（调度器模式：题目进度在平台侧，本地不依赖续跑状态）
     for f in ("state.json", "session.sqlite"):
         (workdir / f).unlink(missing_ok=True)
     (workdir / "events.jsonl").write_text("", encoding="utf-8")
 
-    # ① 管理者·立法（全局一次；模型暂时不可用时做阶段级重试）
-    log_info("== 管理者：写使命宪章 ==")
+    # 全局 fallback 角色提示（单题会按 unique_code 重新派任，这里只做参考）
+    base_role = assign_role(role_hint, task)
+    log_info(f"== 全局角色提示：{base_role['role']} ==")
+
+    # ① 战略家·立法与规划（全局一次；合并管理者 + 规划师，减少一轮 LLM 调用）
+    log_info("== 战略家：写使命宪章与作战计划 ==")
     set_status(workdir, "legislate", "running")
-    charter = ""
+    combined_doc = ""
     for attempt in range(2):
         try:
-            charter_result = await run_with_model_fallback(
-                manager_agent,
-                input=f"用户任务：{task}",
+            combined_result = await run_with_model_fallback(
+                strategist_agent,
+                input=(f"用户任务：\n{task}\n\n"
+                       f"角色提示：{base_role['role']}\n"
+                       f"角色风格：{base_role.get('style', '')[:200]}\n\n"
+                       f"请一次性输出使命宪章和作战计划。"),
                 hooks=hooks,
                 model_pool=global_model_pool,
-                agent_name="Manager")
-            charter = str(charter_result.final_output)
+                agent_name="Strategist")
+            combined_doc = str(combined_result.final_output)
             break
         except Exception as e:
-            log_warn(f"[retry] 管理者立法失败（{attempt + 1}/2）：{str(e)[:200]}")
+            log_warn(f"[retry] 战略家立法/规划失败（{attempt + 1}/2）：{str(e)[:200]}")
             if attempt == 1:
-                log_error(f"== 管理者立法失败：{str(e)[:200]}，无法继续 ==")
+                log_error(f"== 战略家立法/规划失败：{str(e)[:200]}，无法继续 ==")
                 set_status(workdir, "legislate", "error")
-                return {"status": "error", "reason": f"legislate_failed: {type(e).__name__}",
+                return {"status": "error", "reason": f"strategist_failed: {type(e).__name__}",
                         "results": [], "report": ""}
             await asyncio.sleep(3)
+    # 简单拆分：宪章取「# 使命宪章」到「# 作战计划」之间的内容；计划取剩余部分
+    charter_part = combined_doc
+    plan_part = ""
+    if "# 作战计划" in combined_doc:
+        idx = combined_doc.index("# 作战计划")
+        charter_part = combined_doc[:idx]
+        plan_part = combined_doc[idx:]
+    charter = charter_part.strip()
+    global_plan = plan_part.strip() or charter
     save_charter(DATA_DIR / "mission_charter.md", charter)
     set_status(workdir, "legislate", "finish")
-
-    # 全局 fallback 角色（单题会按 unique_code 重新派任）
-    base_role = assign_role(role_hint, task)
-    log_info(f"== 全局角色：{base_role['role']} ==")
-
-    # ② 规划师·全局计划（一次，单题复用 + 单题 brief 补充；模型暂时不可用时重试）
-    log_info("== 规划师：任务深度分析，产出作战计划 ==")
-    global_plan = ""
-    for attempt in range(2):
-        try:
-            plan_result = await run_with_model_fallback(
-                planner_agent,
-                input=(f"用户任务：\n{task}\n\n使命宪章：\n{charter}\n\n"
-                       f"派任角色：{base_role['role']}\n\n请产出作战计划。"),
-                hooks=hooks,
-                model_pool=global_model_pool,
-                agent_name="Planner")
-            global_plan = str(plan_result.final_output)
-            break
-        except Exception as e:
-            log_warn(f"[retry] 规划失败（{attempt + 1}/2）：{str(e)[:200]}")
-            if attempt == 1:
-                log_error(f"== 规划失败：{str(e)[:200]}，无法继续 ==")
-                return {"status": "error", "reason": f"plan_failed: {type(e).__name__}",
-                        "results": [], "report": ""}
-            await asyncio.sleep(3)
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
@@ -1115,29 +1100,44 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
             except Exception:
                 pass
 
-    # ④ 报告者·收尾（报告失败降级，不因模型不可用而崩溃退出）
+    # ④ 报告者·收尾（后台异步生成，不阻塞主进程结束；5 秒内能完成则直接用）
     set_status(workdir, "report", "running")
+
+    async def _generate_report() -> str:
+        try:
+            events_text = (workdir / "events.jsonl").read_text(encoding="utf-8")[-3000:]
+        except Exception:
+            events_text = ""
+        summary = json.dumps(results, ensure_ascii=False)[:1000]
+        try:
+            report = await run_with_model_fallback(
+                reporter_agent,
+                input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
+                       f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
+                hooks=hooks,
+                model_pool=global_model_pool,
+                agent_name="Reporter")
+            return str(report.final_output)
+        except Exception as e:
+            log_error(f"== 报告生成失败：{str(e)[:200]}，降级为无战报 ==")
+            return f"（战报生成失败：{str(e)[:200]}）"
+
+    report_task = asyncio.create_task(_generate_report())
     try:
-        events_text = (workdir / "events.jsonl").read_text(encoding="utf-8")[-6000:]
-    except Exception:
-        events_text = ""
-    summary = json.dumps(results, ensure_ascii=False)[:2000]
-    try:
-        report = await run_with_model_fallback(
-            reporter_agent,
-            input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
-                   f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
-            hooks=hooks,
-            model_pool=global_model_pool,
-            agent_name="Reporter")
-        report_text = str(report.final_output)
-    except Exception as e:
-        log_error(f"== 报告生成失败：{str(e)[:200]}，降级为无战报 ==")
-        report_text = f"（战报生成失败：{str(e)[:200]}）"
-    (DATA_DIR / "field_notes.md").open("a", encoding="utf-8").write(
-        f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{report_text}\n")
-    print("\n===== 战报 =====\n" + report_text)
-    set_status(workdir, "report", "finish")
+        report_text = await asyncio.wait_for(report_task, timeout=5.0)
+    except asyncio.TimeoutError:
+        report_text = "（战报后台生成中，请查看 data/field_notes.md）"
+        log_info("[report] 战报后台生成中，未阻塞主进程结束")
+
+    # 无论是否超时，确保战报最终写入 field_notes（后台任务完成时会写）
+    async def _persist_report():
+        final = await report_task
+        (DATA_DIR / "field_notes.md").open("a", encoding="utf-8").write(
+            f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{final}\n")
+        print("\n===== 战报 =====\n" + final)
+        set_status(workdir, "report", "finish")
+
+    asyncio.create_task(_persist_report())
 
     log_info(f"== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
     return {"status": "finished", "results": results, "report": report_text}

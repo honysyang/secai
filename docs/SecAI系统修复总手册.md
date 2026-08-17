@@ -367,6 +367,65 @@ if task_ctx.phase == "exploit" and tool.name in ("shell", "http_request", "run_b
 
 ---
 
+## 批次五　智能体结构精简（已实施）
+
+**问题**：原架构有 Manager、Planner、Executor、Coach、Reporter、Compactor、Subtask Executor 共 7 个 Agent，主链路串行调用多，启动慢。
+
+### 5.1 Manager + Planner → Strategist（已实施）
+
+实现位置：`core/agents_def.py` + `app/main.py`
+
+- 合并 `manager_agent` 与 `planner_agent` 为 `strategist_agent`；
+- Strategist 一次调用同时输出「使命宪章」和「作战计划」；
+- `app/main.py` 拆分 `# 作战计划` 标记后的内容作为 `global_plan`，前面部分作为 `charter`。
+
+效果：任务启动阶段减少一次 LLM 调用。
+
+### 5.2 Executor 与 Subtask Executor 共用（已实施）
+
+实现位置：`core/agents_def.py`
+
+- `build_executor(..., is_subtask=True)` 在子任务模式下自动追加：
+  - `finish_subtask` 工具；
+  - 子任务结束协议系统提示。
+- 删除独立 `build_subtask_executor` 函数（保留别名兼容旧代码）。
+
+效果：减少 Agent 定义数量，子任务复用同一执行者模板，仅动态切换系统提示与工具。
+
+### 5.3 Coach 硬提示化（已实施）
+
+实现位置：`core/agents_def.py` + `app/main.py`
+
+- 删除独立 `coach_agent`；
+- `_replan` 调用 Strategist 时，额外要求其给出 1~2 条可验证方向；
+- `_coach` 改为直接返回 `coach_direction_prompt()` 硬提示模板，不再调用 LLM；
+- 保留 async 签名兼容调用方。
+
+效果：卡壳时不再产生一次独立的 Coach LLM 调用，方向建议由 replan 顺带产出或由硬提示注入。
+
+### 5.4 Reporter 异步化（已实施）
+
+实现位置：`app/main.py`
+
+- 报告生成改为 `asyncio.create_task(_generate_report())`；
+- 主进程等待 5 秒，超时则返回「战报后台生成中」；
+- 后台任务 `_persist_report()` 确保战报最终写入 `data/field_notes.md`。
+
+效果：任务结束返回不再被 Reporter 阻塞。
+
+### 5.5 当前 Agent 清单
+
+| Agent | 职责 | 触发方式 |
+|---|---|---|
+| **Strategist** | 立法 + 深度分析 + 作战计划 + 修正方向 | 任务启动一次；卡壳 replan 一次 |
+| **Executor** | 执行工具、写黑板、推进阶段 | 每道题主循环常驻 |
+| **Compactor** | 历史压缩摘要 | 上下文超阈值时 |
+| **Reporter** | 生成战报 + 死路蒸馏 | 任务结束后异步 |
+
+从 7 个 Agent 精简到 4 个核心 Agent + 1 个异步 Reporter。
+
+---
+
 ## 全局落地顺序
 
 | 天 | 内容 | 出场前门槛 |
@@ -375,6 +434,7 @@ if task_ctx.phase == "exploit" and tool.name in ("shell", "http_request", "run_b
 | 第 1 天剩余 | 批次二 2.1~2.4 | 冒烟 5 轮 cache_rate ≥70% |
 | 第 2 天 | 批次二 2.5~2.7 + 批次四前两项 | 并行封印实测 + payload 脚本逐个手测 |
 | 第 3 天 | 批次三全部 | 批次三验收 4 条全过 |
+| 穿插 | 批次五智能体精简 | 语法通过 + 启动流程跑一次 |
 
 **冒烟总线**：每批次改完跑一道已知快题（目录穿越/命令注入类），确认「启动→首轮突击包→铁律提交→机械通关判决→close→槽位回收」全链路正常，再改下一批。
 
@@ -383,4 +443,4 @@ if task_ctx.phase == "exploit" and tool.name in ("shell", "http_request", "run_b
 - ❌ 迁移 DeepSeek Harness 底座（TS/Node 预览版，破坏性变更风险）
 - ❌ 双执行者并行（3 容器槽位是天花板）
 - ❌ 自由拓扑的动态智能体（物种固定、个体按需、皮肤可换即可）
-- ❌ 新增智能体类型（七角色 + 三智能体职责已清晰，磨执行层不动结构）
+- ❌ 新增智能体类型（当前 4 核心 + 1 异步 Reporter 已足够，磨执行层不动结构）

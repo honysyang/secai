@@ -22,19 +22,15 @@ from arsenal.registries.skill_registry import load_skill_bodies
 from runtime.status import PHASE_DEFS
 from core.task_context import TaskContext
 
-# parallel_tool_calls=False：DeepSeek 等兼容后端在并行工具调用时更容易生成非法 JSON，
-# 强制每轮最多一次工具调用，换取稳定性（牺牲一点并发）。
 # 按角色拆分 ModelSettings：输出型 Agent 稳定低 temperature，探索型 Agent 略高；
-# Planner/Reporter 给更大 max_tokens 以输出完整计划/总结；
-# Manager/Compactor 加量以保留详细约束与关键事实。
+# Strategist/Reporter 给更大 max_tokens 以输出完整宪章+计划/总结；
+# Compactor 加量以保留详细约束与关键事实。
 # Executor 在 exploit 阶段可开并行工具调用（V4 系对齐好，需环境变量显式启用）。
 _EXECUTOR_PARALLEL = os.getenv("EXECUTOR_PARALLEL", "").lower() in ("1", "true", "yes")
-MANAGER_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
-PLANNER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
+STRATEGIST_SETTINGS = ModelSettings(temperature=0.15, max_tokens=8192, parallel_tool_calls=False)
 EXECUTOR_SETTINGS = ModelSettings(temperature=0.3, max_tokens=4096, parallel_tool_calls=_EXECUTOR_PARALLEL)
 REPORTER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
 COMPACTOR_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
-COACH_SETTINGS = ModelSettings(temperature=0.3, max_tokens=2048, parallel_tool_calls=False)
 
 # 保留兼容性兜底 SETTINGS
 SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
@@ -50,47 +46,38 @@ def intel_tools():
     return [query_skills, list_knowledge, get_knowledge, list_tools]
 
 
-# ================= 管理者 =================
-MANAGER_INSTRUCTIONS = """你是 SecAI 的管理者，负责立法而非执行。你的产物是一份使命宪章。
+# ================= 战略家（立法 + 深度分析 → 宪章 + 作战计划） =================
+STRATEGIST_INSTRUCTIONS = """你是 SecAI 的战略家，负责在动手前一次性完成「立法 + 深度分析 + 制定作战计划」。
 
-根据用户任务与目标信息，输出 Markdown 格式的使命宪章，包含四节：
-# 目标 —— 可验证的完成判据（怎么算成功，一句话说死）
-# 关键原则 —— 3~6 条（如：宁可判死不可空转；证据驱动不臆测；死路不重复）
-# 约束 —— 预算/时限/禁区/范围边界
-# 终止判据 —— 目标达成 + 证据枯竭（连续无信息增量/假设证伪）+ 资源时钟
+根据用户任务、目标信息、派任角色，输出 Markdown 文档，严格包含两大部分：
 
-只输出宪章本身，不要寒暄。宪章将被注入执行者的系统提示，并作为终止核对的依据。"""
+# 使命宪章
+- 目标：可验证的完成判据（一句话说死）
+- 关键原则：3~6 条（如：宁可判死不可空转；证据驱动不臆测；死路不重复）
+- 约束：预算/时限/禁区/范围边界
+- 终止判据：目标达成 + 证据枯竭（连续无信息增量/假设证伪）+ 资源时钟
 
-manager_agent = Agent(name="Manager", instructions=MANAGER_INSTRUCTIONS,
-                      model=MODEL, model_settings=MANAGER_SETTINGS)
+# 作战计划
+- 任务研判：目标类型、技术栈、最可能漏洞类型（1~3 个候选，按概率排序）。
+  优先技术栈反推；每个候选必须给出「可验证假设」：即「假设存在 X 漏洞 → 用什么最小探测验证 → 预期正/负响应各是什么」。
+- 攻击面预测：最可能的入口/参数/接口/文件（按可达性排序）
+- flag 定位：flag 可能在哪（常见路径 / 数据库 / 环境变量 / 源码等）
+- 分步计划：按 recon→enumerate→detect→exploit→post 列出具体步骤，每步必须含目标标识、唯一动作、成功标准
+- 优先级与止损：先易后难、优先已 available 题目；拿到文件读取后直接读 flag 位置；关键路径必须提醒写黑板
+
+纪律：
+- 调用 query_skills / list_knowledge / get_knowledge / list_tools 等只读工具最多一次；
+- 获取信息后必须立即产出宪章 + 计划，禁止反复调用同一工具空转；
+- 只输出文档本身，不要寒暄。"""
+
+strategist_agent = Agent(name="Strategist", instructions=STRATEGIST_INSTRUCTIONS,
+                         tools=intel_tools(),
+                         model=MODEL, model_settings=STRATEGIST_SETTINGS)
 
 
-# ================= 规划师（任务深度分析 → 作战计划） =================
-PLANNER_INSTRUCTIONS = """你是 SecAI 的作战规划师（分析主智能体），对网络安全具有深度作战能力，负责在动手前对任务做深度分析，产出一份「可验证、可执行」的作战计划。
-
-输入包括：用户任务、使命宪章、派任角色。输出 Markdown 作战计划，包含五节：
-
-# 任务研判 —— 目标是什么类型、技术栈、最可能的漏洞类型（1~3 个候选，按概率排序）
-优先技术栈反推（确认语言/框架后按该栈最高危面列候选），不依赖技能库是否命中；差异实验（distinguish/fuzz 找响应差异点）是未知漏洞的第一性证据。
-每个候选漏洞必须给出「可验证假设」：即「假设存在 X 漏洞 → 用什么最小探测验证 → 预期正/负响应各是什么」。禁止只写漏洞类型名称而不写验证方法。
-
-# 攻击面预测 —— 最可能的入口/参数/接口/文件（按可达性从高到低排序）
-
-# flag 定位 —— flag 可能在哪：先读常见路径 /flag、/flag.txt、/etc/passwd、已知真实文件名；读不到则深入读 includes/config.php 拿数据库配置连库查、读合同/文档文件内容、环境变量
-
-# 分步作战计划 —— 按 recon→enumerate→detect→exploit→post 列出具体步骤
-每步必须自洽，至少含：①目标标识（URL/IP:Port/具体路径）②本步唯一动作 ③成功标准（完成时应有证据形态）。禁止「按上文目标」「继续深入」等模糊表述。
-
-# 优先级与止损 —— 先易后难、优先已 available 的题目；拿到文件读取后直接读 flag 位置；登录成功/确认漏洞/关键路径必须提醒执行者写黑板
-
-如果遇到无法解决的问题，可以跳过，进行下一个。
-只输出计划本身，不要寒暄。计划将被注入执行者的系统提示，指导其阶段推进。
-
-纪律：调用 query_skills / list_knowledge / get_knowledge / list_tools 等只读工具最多一次，获取信息后必须立即产出计划，禁止反复调用同一工具空转。"""
-
-planner_agent = Agent(name="Planner", instructions=PLANNER_INSTRUCTIONS,
-                      tools=intel_tools(),
-                      model=MODEL, model_settings=PLANNER_SETTINGS)
+# 为保持旧代码/外部引用的兼容性，保留旧变量名（指向同一个 Agent 实例）
+manager_agent = strategist_agent
+planner_agent = strategist_agent
 
 
 # ================= 执行者（静态系统提示 + 每轮动态上下文注入） =================
@@ -154,11 +141,6 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
 EXECUTOR_DYNAMIC_PREFIX = "【动态上下文】\n"
 
 
-EXECUTOR_TEMPLATE = """{static}
-{dynamic}
-"""
-
-
 def _format_blackboard(board: dict) -> str:
     """把黑板格式化成注入系统提示的精简摘要（只列 key/状态/验证标记/时间，value 仅 40 字符）。
 
@@ -190,39 +172,6 @@ def _format_blackboard(board: dict) -> str:
     return "\n".join(lines) + "\n（黑板仅列摘要；取完整值用 blackboard get <key>）"
 
 
-def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
-                           plan: str, field_notes: str, role_boost: str = "") -> str:
-    """组装每轮变化的动态上下文，作为 Runner.run input 的前置消息注入。
-
-    静态系统提示只包含角色风格、工作纪律、任务书等不变内容；动态部分包含：
-    当前阶段、宪章、作战计划、已解锁打法、历史档案、压缩摘要、黑板、阶段增强。
-    这样同一个 Agent 实例可复用，SDK 不必每轮重建完整系统提示。
-    """
-    c = ctx.context
-    playbooks_text = load_skill_bodies(c.disclosed_skills)
-    phase = PHASE_DEFS.get(c.phase, PHASE_DEFS["recon"])
-    parts = [
-        ("# 当前阶段", f"""阶段：{c.phase}
-目标：{phase['goal']}
-当前焦点：{phase['focus']}
-达成后切换：{phase.get('next', '')}
-（目标达成后调用 set_phase 切到下一阶段；发现 flag 线索立即切 post；别在旧阶段空转）"""),
-        ("# 使命宪章（管理者立法，必须遵守）", charter or "（无）"),
-        ("# 作战计划（规划师深度分析，指导阶段推进）", plan or "（无：未规划）"),
-        ("# 可用打法（随战况渐进披露，当前已解锁）",
-         playbooks_text or "（暂无可用打法，先用通用侦察）"),
-        ("# 历史作战档案", field_notes or "（无：首次执行）"),
-        ("# 历史压缩摘要（超长对话压缩后保留的关键事实）", c.compaction_summary or "（无）"),
-        ("# 全局黑板（已完成事项 / 全局变量，跨轮共享）", _format_blackboard(c.blackboard)),
-    ]
-    if role_boost:
-        parts.append(("# 阶段增强（证据触发，随战况注入）", role_boost))
-    return "\n\n".join(f"{title}\n{body}" for title, body in parts)
-
-
-EXECUTOR_DYNAMIC_PREFIX = "【动态上下文】\n"
-
-
 def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
                                   role: dict, brief: str) -> str:
     """渲染执行者静态系统提示（只包含角色风格、工作纪律、任务书）。"""
@@ -249,35 +198,31 @@ SUBTASK_ENDING = """
 
 
 def build_executor(role: dict, charter: str, brief: str,
-                   field_notes: str = "", model=None, model_settings=None) -> Agent:
+                   field_notes: str = "", model=None, model_settings=None,
+                   is_subtask: bool = False) -> Agent:
     """构建执行者。静态系统提示只含角色/纪律/任务书；动态上下文（阶段/计划/黑板/打法）
     每轮通过 Runner.run input 前置注入，实现动静分离，减少 SDK 每轮重建完整系统提示的开销。
 
-    可通过 model/model_settings 注入模型池当前模型，支持灾备切换。
-    默认使用主模型 MODEL（glm-5.2-agent-chanllenge 优先），调用方传入 model 时覆盖。
-    """
-    def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
-        return _render_executor_instructions(ctx, role, brief)
-
-    return Agent(name=f"Executor[{role['role']}]", instructions=_instructions,
-                 tools=ALL_TOOLS, model=model or FAST_MODEL, model_settings=model_settings or EXECUTOR_SETTINGS)
-
-
-def build_subtask_executor(role: dict, charter: str, brief: str,
-                           field_notes: str = "", model=None, model_settings=None) -> Agent:
-    """构建子任务执行者：复用执行者静态模板 + 子任务结束协议 + 专用结束工具。
-
-    子任务用独立 session（上下文隔离），结果通过 finish_subtask 结构化回传，
+    当 is_subtask=True 时追加子任务结束协议与 finish_subtask 工具，结果结构化回传，
     主 Agent 只拿到 summary/findings/flag，不接触子任务的海量工具输出。
-    默认使用主模型 MODEL（glm-5.2-agent-chanllenge 优先），调用方传入 model 时覆盖。
-    """
-    def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
-        return (_render_executor_instructions(ctx, role, brief)
-                + SUBTASK_ENDING)
 
-    return Agent(name=f"Subtask[{role['role']}]", instructions=_instructions,
-                 tools=ALL_TOOLS + [finish_subtask], model=model or FAST_MODEL,
+    可通过 model/model_settings 注入模型池当前模型，支持灾备切换。
+    默认使用 FAST_MODEL（deepseek-v4-flash），调用方传入 model 时覆盖。
+    """
+    subtask_suffix = ("\n\n" + SUBTASK_ENDING) if is_subtask else ""
+
+    def _instructions(ctx: RunContextWrapper[TaskContext], agent: Agent) -> str:
+        return _render_executor_instructions(ctx, role, brief) + subtask_suffix
+
+    tools = ALL_TOOLS + ([finish_subtask] if is_subtask else [])
+    name = f"Subtask[{role['role']}]" if is_subtask else f"Executor[{role['role']}]"
+    return Agent(name=name, instructions=_instructions,
+                 tools=tools, model=model or FAST_MODEL,
                  model_settings=model_settings or EXECUTOR_SETTINGS)
+
+
+# 为保持旧代码/外部引用的兼容性，保留旧函数名（指向同一个函数）
+build_subtask_executor = build_executor
 
 
 # ================= 报告者 =================
@@ -304,24 +249,14 @@ compactor_agent = Agent(name="Compactor", instructions=COMPACTOR_INSTRUCTIONS,
                         model=MODEL, model_settings=COMPACTOR_SETTINGS)
 
 
-# ================= 卡壳教练（软干预：hint 后给具体方向，不重规划） =================
-COACH_INSTRUCTIONS = """你是 SecAI 的卡壳教练（分析型）。执行者在一道题上卡住了（看过官方提示仍无进展），
-基于它已有的尝试，把「可能的方向」转化为「可验证的安全假设」，帮助它突破死循环。
-
-输入包含：题目、已解锁技能、当前黑板（已尝试/已完成）、近期执行动作（事件流尾部）。
-
-输出要求（只输出建议本身，不要寒暄，最多 2 条）：
-每条必须含三要素：
-1. 可验证假设：明确「假设存在 X 漏洞/问题」；
-2. 最小验证动作：给出具体参数/路径/工具/方法，例如「对 /login 的 username 参数用 fuzz 跑 sqli 字典」；
-3. 预期证据：正/负响应各是什么，例如「报错含 SQL syntax=命中；正常跳转=未命中」。
-
-补充要求：
-- 优先从「已解锁技能」和知识库里找方向；
-- 若技能库无现成打法，引导执行者走第一性原理：技术栈反推 + 差异实验（distinguish/fuzz 找响应差异点）；
-- 禁止输出「继续尝试」「深入分析」等没有信息量的空话；
-- 若黑板已有 confirmed 漏洞但尚未拿到 flag，优先给「基于该漏洞换 payload / 换利用链」的建议，而非让执行者重新侦察。"""
-
-coach_agent = Agent(name="Coach", instructions=COACH_INSTRUCTIONS,
-                    tools=intel_tools(),
-                    model=MODEL, model_settings=COACH_SETTINGS)
+# 卡壳教练已合并到 Strategist：当执行者卡壳时，由 _replan 顺带产出 1~2 条方向建议。
+# 保留一个轻量提示函数，供 main.py 在不调用独立 Agent 时直接注入 next_input。
+def coach_direction_prompt(blackboard_text: str, events_tail: str, skills_text: str) -> str:
+    """不调用 LLM，直接返回硬提示模板，让执行者/Strategist 在 replan 时给出方向。"""
+    return (
+        f"当前黑板：\n{blackboard_text}\n\n"
+        f"近期事件：\n{events_tail}\n\n"
+        f"已解锁技能：{skills_text}\n\n"
+        "请基于以上信息给出 1~2 条可验证的新方向（明确假设 + 最小验证动作 + 预期证据），"
+        "优先使用已解锁技能或 payload 脚本库中的可执行脚本。禁止输出「继续尝试」等空话。"
+    )
