@@ -121,8 +121,9 @@ def is_permanent_model_failure(exc: Exception) -> bool:
 class ModelPool:
     """管理主模型 + 候选模型，支持失败时切换与冷却重试。
 
-    preferred_name：指定首选模型名（如 fast/strong 模型），把它提到池子最前作为当前模型。
+    preferred_name：指定首选模型名或角色（如 "fast"/"strong"），把它提到池子最前作为当前首选模型。
                    双模型分工：执行者池用 fast，外层分析池用 strong，主模型兜底。
+                   匹配规则：先按 role 字段匹配，再按 model name 匹配。
     """
 
     COOLDOWN_SECONDS = 30  # 暂时性失败后的冷却时间（冷却后可重试同模型）
@@ -132,6 +133,12 @@ class ModelPool:
         self._used: List[str] = []
         self._failed: Set[str] = set()                 # 永久失败（鉴权/模型名错误）
         self._transient_failed: Dict[str, float] = {}  # 暂时失败 name -> 失败时间戳
+
+        # 解析 ESCALATION_MODELS 并保留 role 信息（用于按 role 选择）
+        self._escalation_specs = []
+        for item in ESCALATION_MODELS:
+            if isinstance(item, dict):
+                self._escalation_specs.append(item)
 
         # 主模型（延迟初始化已触发，这里安全构造真实实例）
         entries = [ModelEntry(
@@ -143,9 +150,7 @@ class ModelPool:
         )]
 
         # 灾备候选模型
-        for item in ESCALATION_MODELS:
-            if not isinstance(item, dict):
-                continue
+        for item in self._escalation_specs:
             name = item.get("model")
             if not name or not isinstance(name, str):
                 continue
@@ -165,12 +170,40 @@ class ModelPool:
 
         # 双模型分工：把 preferred_name 提到最前作为当前首选模型；主模型仍在池中兜底
         if preferred_name:
-            preferred_idx = next(
-                (i for i, e in enumerate(entries) if e.name == preferred_name), None)
+            preferred_idx = self._find_entry_index(entries, preferred_name)
             if preferred_idx is not None and preferred_idx > 0:
                 entries.insert(0, entries.pop(preferred_idx))
 
         self._entries = entries
+
+    def _find_entry_index(self, entries: List[ModelEntry], key: str) -> Optional[int]:
+        """按 role 或 name 匹配条目索引。优先 role 匹配，再 name 匹配。"""
+        key_lower = key.lower()
+        # 先按 role 匹配
+        for i, e in enumerate(entries):
+            spec = next((s for s in self._escalation_specs
+                         if s.get("model") == e.name), {})
+            if spec.get("role", "").lower() == key_lower:
+                return i
+        # 再按 name 匹配
+        for i, e in enumerate(entries):
+            if e.name == key or e.name.lower() == key_lower:
+                return i
+        return None
+
+    def switch_to_role(self, role: str) -> Optional[ModelEntry]:
+        """切换到指定 role 的可用模型。返回新条目，或 None（无可用/已在该角色）。"""
+        idx = self._find_entry_index(self._entries, role)
+        if idx is None:
+            return None
+        target = self._entries[idx]
+        if not self._available(target, self.current.name):
+            return None
+        if target.name not in self._used:
+            self._used.append(target.name)
+        # 把目标条目提到最前作为当前模型
+        self._entries.insert(0, self._entries.pop(idx))
+        return self.current
 
     @property
     def default(self) -> ModelEntry:

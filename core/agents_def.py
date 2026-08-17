@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import time
 
 from agents import Agent, ModelSettings, RunContextWrapper
@@ -26,12 +27,15 @@ from core.task_context import TaskContext
 # 按角色拆分 ModelSettings：输出型 Agent 稳定低 temperature，探索型 Agent 略高；
 # Planner/Reporter 给更大 max_tokens 以输出完整计划/总结；
 # Manager/Compactor 加量以保留详细约束与关键事实。
+# Executor 在 exploit 阶段可开并行工具调用（V4 系对齐好，需环境变量显式启用）。
+_EXECUTOR_PARALLEL = os.getenv("EXECUTOR_PARALLEL", "").lower() in ("1", "true", "yes")
 MANAGER_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
 PLANNER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
-EXECUTOR_SETTINGS = ModelSettings(temperature=0.3, max_tokens=4096, parallel_tool_calls=False)
+EXECUTOR_SETTINGS = ModelSettings(temperature=0.3, max_tokens=4096, parallel_tool_calls=_EXECUTOR_PARALLEL)
 REPORTER_SETTINGS = ModelSettings(temperature=0.2, max_tokens=8192, parallel_tool_calls=False)
 COMPACTOR_SETTINGS = ModelSettings(temperature=0.1, max_tokens=4096, parallel_tool_calls=False)
 COACH_SETTINGS = ModelSettings(temperature=0.3, max_tokens=2048, parallel_tool_calls=False)
+
 # 保留兼容性兜底 SETTINGS
 SETTINGS = ModelSettings(temperature=0.2, max_tokens=4096, parallel_tool_calls=False)
 

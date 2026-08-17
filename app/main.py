@@ -486,6 +486,18 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             ctx.turn_net_fail = False  # 本轮网络不可达清零（hooks 命中时置位）
             prev_phase = ctx.phase
 
+            # 攻坚换强脑：进入 exploit 阶段后切换到 role=strong 模型，并开启并行工具调用
+            if (ctx.phase == "exploit" and not getattr(ctx, "_brain_upgraded", False)
+                    and model_pool is not None):
+                strong_entry = model_pool.switch_to_role("strong")
+                if strong_entry is not None:
+                    old = getattr(executor.model, "model", "?")
+                    executor.model = strong_entry.model
+                    executor.model_settings.parallel_tool_calls = True
+                    ctx._brain_upgraded = True
+                    log_warn(f"[brain-up] 单题 {code} 进入 exploit 阶段，"
+                             f"{old} -> {strong_entry.name}，并行工具调用已开启")
+
             # 动静分离：动态上下文作为 input 前缀注入，静态系统提示复用同一 Agent
             dynamic_ctx = _build_dynamic_context(
                 RunContextWrapper(context=ctx), charter, ctx.plan or global_plan,

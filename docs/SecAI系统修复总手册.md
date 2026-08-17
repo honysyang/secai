@@ -213,21 +213,31 @@ def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 1
 
 `demo_tools.py _spill_output`：阈值从 800 提到 **4000 字符**——日志实证 878 字符的输出被截断导致 read_artifact 双倍往返。只有真正的大输出（扫描/源码）才走 artifacts。
 
-### 2.5 攻坚换强脑 + V4 对齐 + 并行封印实测（未实施）
+### 2.5 攻坚换强脑 + V4 对齐 + 并行封印实测（已实施）
+
+实现位置：`runtime/model_pool.py` + `app/main.py` + `core/agents_def.py`
+
+- **ModelPool 按 role 切换**：`preferred_name` 支持按 `role`（如 `fast`/`strong`）或 `name` 匹配；新增 `switch_to_role(role)` 方法。
+- **攻坚换强脑**：`app/main.py` 主循环检测到 `ctx.phase == "exploit"` 且未升级过，自动调用 `model_pool.switch_to_role("strong")`，把执行者切到 `role=strong` 模型（如 V4-Pro），并强制开启 `parallel_tool_calls=True`。
+- **并行封印**：`EXECUTOR_SETTINGS` 默认跟随环境变量 `EXECUTOR_PARALLEL`；进入 exploit 后无论环境变量如何都强制开启并行工具调用（只对 V4 等对齐好的模型安全）。`EXECUTOR_PARALLEL=true` 时全局默认也开启。
+- **兜底**：若 `.env` 未配置 `role=strong` 或 strong 模型不可用，则保持当前模型，不影响跑分。
 
 ```python
-# app/main.py 阶段切换处：
+# app/main.py
 if ctx.phase == "exploit" and not getattr(ctx, "_brain_upgraded", False):
-    strong = _find_model_by_role("strong")
-    if strong:
-        old = getattr(executor.model, "model", "?")
-        sclient = AsyncOpenAI(base_url=strong["base_url"], api_key=strong["api_key"])
-        executor.model = OpenAIChatCompletionsModel(model=strong["name"], openai_client=sclient)
+    strong_entry = model_pool.switch_to_role("strong")
+    if strong_entry is not None:
+        executor.model = strong_entry.model
+        executor.model_settings.parallel_tool_calls = True
         ctx._brain_upgraded = True
-        log_warn(f"[brain-up] 单题 {code} 进入 exploit，{old} -> {strong['name']}")
-```
 
-`.env`：`fast` 位 DeepSeek V4-Flash、`strong` 位 V4-Pro、主模型兜底。冒烟实测 `EXECUTOR_PARALLEL=true`（V4 系对官方 harness 后训练对齐，工具调用稳定性好）：跑一道快题 10 轮无非法 JSON 则全开，**一轮多工具速度翻倍**。
+# runtime/model_pool.py
+def switch_to_role(self, role: str) -> Optional[ModelEntry]: ...
+
+# core/agents_def.py
+_EXECUTOR_PARALLEL = os.getenv("EXECUTOR_PARALLEL", "").lower() in ("1", "true", "yes")
+EXECUTOR_SETTINGS = ModelSettings(..., parallel_tool_calls=_EXECUTOR_PARALLEL)
+```
 
 ### 2.6 技能披露加权 + 检索修复（已实施）
 
