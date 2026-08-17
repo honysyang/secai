@@ -312,12 +312,58 @@ if reap:
 
 ---
 
-## 批次四　利用工作台（对利用弱的定向补强，2~3 小时）
+## 批次四　利用工作台（已实施核心脚本库 + 技能联动）
 
-1. **wiki → 可执行 payload 脚本库**（`arsenal/payloads/*.py`，统一 argparse 接口）：优先四发——`libpq_multibyte_bypass.py`（0xC0 前导字节 + OR 闭合族）、`gateway_backslash_bypass.py`（反斜杠路径段 + 403/404/401 判别表自动判定）、`npm_supply_chain.py`（Verdaccio 匿名发布 + postinstall 模板）、`rsc_flight_probe.py`（Flight 格式探测）。技能 md 末尾加「执行入口：python3 arsenal/payloads/xxx.py --help」；
-2. **exploit_fuzz 迭代器**：payload 模板 `{P}` 占位 + 变体清单 + success/fail 正则，一次调用打完全部变体返回命中项；
-3. **差分基线纪律**（exploit 阶段 focus 改硬流程）：先发正常/异常基线各一发建立判据，无差分判据的 payload 禁止发出；
-4. **闭环指令带执行片段**：检测到 SQLi 后不再说「请 UNION SELECT」，直接给「运行 python3 payloads/sqli_union.py --url ... --param label」。
+### 4.1 可执行 payload 脚本库（已实施）
+
+实现位置：`arsenal/payloads/`
+
+已落地 5 个统一 argparse 接口脚本：
+
+- `sqli_union.py` — SQL 注入 UNION/报错/布尔盲注探测与数据提取；
+- `cmdi_exec.py` — 命令注入分隔符探测与命令回显提取；
+- `path_traversal.py` — 目录穿越 / LFI 敏感文件批量探测；
+- `ssti_probe.py` — Jinja2/Twig/EJS/ERB/Smarty 探测与 RCE；
+- `exploit_fuzz.py` — 通用 payload 模板 `{P}` + 变体清单 + success/fail 正则批量 fuzz。
+
+使用示例：
+
+```bash
+python3 arsenal/payloads/sqli_union.py --url 'http://TARGET/page.php?id=1' --param id --db mysql
+python3 arsenal/payloads/cmdi_exec.py --url 'http://TARGET/ping.php?ip=127.0.0.1' --param ip --cmd 'id;cat flag.txt'
+python3 arsenal/payloads/path_traversal.py --url 'http://TARGET/download.php?file=' --param file
+python3 arsenal/payloads/ssti_probe.py --url 'http://TARGET/greet?name=' --param name
+python3 arsenal/payloads/exploit_fuzz.py --url '...' --param q --template "{P}" --variants "1,1',1\"" --success-regex "flag"
+```
+
+### 4.2 技能文件联动（已实施）
+
+实现位置：`arsenal/skills/`
+
+新增 5 个技能：
+
+- `payload_script_library.md` — 总体使用原则；
+- `sqli_exploit.md` — SQL 注入调用入口；
+- `cmdi_exploit.md` — 命令注入调用入口；
+- `lfi_traversal_exploit.md` — 目录穿越/LFI 调用入口；
+- `ssti_exploit.md` — SSTI 调用入口。
+
+技能 `triggers` 覆盖 `sqli/cmdi/lfi/ssti/注入` 等关键词，命中后自动披露，引导执行者调用脚本而非手写临时命令。
+
+### 4.3 差分基线纪律与闭环指令（未实施）
+
+- 未在 `hooks.py` 增加 exploit 阶段 payload 台账；
+- 未实现「检测到 SQLi 后自动给运行脚本片段」的硬流程。
+
+当前依赖技能披露 + 执行者自律调用脚本。后续可补：
+
+```python
+# hooks.py on_tool_end：exploit 阶段机械记账
+if task_ctx.phase == "exploit" and tool.name in ("shell", "http_request", "run_batch"):
+    task_ctx.payload_ledger = getattr(task_ctx, "payload_ledger", [])
+    task_ctx.payload_ledger.append({"args": str(tool_args)[:80], "hit": score > 0})
+# 战况块注入「已试失败 payload 前 20 条」→ 压缩后也不重复
+```
 
 ---
 
