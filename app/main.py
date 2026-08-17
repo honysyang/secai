@@ -204,73 +204,108 @@ async def _first_strike(addrs: list) -> str:
 
 
 async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None, model_pool=None) -> None:
-    """并发调度 pending 子任务：每个子任务独立会话 + 独立 context，结果结构化回传。
+    """后台并发调度 pending 子任务：立即创建 asyncio.Task，不阻塞主循环。
 
     子任务用 finish_subtask 结束协议（summary/findings/flag），主 Agent 只拿到结构化结论，
     不接触子任务的海量工具输出（上下文隔离）。结果写回主黑板（subtask:<id>）。
+    调用方（主循环）负责通过 _reap_subtasks 非阻塞收割结果。
     """
-    sub_executor = build_subtask_executor(ctx.role, ctx.charter, brief,
-                                         field_notes=_load_field_notes(),
-                                         model=model, model_settings=model_settings)
+    # 每个分支按 branch_type 重新派任（缺省沿用父角色）
+    for sub in pending:
+        if sub.get("status") != "pending":
+            continue
+        if sub.get("id") in ctx.subtask_jobs:
+            continue
+        sub_role = ctx.role
+        if sub.get("branch_type"):
+            try:
+                sub_role = assign_role(sub.get("branch_type", ""), sub["desc"])
+            except Exception:
+                pass
+        sub_executor = build_subtask_executor(
+            sub_role, ctx.charter, brief,
+            field_notes=_load_field_notes(),
+            model=model, model_settings=model_settings)
 
-    async def _run_one(sub):
-        sub["status"] = "running"
-        # 独立 context：复制渐进披露技能，共享黑板/token 引用（结果与用量汇总回主 ctx）
-        sub_ctx = TaskContext(
-            workdir=challenge_workdir,
-            disclosed_skills=list(ctx.disclosed_skills),
-            task=ctx.task,
-            charter=ctx.charter,
-            role=ctx.role,
-        )
-        sub_ctx.current_code = ctx.current_code
-        sub_ctx.submitted = ctx.submitted
-        sub_ctx.correct_flags = ctx.correct_flags
-        sub_ctx.blackboard = ctx.blackboard
-        sub_ctx.token_usage = ctx.token_usage
-        sub_ctx.enabled_tools = set(ctx.enabled_tools) if ctx.enabled_tools is not None else None
-        sub_ctx.phase = ctx.phase
-        sub_ctx.plan = ctx.plan
-        sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
-                                    db_path=str(challenge_workdir / f"sub_{sub['id']}.sqlite"))
-        sub_hooks = EventStreamHooks(challenge_workdir, f"sub_{sub['id']}")
-        try:
-            await run_with_model_fallback(
-                sub_executor,
-                input=f"子任务：{sub['desc']}\n独立完成这个子任务，完成后调用 finish_subtask 提交结构化结论。",
-                context=sub_ctx, hooks=sub_hooks, session=sub_session,
-                max_turns=SUBTASK_MAX_TURNS,
-                model_pool=model_pool,
-                agent_name="Subtask")
-            payload = sub_ctx.final_payload or {}
-            if sub_ctx.finalized and payload.get("summary"):
-                # 走了结束协议：结构化回传 summary/findings/flag
-                sub["result"] = {
-                    "summary": payload.get("summary", ""),
-                    "findings": payload.get("findings", []),
-                    "flag": payload.get("flag"),
+        async def _run_one(sub=sub, sub_executor=sub_executor, sub_role=sub_role):
+            sub["status"] = "running"
+            # 独立 context：复制渐进披露技能，共享黑板/token 引用（结果与用量汇总回主 ctx）
+            sub_ctx = TaskContext(
+                workdir=challenge_workdir,
+                disclosed_skills=list(ctx.disclosed_skills),
+                task=ctx.task,
+                charter=ctx.charter,
+                role=sub_role,
+            )
+            sub_ctx.current_code = ctx.current_code
+            sub_ctx.submitted = ctx.submitted
+            sub_ctx.correct_flags = ctx.correct_flags
+            sub_ctx.blackboard = ctx.blackboard
+            sub_ctx.token_usage = ctx.token_usage
+            sub_ctx.enabled_tools = set(ctx.enabled_tools) if ctx.enabled_tools is not None else None
+            sub_ctx.phase = ctx.phase
+            sub_ctx.plan = ctx.plan
+            sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
+                                        db_path=str(challenge_workdir / f"sub_{sub['id']}.sqlite"))
+            sub_hooks = EventStreamHooks(challenge_workdir, f"sub_{sub['id']}")
+            try:
+                await run_with_model_fallback(
+                    sub_executor,
+                    input=f"子任务：{sub['desc']}\n独立完成这个子任务，完成后调用 finish_subtask 提交结构化结论。",
+                    context=sub_ctx, hooks=sub_hooks, session=sub_session,
+                    max_turns=SUBTASK_MAX_TURNS,
+                    model_pool=model_pool,
+                    agent_name="Subtask")
+                payload = sub_ctx.final_payload or {}
+                if sub_ctx.finalized and payload.get("summary"):
+                    # 走了结束协议：结构化回传 summary/findings/flag
+                    sub["result"] = {
+                        "summary": payload.get("summary", ""),
+                        "findings": payload.get("findings", []),
+                        "flag": payload.get("flag"),
+                    }
+                else:
+                    # 未走结束协议：降级为未完成标记
+                    sub["result"] = {
+                        "summary": "[未走结束协议] " + str(payload.get("summary", ""))[:200],
+                        "findings": [], "flag": None,
+                    }
+            except MaxTurnsExceeded:
+                sub["result"] = {"summary": "[未走结束协议] 子任务达到回合上限",
+                                 "findings": [], "flag": None}
+            except Exception as e:
+                sub["result"] = {"summary": f"[子任务异常] {str(e)[:200]}",
+                                 "findings": [], "flag": None}
+            finally:
+                sub["status"] = "done"
+                ctx.blackboard[f"subtask:{sub['id']}"] = {
+                    "value": json.dumps(sub["result"], ensure_ascii=False),
+                    "status": "done", "ts": int(time.time()),
+                    "verified": True,
                 }
-            else:
-                # 未走结束协议：降级为未完成标记
-                sub["result"] = {
-                    "summary": "[未走结束协议] " + str(payload.get("summary", ""))[:200],
-                    "findings": [], "flag": None,
-                }
-        except MaxTurnsExceeded:
-            sub["result"] = {"summary": "[未走结束协议] 子任务达到回合上限",
-                             "findings": [], "flag": None}
-        except Exception as e:
-            sub["result"] = {"summary": f"[子任务异常] {str(e)[:200]}",
-                             "findings": [], "flag": None}
-        finally:
-            sub["status"] = "done"
-            ctx.blackboard[f"subtask:{sub['id']}"] = {
-                "value": json.dumps(sub["result"], ensure_ascii=False),
-                "status": "done", "ts": int(time.time()),
-                "verified": True,
-            }
 
-    await asyncio.gather(*(_run_one(s) for s in pending))
+        # 立即后台启动，不等主循环
+        ctx.subtask_jobs[sub["id"]] = asyncio.create_task(_run_one())
+        log_info(f"[subtask] 单题 {ctx.current_code} 启动后台子任务 {sub['id']} "
+                 f"（{sub.get('branch_type') or sub_role['role']}）")
+
+
+def _reap_subtasks(ctx) -> str:
+    """非阻塞收割已完成的子任务，返回结果摘要供主循环注入下一轮 input。"""
+    notes = []
+    for sid, job in list(ctx.subtask_jobs.items()):
+        if not job.done():
+            continue
+        del ctx.subtask_jobs[sid]
+        sub = next((s for s in ctx.subtasks if s.get("id") == sid), None)
+        if sub is None:
+            continue
+        r = sub.get("result", {})
+        flag = r.get("flag")
+        line = (f"[分支回收] {sid}：{r.get('summary', '')[:150]}"
+                + (f"｜flag={flag}" if flag else ""))
+        notes.append(line)
+    return "\n".join(notes)
 
 
 def _load_blackboard(workdir: Path) -> dict:
@@ -409,6 +444,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     intervention_count = 0  # 累计干预次数：自救+切换模型+hint+coach+replan
     stuck_detector = StuckDetector()  # 模型惰性检测器（多模型切换 / 单模型自救）
     outcome = "stopped"
+    death_reason = ""  # 六种死法终态标签，用于赛后分析
     # 成本治理：本尝试的 token/时钟起点 + 换脑/挂起档
     cost_limit = COST_LIMITS.get(str(difficulty).lower(), COST_LIMITS.get("medium", {}))
     switch_tokens = cost_limit.get("switch_tokens", 0)
@@ -454,12 +490,14 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 else:
                     log_warn(f"[skip] 单题 {code} 墙上时间 {elapsed:.0f}s 超过预算 {ctx.wallclock_budget}s，机械换题")
                     outcome = "stuck"
+                    death_reason = "wallclock_timeout"
                     break
 
             # 错误提交熔断：连续错交 且 期间无任何信息增量，才算恋战
             if ctx.wrong_submit_count >= 6 and ctx.zero_gain_turns >= 3:
                 log_warn(f"[skip] 单题 {code} 连续 {ctx.wrong_submit_count} 次错交且无新证据，机械换题")
                 outcome = "stuck"
+                death_reason = "wrong_submit_fuse"
                 break
 
             # 成本治理：挂起档（token / 时钟到档即停止本次尝试腾槽）
@@ -476,9 +514,11 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                              f"{old} -> {entry.name}")
             if suspend_tokens and used >= suspend_tokens:
                 outcome = "suspended"
+                death_reason = "token_suspend"
                 break
             if SUSPEND_SECONDS and time.monotonic() - suspend_time_base >= SUSPEND_SECONDS:
                 outcome = "suspended"
+                death_reason = "time_suspend"
                 break
             ctx.turn_count = turn_count
             ctx.turn_tool_count = 0
@@ -520,6 +560,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                         log_error(f"[model-exhausted] 单题 {code} 所有模型均不可用：{exc}")
                         # 模型耗尽不是「任务结束」，标记为 stuck 换题，避免误触发全局终止
                         outcome = "stuck"
+                        death_reason = "model_exhausted"
                         break
                     executor.model = entry.model
                     log_warn(f"[model-fallback] 单题 {code} {current_name} 失败，"
@@ -548,17 +589,13 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             # 致命错误 → 全局终止（任务结束 / token 无效）
             if ctx.fatal:
                 outcome = "fatal"
-                break
-
-            # 网络不可达：连续 2 次连接失败/超时 → 判定本题不可达，机械换题
-            if ctx.net_fail_turns >= 2:
-                log_warn(f"[skip] 单题 {code} 连续 {ctx.net_fail_turns} 次网络不可达，机械换题")
-                outcome = "stuck"
+                death_reason = "fatal_error"
                 break
 
             # 单题完成（Agent 主动 finalize）
             if ctx.finalized:
                 outcome = "solved"
+                death_reason = "solved"
                 break
 
             # 单题空转（连续无工具调用）→ 放弃换题
@@ -567,9 +604,17 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 if ctx.empty_turns >= SINGLE_EMPTY_TURNS:
                     log_warn(f"[skip] 单题 {code} 连续 {ctx.empty_turns} 轮空转，机械换题")
                     outcome = "stuck"
+                    death_reason = "empty_idle"
                     break
             else:
                 ctx.empty_turns = 0
+
+            # 网络不可达：连续 2 次连接失败/超时 → 判定本题不可达，机械换题
+            if ctx.net_fail_turns >= 2:
+                log_warn(f"[skip] 单题 {code} 连续 {ctx.net_fail_turns} 次网络不可达，机械换题")
+                outcome = "stuck"
+                death_reason = "network_unreachable"
+                break
 
             # 模型惰性治理：连续无进展时切换模型 or 单模型自救
             stuck_action = stuck_detector.check(
@@ -647,9 +692,19 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             if hint_used and ctx.zero_gain_turns >= HINT_GRACE_TURNS:
                 log_warn(f"[hint-stale] 单题 {code} hint 后 {HINT_GRACE_TURNS} 轮无转化，机械换题")
                 outcome = "stuck"
+                death_reason = "hint_stale"
                 break
             if action == "skip":
-                log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
+                # 区分「无方向证据枯竭」vs「有失败方向但持续撞墙」
+                failed_paths = sum(
+                    1 for v in ctx.blackboard.values()
+                    if isinstance(v, dict) and v.get("status") == "failed")
+                if failed_paths == 0:
+                    death_reason = "evidence_exhausted_no_direction"
+                    log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮且无任何失败方向可探索，证据枯竭判死")
+                else:
+                    death_reason = "stuck_with_failed_paths"
+                    log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
                 outcome = "stuck"
                 break
 
@@ -685,15 +740,20 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 log_warn(f"[skip] 单题 {code} 累计干预 {intervention_count} 次"
                          f"（难度 {difficulty or 'unknown'} 上限 {_max_interventions(difficulty)}）仍无进展，机械换题")
                 outcome = "stuck"
+                death_reason = "intervention_exhausted"
                 break
 
-            # 子任务并发调度
+            # 子任务后台启动 + 非阻塞收割：主循环不等待子任务完成，结果回流下一轮输入
             pending = [s for s in ctx.subtasks if s["status"] == "pending"]
             if pending:
                 await _run_subtasks(ctx, pending, challenge_workdir, brief,
                                     model=executor.model,
                                     model_settings=executor.model_settings,
                                     model_pool=model_pool)
+            reap = _reap_subtasks(ctx)
+            if reap:
+                next_input = f"【分支结果】以下后台子任务已返回，请立即处理：\n\n{reap}\n\n{next_input}"
+                ctx.turn_gain = True  # 子任务返回视为信息增量
 
             # 历史压缩
             if await compact_if_needed(session, ctx):
@@ -730,6 +790,10 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         pass
     if outcome == "solved":
         append_solution_template(code, desc, ctx)  # 正向解法模板沉淀（同类题复用）
+    # 六种死法统一日志：便于赛后统计每种死因占比
+    if death_reason:
+        log_warn(f"[death] 单题 {code} 终态={outcome} 死因={death_reason} "
+                 f"轮次={turn_count} token={ctx.token_usage.get('total', 0)}")
     if db is not None:
         db.task_finished(code, outcome, answer)  # 登记题目终态（监控页状态/结论）
     return outcome

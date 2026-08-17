@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+import asyncio
+
 
 @dataclass
 class TaskContext:
@@ -35,7 +37,8 @@ class TaskContext:
     submitted: Set[str] = field(default_factory=set)             # 已提交过的 flag（去重，铁律提交用）
     correct_flags: List[str] = field(default_factory=list)       # 已确认 correct 的 flag（多 flag 题进度）
     seen_signatures: Set[str] = field(default_factory=set)       # 已见路径/指纹签名（信息增量去重用）
-    subtasks: List[Dict[str, Any]] = field(default_factory=list)  # 子任务队列 [{id, desc, status, result}]，主循环并发调度
+    subtasks: List[Dict[str, Any]] = field(default_factory=list)  # 子任务队列 [{id, desc, branch_type, status, result}]，主循环并发调度
+    subtask_jobs: Dict[str, asyncio.Task] = field(default_factory=dict)  # 已后台化的子任务 id -> asyncio.Task
     todos: List[Dict[str, Any]] = field(default_factory=list)      # 待办清单 [{id, title, status, priority, created_at, done_at}]，执行者自我管理用
     enabled_tools: Optional[Set[str]] = None  # 工具按需加载：None=全部启用；否则只启用集合内的工具名（见 demo_tools.CORE_TOOL_NAMES）
     phase: str = "recon"                      # 当前阶段（recon/enumerate/detect/exploit/post），驱动 instructions 动态切换

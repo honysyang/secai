@@ -919,14 +919,21 @@ def get_payload(ctx: RunContextWrapper[TaskContext], payload_type: str) -> str:
 
 
 @function_tool
-def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str) -> str:
-    """声明一个独立子任务（互不依赖的探测点/线），主循环会并发调度执行。
+def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str,
+                  branch_type: str = "") -> str:
+    """声明一个独立子任务（互不依赖的探测点/线），主循环会后台并发调度执行。
 
     当任务同时出现多个独立的探测分支（如 3 个端口、3 个独立漏洞点）时，
-    用本工具分别声明子任务；每个子任务用独立会话并发执行，结果写回黑板（subtask:<id>）。
+    用本工具分别声明子任务；每个子任务用独立会话后台执行，结果写回黑板（subtask:<id>）。
+    建议每题最多声明 3 个并行分支，desc 必须包含明确目标（URL/IP/路径）。
+
+    Args:
+        desc: 子任务描述，必须包含具体目标、范围边界、成功标准。
+        branch_type: 分支类型（如 web/pwn/crypto/reverse/web3），子任务会按此派任角色。
     """
     c = ctx.context
-    sub = {"id": uuid.uuid4().hex[:8], "desc": desc, "status": "pending", "result": ""}
+    sub = {"id": uuid.uuid4().hex[:8], "desc": desc, "branch_type": branch_type,
+           "status": "pending", "result": ""}
     c.subtasks.append(sub)
     return json.dumps({"spawned": sub}, ensure_ascii=False)
 

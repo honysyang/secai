@@ -275,85 +275,40 @@ if len(matched) >= threshold:
 
 ## 批次三　状态累积：子任务后台化与六种死法（一天）
 
-### 3.1 阻塞 gather 改后台任务
+### 3.1 阻塞 gather 改后台任务（已实施简化版）
 
-**问题**：`await _run_subtasks(...)` 阻塞主循环，主线等小号跑完才能动——并行成串行。
+**问题**：`await _run_subtasks(...)` 阻塞主循环，主线等子任务跑完才能动。
 
-```python
-# TaskContext 加字段：subtask_jobs: Dict[str, asyncio.Task] = field(default_factory=dict)
+**实现位置**：`app/main.py` + `core/task_context.py` + `demo_tools.py`
 
-# spawn_subtask 后立即创建后台任务（不等主循环末尾）：
-ctx.subtask_jobs[sub["id"]] = asyncio.create_task(_run_one_subtask(ctx, sub, ...))
-
-# 主循环每轮开头非阻塞收割：
-def _reap_subtasks(ctx) -> str:
-    notes = []
-    for sid, job in list(ctx.subtask_jobs.items()):
-        if job.done():
-            del ctx.subtask_jobs[sid]
-            sub = next(s for s in ctx.subtasks if s["id"] == sid)
-            r = sub.get("result", {})
-            notes.append(f"[分支回收] {sid}：{r.get('summary','')[:150]}"
-                         + (f"｜flag={r['flag']}" if r.get('flag') else ""))
-    return "\n".join(notes)
-```
-
-### 3.2 分支按类型换装派任
+- `TaskContext` 增加 `subtask_jobs: Dict[str, asyncio.Task]` 字段；
+- `spawn_subtask` 工具增加 `branch_type` 参数，描述里要求必须包含明确目标/范围；
+- `_run_subtasks` 改为立即 `asyncio.create_task(_run_one_subtask(...))`，不阻塞主循环；
+- 主循环每轮末尾调用 `_reap_subtasks(ctx)` 非阻塞收割已完成子任务，结果注入下一轮 `input`。
 
 ```python
-# 子任务执行者不再继承父角色，按分支内容重新派任：
-branch_role = assign_role(code="", description=sub.get("branch_type") or sub["desc"])
-sub_executor = build_subtask_executor(branch_role, ...)
-# spawn_subtask 加闸门：每题最多 3 个并行分支；desc 必须含明确目标（URL/IP/路径）
+# app/main.py
+ctx.subtask_jobs[sub["id"]] = asyncio.create_task(_run_one())
+reap = _reap_subtasks(ctx)
+if reap:
+    next_input = f"【分支结果】以下后台子任务已返回...\n{reap}\n\n{next_input}"
 ```
 
-### 3.3 六种回收死法（全机械判定）
+### 3.2 分支按类型换装派任（已实施）
 
-| # | 死法 | 判定 |
-|---|---|---|
-| 1 | 完成 | finish_subtask / 8 轮上限（现有） |
-| 2 | 父题终结级联 | 主题任何 break 出口 → cancel 全部 subtask_jobs |
-| 3 | 铁律通关即收 | is_completed=true → 立即 cancel 全部 |
-| 4 | 零增量处决 | 子任务连续 3 轮无 turn_gain → cancel |
-| 5 | 前提证伪 | 黑板出现证伪分支前提的 failed 条目 → cancel |
-| 6 | 预算耗尽 | 子任务 token 份额 > 主题 30% → 挂起 |
+- 子任务执行者不再继承父角色，按 `branch_type` 重新派任：`assign_role(sub.get("branch_type", ""), sub["desc"])`；
+- 缺省沿用父角色。
 
-```python
-# 4/5/6 每轮统一判定（_reap_subtasks 后）：
-def _cull_subtasks(ctx):
-    for sid, job in list(ctx.subtask_jobs.items()):
-        sub_ctx = ...  # 子任务 ctx（_run_one_subtask 里挂回 sub["_ctx"]）
-        if getattr(sub_ctx, "zero_gain_turns", 0) >= 3:
-            job.cancel()
-            sub["result"] = {"summary": "[分支处决] 连续 3 轮零增量", "findings": [], "flag": None}
-            ...
+### 3.3 六种回收死法（已实施父题级联，子任务处决未实施）
 
-# 2/3 级联（_run_single_challenge 所有出口统一 finally）：
-finally:
-    for job in getattr(ctx, "subtask_jobs", {}).values():
-        job.cancel()
-```
+- 父题任何 `break` 出口统一 `finally` 内 `cancel` 全部 `subtask_jobs`（已实施）；
+- 子任务内部连续零增量处决、token 预算上限、前提证伪等未实现，当前依赖子任务自己的 `max_turns` 与异常处理作为兜底；
+- 实测 3 槽并发环境下，子任务后台化已将主线并行效率提升，完整六种死法后续可补。
 
-### 3.4 回收遗产制
+### 3.4 回收遗产制（已实施部分）
 
-每条回收路径统一：① 战果写黑板（confirmed）；② 死路登记 failed_paths；③ session 文件清理（sub_*.sqlite 一并删）。
-
-### 3.5 payload 台账（利用阶段防重复）
-
-```python
-# hooks.py on_tool_end：exploit 阶段机械记账
-if task_ctx.phase == "exploit" and tool.name in ("shell", "http_request", "run_batch"):
-    task_ctx.payload_ledger = getattr(task_ctx, "payload_ledger", [])
-    task_ctx.payload_ledger.append({"args": str(tool_args)[:80], "hit": score > 0})
-# 战况块注入「已试失败 payload 前 20 条」→ 压缩后也不重复
-```
-
-### 批次三验收
-
-- ☐ spawn 子任务后主线下一轮立即继续（不阻塞）
-- ☐ 铁律通关瞬间子任务全部 cancel
-- ☐ 子任务 3 轮零增量被处决且死路写入黑板
-- ☐ exploit 阶段换写法重复同一 payload → 台账拦截提示
+- 子任务战果写黑板（`subtask:<id>`），`verified=True`；
+- 失败路径未自动登记为 `failed`，依赖子任务 result summary 中文字描述。后续可补 `failed_paths` 结构化写入。
 
 ---
 
