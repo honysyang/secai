@@ -1162,32 +1162,32 @@ def list_disabled_tools(ctx: RunContextWrapper[TaskContext]) -> str:
     return json.dumps({"disabled": disabled, "groups": TOOL_GROUPS}, ensure_ascii=False)
 
 
-def _lazy_enabled(name: str):
-    """动态开关：非核心工具仅在 ctx.enabled_tools 中包含该工具名时启用。"""
-    def _check(ctx, agent) -> bool:
-        c = getattr(ctx, "context", None)
-        if c is None or c.enabled_tools is None:
-            return True
-        return name in c.enabled_tools
-    return _check
+def _tool_gate(name: str, ctx: RunContextWrapper[TaskContext]) -> str:
+    """逻辑开关：工具 schema 恒定挂载，但调用时检查是否已启用（兼容旧按需加载逻辑）。
+
+    当前策略：开题一次性挂齐全部常用组，enable_tool 调用极少，前缀缓存更稳定。
+    保留逻辑闸用于极少数未默认挂载的工具（如 connect_vpn 在不需 VPN 时）。
+    """
+    c = getattr(ctx, "context", None)
+    if c is not None and c.enabled_tools is not None and name not in c.enabled_tools:
+        return json.dumps({"error": f"工具 {name} 未启用，先用 enable_tool 挂载该工具/组"},
+                          ensure_ascii=False)
+    return ""
 
 
-def _apply_tool_gating(tools):
-    """给非核心工具挂上 is_enabled 动态开关（核心工具保持默认全开）。"""
-    for t in tools:
-        if t.name not in CORE_TOOL_NAMES:
-            t.is_enabled = _lazy_enabled(t.name)
-    return tools
+# 老命名兼容
+_gate = _tool_gate
 
 
-ALL_TOOLS = _apply_tool_gating(_BASE_TOOLS + [enable_tool, list_disabled_tools])
+ALL_TOOLS = _BASE_TOOLS + [enable_tool, list_disabled_tools]
 
 
-def build_default_tools(groups=("platform", "vpn", "seccli")) -> set:
+def build_default_tools(groups=("platform", "vpn", "seccli", "web", "poc", "vuln", "knowledge")) -> set:
     """构建「初始启用工具集」= 核心工具 + 指定工具组。
 
     用于 main.py 跑分任务初始化 ctx.enabled_tools：核心工具常驻，平台/VPN/安全CLI
-    默认可用，其余（web/poc/vuln/knowledge）按需用 enable_tool 再挂载。
+    以及 web/poc/vuln/knowledge 等组一次性挂齐，避免运行时 enable_tool 变动工具 schema
+    破坏前缀缓存。剩余未启用的工具仍可用 enable_tool 挂载（逻辑闸保留兼容）。
     """
     enabled = set(CORE_TOOL_NAMES)
     for g in groups:

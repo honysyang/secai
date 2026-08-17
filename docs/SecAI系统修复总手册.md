@@ -182,20 +182,19 @@ summary_inject = f"[已确认/已排除结论快照，禁止重复]\n{bb_snapsho
 
 **剔除易变字段**：`_format_blackboard` 已删时间戳列；技能拼接由 `disclosed_skills` 顺序决定；uuid/随机数/耗时禁入静态文本。
 
-### 2.2 工具门控改逻辑开关
+### 2.2 工具门控改逻辑开关（已实施简化版）
 
-`tools` schema 数组在缓存前缀内，`is_enabled` 中途变化会清缓存。
+**问题**：`tools` schema 数组在缓存前缀内，中途用 `is_enabled` 动态开关会改变 schema，导致前缀缓存失效。
+
+**实现位置**：`demo_tools.py`
+
+- 删除 `_apply_tool_gating` 对 `is_enabled` 的动态赋值，工具 schema 恒定挂载；
+- 保留 `_tool_gate` 逻辑闸用于兼容旧按需加载逻辑；
+- `build_default_tools` 默认一次性挂齐 `platform/vpn/seccli/web/poc/vuln/knowledge` 全部组，减少运行时 `enable_tool` 调用，前缀缓存更稳定；
+- 执行者工作纪律已强调 fuzz / run_batch 优先，降低工具数量对注意力的干扰。
 
 ```python
-# demo_tools.py：删除 _apply_tool_gating 的 is_enabled 赋值；
-# 开题把可能用到的组一次挂齐；非核心工具函数体开头加逻辑闸：
-def _gate(ctx, name: str) -> str:
-    c = getattr(ctx, "context", None)
-    if c is not None and c.enabled_tools is not None and name not in c.enabled_tools:
-        return json.dumps({"error": f"工具 {name} 未启用，先用 enable_tool 挂载"},
-                          ensure_ascii=False)
-    return ""
-# enable_tool 只翻转 ctx.enabled_tools 标记，请求体恒定
+def build_default_tools(groups=("platform", "vpn", "seccli", "web", "poc", "vuln", "knowledge")) -> set:
 ```
 
 ### 2.3 run_batch：PTC 程序化工具调用（已实施）
