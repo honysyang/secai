@@ -61,3 +61,5 @@ class TaskContext:
     cache_hits: int = 0                       # 命中历史成功解法 / 同前缀笔记 / 已披露技能即可见解法
     cache_misses: int = 0                     # 未能命中现成解法，需要从头推导的题数
     cache_notes: List[str] = field(default_factory=list)  # 命中/未命中的具体记录（赛后分析用）
+    # ---- exploit 阶段 payload 台账（差分基线纪律，避免重复同一失败变体） ----
+    payload_ledger: List[Dict[str, Any]] = field(default_factory=list)  # [{target, signature, hit, count, last_text_hash}]

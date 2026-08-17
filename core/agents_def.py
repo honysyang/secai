@@ -109,11 +109,13 @@ EXECUTOR_STATIC_INSTRUCTIONS = """你是 SecAI 的执行者，负责执行管理
 
 
 def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
-                           plan: str, field_notes: str, role_boost: str = "") -> str:
+                           plan: str, field_notes: str, role_boost: str = "",
+                           ledger_text: str = "") -> str:
     """组装每轮变化的动态上下文，作为 Runner.run input 的前置消息注入。
 
     静态系统提示只包含角色风格、工作纪律、任务书等不变内容；动态部分包含：
-    当前阶段、宪章、作战计划、已解锁打法、历史档案、压缩摘要、黑板、阶段增强。
+    当前阶段、宪章、作战计划、已解锁打法、历史档案、压缩摘要、黑板、阶段增强、
+    exploit 阶段 payload 失败清单。
     这样同一个 Agent 实例可复用，SDK 不必每轮重建完整系统提示。
     """
     c = ctx.context
@@ -135,6 +137,8 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
     ]
     if role_boost:
         parts.append(("# 阶段增强（证据触发，随战况注入）", role_boost))
+    if ledger_text:
+        parts.append(("# exploit 差分基线", ledger_text))
     return "\n\n".join(f"{title}\n{body}" for title, body in parts)
 
 

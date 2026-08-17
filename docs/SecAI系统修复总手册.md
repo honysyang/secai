@@ -435,6 +435,7 @@ if task_ctx.phase == "exploit" and tool.name in ("shell", "http_request", "run_b
 | 第 2 天 | 批次二 2.5~2.7 + 批次四前两项 | 并行封印实测 + payload 脚本逐个手测 |
 | 第 3 天 | 批次三全部 | 批次三验收 4 条全过 |
 | 穿插 | 批次五智能体精简 | 语法通过 + 启动流程跑一次 |
+| 穿插 | 批次六终局重扫 + 赛后分析 | 语法通过 + 重扫逻辑跑一次 |
 
 **冒烟总线**：每批次改完跑一道已知快题（目录穿越/命令注入类），确认「启动→首轮突击包→铁律提交→机械通关判决→close→槽位回收」全链路正常，再改下一批。
 
@@ -444,3 +445,47 @@ if task_ctx.phase == "exploit" and tool.name in ("shell", "http_request", "run_b
 - ❌ 双执行者并行（3 容器槽位是天花板）
 - ❌ 自由拓扑的动态智能体（物种固定、个体按需、皮肤可换即可）
 - ❌ 新增智能体类型（当前 4 核心 + 1 异步 Reporter 已足够，磨执行层不动结构）
+
+---
+
+## 批次六　终局检查与赛后量化（已实施 / 实施中）
+
+### 6.1 终局重扫（已实施）
+
+实现位置：`app/main.py`
+
+主循环退出后调用 `_endgame_sweep(...)`：
+
+1. 再次拉取题目列表；
+2. 与本地 `results` 比对，找出平台侧仍显示「未完成」的题目；
+3. 优先顺序：未做过的题 > 之前 `stuck`/`suspended` 的题 > 其他；
+4. 每道题最多重试 `max_retries=2` 次；
+5. 全程同步单题跑完并关闭容器，不额外占用并发槽位；
+6. 仅当 `TASK_DEADLINE_TS` 配置且剩余时间 >= `DEADLINE_SAFE_MARGIN + 60s` 时执行。
+
+效果：防止「主循环因空列表 / 连续失败 / 槽位不足提前退出」导致漏题。
+
+### 6.2 赛后分析脚本（已实施）
+
+新增 `tools/post_game_report.py`：
+
+- 读取 SQLite 事件库 / `events.jsonl` / 各题 `results`；
+- 统计 `death_reason` 分布（六种死法占比）；
+- 统计工具调用 Top N；
+- 检测 `arsenal/payloads/*.py` 调用次数；
+- 给出下轮优化建议（如 "30% 死于 evidence_exhausted_no_direction，需补该类漏洞技能"）。
+
+用法：
+
+```bash
+python3 tools/post_game_report.py [--workdir data/worker_generic] [--top-n 10]
+```
+
+### 6.3 差分基线纪律与 payload 台账（已实施）
+
+实现位置：`core/hooks.py` + `core/task_context.py` + `core/agents_def.py` + `app/main.py`
+
+- exploit 阶段对 `shell` / `http_request` / `run_batch` 做 payload 记账；
+- 签名归一化：去掉 hex token / 大数字 / 空白，160 字符内去重；
+- 同一签名连续失败 ≥2 次后注入「已失败 payload 清单」到动态上下文；
+- 执行者读到此清单后，被要求换目标 / 参数 / payload 类型，避免同一 fuzz 变体反复跑。

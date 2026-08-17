@@ -275,6 +275,51 @@ def _extract_hint_keywords(hint: str) -> list:
     return [w for w in set(words) if w.lower() not in stop][:8]
 
 
+# 差分基线：exploit 阶段 payload 台账（避免同一失败变体重复）
+_EXPLOIT_LEDGER_TOOLS = {"shell", "http_request", "run_batch"}
+
+
+def _ledger_signature(tool: str, args: str) -> str:
+    """把工具调用参数归一化为签名，用于判断是否是同一 payload 变体。"""
+    raw = f"{tool}:{args}".lower()
+    # 去掉随机 token/nonce/sessid 等常见噪声，保留结构
+    raw = re.sub(r"\b[a-f0-9]{16,64}\b", "<hex>", raw)
+    raw = re.sub(r"\b\d{6,}\b", "<num>", raw)
+    raw = re.sub(r"\s+", "", raw)
+    return raw[:160]
+
+
+def _record_payload_ledger(task_ctx, tool: str, args: str, text: str) -> None:
+    """在 exploit 阶段记账：同一签名失败 2 次就告警，并注入系统提示避免继续重复。"""
+    if not getattr(task_ctx, "payload_ledger", None):
+        task_ctx.payload_ledger = []
+    sig = _ledger_signature(tool, args)
+    hit = any(k in text.lower() for k in (
+        "flag{", '"correct": true', '"vulnerable": true',
+        '"differentiated": true', "login success", "logged in"))
+    for entry in task_ctx.payload_ledger:
+        if entry.get("signature") == sig:
+            entry["count"] = entry.get("count", 0) + 1
+            if hit:
+                entry["hit"] = True
+            return
+    task_ctx.payload_ledger.append({"signature": sig, "tool": tool,
+                                     "args_preview": args[:120], "hit": hit, "count": 1})
+
+
+def _ledger_failed_summary(task_ctx, top_n: int = 8) -> str:
+    """返回已连续失败 2 次及以上的 payload 清单，用于注入系统提示。"""
+    failed = [e for e in getattr(task_ctx, "payload_ledger", [])
+              if not e.get("hit") and e.get("count", 0) >= 2]
+    if not failed:
+        return ""
+    lines = ["# 已失败 payload 清单（不要再重复）"]
+    for e in failed[:top_n]:
+        lines.append(f"- [{e.get('tool')}] {e.get('args_preview', '')[:80]} (失败 {e.get('count')} 次)")
+    lines.append("请换目标、换参数、换 payload 类型或换利用链，不要重复上表。")
+    return "\n".join(lines)
+
+
 def _score_tool_result(tool: str, text: str, ctx) -> int:
     """信息增量打分 v3：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
 
@@ -500,6 +545,15 @@ class EventStreamHooks(RunHooks):
         if score > 0:
             task_ctx.turn_gain = True
         self._emit("reward", tool=tool.name, score=score)
+
+        # ---- exploit 阶段 payload 台账（差分基线纪律） ----
+        if task_ctx.phase == "exploit" and tool.name in _EXPLOIT_LEDGER_TOOLS:
+            args_text = ""
+            try:
+                args_text = json.dumps(getattr(result, "input", {}) or {}, ensure_ascii=False)
+            except Exception:
+                args_text = str(getattr(result, "input", "") or "")[:200]
+            _record_payload_ledger(task_ctx, tool.name, args_text, str(result))
 
         # ---- 网络不可达检测：本轮命中即置位，供单题循环快速换题（防 VPN 死磕）----
         if _is_network_unreachable(str(result)):
