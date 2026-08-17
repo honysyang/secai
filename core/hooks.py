@@ -268,6 +268,13 @@ _BEHAVIOR_DIFF_HINTS = (
 )
 
 
+def _extract_hint_keywords(hint: str) -> list:
+    """从 hint 原文提取技术名词（英文标识符/协议名/参数名），用于方向锁定。"""
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_.\-]{3,}", hint or "")
+    stop = {"this", "that", "with", "from", "what", "does", "the", "and", "you", "your", "hint"}
+    return [w for w in set(words) if w.lower() not in stop][:8]
+
+
 def _score_tool_result(tool: str, text: str, ctx) -> int:
     """信息增量打分 v3：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
 
@@ -280,6 +287,14 @@ def _score_tool_result(tool: str, text: str, ctx) -> int:
     - 工具失败/网络错误判 0 交给 LLM 决策（default-soft 不变）。
     """
     low = text.lower()
+
+    # hint 方向锁：hint_grace_active 期间，工具输出必须包含 hint 关键词才算有效增量
+    if getattr(ctx, "hint_grace_active", False):
+        hint_dir = ctx.blackboard.get("hint_directive", {}).get("value", "")
+        kws = _extract_hint_keywords(hint_dir)
+        if kws and not any(k.lower() in low for k in kws):
+            return 0  # 与 hint 无关的输出一律零增量 → 方向上锁
+
     # ① 铁证：任何工具
     if any(k in low for k in (
             "flag{", '"correct": true', '"correct":true',

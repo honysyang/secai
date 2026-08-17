@@ -235,7 +235,7 @@ def _self_rescue_prompt(ctx: TaskContext, old_phase: str,
     """生成单模型自救时的 next_input。"""
     bb_snapshot = json.dumps(
         {k: v for k, v in ctx.blackboard.items()
-         if isinstance(v, dict) and v.get("status") in ("done", "failed")},
+         if isinstance(v, dict) and v.get("status") in ("done", "confirmed", "failed")},
         ensure_ascii=False)[:1500]
     parts = [
         f"[已确认/已排除结论快照，禁止重复]\n{bb_snapshot}",

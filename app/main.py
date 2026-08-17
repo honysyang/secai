@@ -371,6 +371,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     ctx.wallclock_budget = _WALLCLOCK_BUDGET.get(str(difficulty).lower(), 15 * 60)
     ctx.challenge_start_ts = time.monotonic()
     ctx.wrong_submit_count = 0
+    ctx.hint_grace_active = False
+    HINT_GRACE_TURNS = 5
 
     next_input = f"开始攻击本题容器：{addrs}。先做信息收集，识别技术栈与入口。"
     try:
@@ -380,13 +382,19 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             # 墙上时钟硬顶：单题超时强制 stuck，释放槽位
             elapsed = time.monotonic() - ctx.challenge_start_ts
             if elapsed >= ctx.wallclock_budget:
-                log_warn(f"[skip] 单题 {code} 墙上时间 {elapsed:.0f}s 超过预算 {ctx.wallclock_budget}s，机械换题")
-                outcome = "stuck"
-                break
+                # 进度续命：近 5 轮有信息增量 → 延长一次（半档预算），防误杀慢热题
+                if ctx.zero_gain_turns < 5 and not getattr(ctx, "_wallclock_extended", False):
+                    ctx._wallclock_extended = True
+                    ctx.wallclock_budget += ctx.wallclock_budget // 2
+                    log_info(f"[extend] 单题 {code} 有进展，墙钟延长半档至 {ctx.wallclock_budget}s")
+                else:
+                    log_warn(f"[skip] 单题 {code} 墙上时间 {elapsed:.0f}s 超过预算 {ctx.wallclock_budget}s，机械换题")
+                    outcome = "stuck"
+                    break
 
-            # 错误提交熔断：同一题连续 3 次错误提交（不是重复）说明方向错误
-            if ctx.wrong_submit_count >= 3:
-                log_warn(f"[skip] 单题 {code} 错误提交已达 {ctx.wrong_submit_count} 次，机械换题")
+            # 错误提交熔断：连续错交 且 期间无任何信息增量，才算恋战
+            if ctx.wrong_submit_count >= 6 and ctx.zero_gain_turns >= 3:
+                log_warn(f"[skip] 单题 {code} 连续 {ctx.wrong_submit_count} 次错交且无新证据，机械换题")
                 outcome = "stuck"
                 break
 
@@ -534,10 +542,29 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     hint = f"（获取提示失败：{str(e)[:120]}）"
                 hint_used = True
                 ctx.zero_gain_turns = 0
+                ctx.hint_grace_active = True
                 intervention_count += 1
-                log_info(f"[hint] 单题 {code} 停滞，机械看提示")
-                next_input = f"本题卡住。系统已获取提示：\n{hint}\n\n请结合提示继续攻击本题。"
+                # hint 进黑板最高优先级（压缩不丢、每轮可见）
+                ctx.blackboard["hint_directive"] = {
+                    "value": hint,
+                    "status": "confirmed",
+                    "ts": int(time.time()),
+                    "verified": True,
+                    "evidence": "platform_hint",
+                }
+                log_info(f"  [hint] 单题 {code} 看提示（已写入 hint_directive）")
+                next_input = (
+                    f"【系统法令】平台提示已写入黑板 hint_directive，具有最高优先级。\n"
+                    f"原文：{hint}\n\n"
+                    f"接下来 {HINT_GRACE_TURNS} 轮你的每个动作必须直接验证该提示中的断言，"
+                    f"与提示无关的侦察/扫描将被系统判为零增量。")
                 continue
+
+            # hint 熔断（decide_stuck_action 判定之前）
+            if hint_used and ctx.zero_gain_turns >= HINT_GRACE_TURNS:
+                log_warn(f"[hint-stale] 单题 {code} hint 后 {HINT_GRACE_TURNS} 轮无转化，机械换题")
+                outcome = "stuck"
+                break
             if action == "skip":
                 log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
                 outcome = "stuck"
@@ -718,6 +745,8 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     list_fail_streak = 0  # 拉题目列表连续失败计数（网络抖动重试，超限停止，不崩溃退出）
     LIST_RETRY_MAX = int(os.getenv("LIST_RETRY_MAX", "10"))  # 连续失败上限
     slot_wait = 0  # 连续「有未完成题但拿不到容器名额」轮数（残留容器清理/判停用）
+    leak_streak = 0  # 平台侧残留容器连续出现轮数
+    close_pending: set = set()  # close 失败重试队列
 
     # 启动前不清理残留容器：依赖平台 max_active 自然淘汰，避免启动阶段
     # 浪费大量时间逐个关闭容器（参考日志 secai-20260814.log #L26-35）。
@@ -771,6 +800,33 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                     break
                 await asyncio.sleep(2)
                 continue
+
+            # 状态对齐：平台侧 running 但本地未记录 = 泄漏槽位
+            leaked = [c.get("unique_code") for c in challenges
+                      if c.get("container_status") == "running"
+                      and c.get("unique_code") not in active]
+            if leaked:
+                leak_streak += 1
+                log_warn(f"[leak] 平台侧残留容器 {leaked}，第 {leak_streak} 轮")
+                if leak_streak >= 3:
+                    for lc in leaked:
+                        try:
+                            await asyncio.to_thread(client.close_challenge, lc)
+                            log_warn(f"[leak] 已机械关闭残留容器 {lc}")
+                        except Exception:
+                            pass
+                    leak_streak = 0
+            else:
+                leak_streak = 0
+
+            # close 失败重试队列：每轮尝试关闭之前没关掉的容器
+            for cc in list(close_pending):
+                try:
+                    if await asyncio.to_thread(client.close_challenge, cc):
+                        close_pending.discard(cc)
+                        log_info(f"[close-retry] {cc} 已关闭，槽位回收")
+                except Exception:
+                    pass
 
             # 自适应并发：持续 start 直到 container_busy（名额满）或没题或软上限
             while len(active) < MAX_SLOTS:
@@ -863,7 +919,10 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
                         break
                     await asyncio.sleep(1)
                 if not closed:
-                    log_warn(f"[warn] 单题 {code} 容器关闭失败，名额可能泄漏")
+                    log_warn(f"[warn] 单题 {code} 容器关闭失败，进入重试队列")
+                    close_pending.add(code)
+                else:
+                    close_pending.discard(code)
                 # attempts 只对真正跑过且未解的题降权（container_busy/start_failed 已在 start 阶段处理）
                 if outcome in ("stuck", "suspended", "error"):
                     attempts[code] = attempts.get(code, 0) + 1
@@ -890,6 +949,12 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     finally:
         # 清理所有仍活跃的容器，避免残留导致下次 max active
         for code in list(active.keys()):
+            try:
+                client.close_challenge(code)
+            except Exception:
+                pass
+        # finally 兜底：重试队列里仍未关闭的容器也尝试关闭
+        for code in list(close_pending):
             try:
                 client.close_challenge(code)
             except Exception:

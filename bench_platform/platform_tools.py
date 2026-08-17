@@ -98,6 +98,8 @@ def submit_flag(ctx: RunContextWrapper[TaskContext], unique_code: str, flag: str
         return _err(ctx, e)
     if not r.get("correct") and not r.get("duplicate"):
         c.wrong_submit_count += 1
+        if getattr(c, "turn_gain", False):  # 有正向证据 = 有效推进，重置
+            c.wrong_submit_count = 0
     return _ok(r)
 
 
