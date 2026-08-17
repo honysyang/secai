@@ -32,7 +32,6 @@ from arsenal.registries import vuln_registry
 from arsenal.registries import knowledge_registry
 from bench_platform import platform_tools
 from arsenal.registries.skill_registry import find_skills as search_skills, create_skill
-from runtime.budget import brute_gate
 from runtime.log import log_info, log_warn
 from adapters.config import (VPN_CMD, VPN_CONFIG, VPN_AUTH, BENCHMARK_BASE_URL,
                              BENCHMARK_TOKEN)
@@ -400,16 +399,16 @@ def get_tool_spec(ctx: RunContextWrapper[TaskContext], tool_name: str) -> str:
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def run_tool(ctx: RunContextWrapper[TaskContext], tool_name: str,
              args_json: str = "{}", timeout: int = 300) -> str:
     """执行一个本地安全 CLI 工具。
 
     args_json 是参数字典的 JSON 字符串，例如 '{"target":"10.0.0.1","ports":"80,443"}'。
     先 list_tools 看有哪些工具，再 get_tool_spec 看该工具的参数字段。
+
+    爆破预算 / flag 提交 / 注入过滤 / 台账由统一管线处理。
     """
-    blocked = brute_gate(ctx, "run_tool")
-    if blocked:
-        return blocked
     try:
         args = json.loads(args_json) if args_json else {}
     except Exception as e:
@@ -420,8 +419,7 @@ def run_tool(ctx: RunContextWrapper[TaskContext], tool_name: str,
         return json.dumps({"error": "args_json 必须是对象（字典），请修正后重试"},
                           ensure_ascii=False)
     result = sec_tools.execute(tool_name, args, timeout=timeout)
-    text = json.dumps(result, ensure_ascii=False)
-    return text + _guard_output(text)
+    return json.dumps(result, ensure_ascii=False)
 
 
 # ================= 漏洞 / POC / 知识检索工具 =================
@@ -436,6 +434,7 @@ def search_cve(ctx: RunContextWrapper[TaskContext], query: str, limit: int = 5) 
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def list_vulns(ctx: RunContextWrapper[TaskContext]) -> str:
     """列出系统内置的漏洞类型检测模块（SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD）。
 
@@ -491,6 +490,7 @@ def get_poc(ctx: RunContextWrapper[TaskContext], cve: str) -> str:
 
 # ================= 终态 / 子任务协议 / 记忆沉淀 =================
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def finalize(ctx: RunContextWrapper[TaskContext], findings: str = "") -> str:
     """当你认为任务已完成（目标达成或证据枯竭）时调用，提交最终结论并结束本次执行。
 
@@ -698,6 +698,7 @@ def remember(ctx: RunContextWrapper[TaskContext], kind: str, name: str,
 
 # ================= 基础设施：VPN / 黑板 / 并发 =================
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def connect_vpn(ctx: RunContextWrapper[TaskContext]) -> str:
     """当任务目标需要走 VPN/内网（如远程靶场）时调用，后台启用 OpenVPN 并验证隧道真正建立。
 
@@ -932,6 +933,7 @@ def get_payload(ctx: RunContextWrapper[TaskContext], payload_type: str) -> str:
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str,
                   objective: str = "", branch_type: str = "",
                   max_tokens: int = 0, max_turns: int = 8) -> str:
@@ -996,6 +998,7 @@ def read_artifact(ctx: RunContextWrapper[TaskContext], artifact_id: str,
 
 
 @function_tool
+@with_pipeline(DEFAULT_PIPELINE)
 def write_file(ctx: RunContextWrapper[TaskContext], path: str, content: str) -> str:
     """把内容写入工作目录下的文件（如 python3 脚本、payload 文件）。
 

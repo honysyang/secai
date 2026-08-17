@@ -141,10 +141,25 @@ async def fork_analyze(
 
 
 def update_blackboard_with_fork(blackboard: Dict[str, Any], result: Dict[str, Any]) -> str:
-    """把 fork_analyze 结果写入 blackboard，返回 next_directive 文本。"""
+    """把 fork_analyze 结果写入 blackboard，返回 next_directive 文本。
+
+    质量门：directive 过短/无实质动作（不含命令或探测意图）时降级为通用指令，
+    避免"泛泛而谈"的破局建议浪费下一轮。
+    """
     directive = str(result.get("next_directive", "")).strip()
+    # 质量门 1：空或过短
+    if len(directive) < 12:
+        directive = ""
+    # 质量门 2：无实质动作特征（命令/HTTP/探测/验证意图）
+    if directive and not any(k in directive.lower() for k in (
+            "curl", "http", "python", "bash", "nmap", "sqlmap", "ffuf", "gobuster",
+            "dirsearch", "hydra", "nc ", "netcat", "wget", "请求", "探测", "验证",
+            "尝试", "访问", "执行", "扫描", "读取", "注入", "exploit", "payload",
+            "flag", "目录", "端口", "接口", "端点", "凭证", "提权", "bypass")):
+        directive = ""
     if not directive:
-        directive = "继续探索新方向，优先验证未尝试的入口。"
+        log_warn("[fork-analyst] next_directive 未通过质量门，降级为通用指令")
+        directive = "继续探索新的可验证方向，优先使用已解锁技能做最小验证动作。"
     blackboard["next_directive"] = {
         "value": directive,
         "status": "confirmed",

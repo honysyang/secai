@@ -36,7 +36,21 @@ SUSPEND_SECONDS = int(os.getenv("SUSPEND_SECONDS", "2700"))  # 墙上时钟挂�
 
 # ================= 换脑候选 =================
 # JSON 列表，每项 {"model","base_url","api_key","role"}；缺省回退主模型
-ESCALATION_MODELS = json.loads(os.getenv("ESCALATION_MODELS", "[]"))
+def _load_escalation_models() -> list:
+    """解析 ESCALATION_MODELS 环境变量；JSON 格式错误时回退空列表并告警。
+
+    避免配置格式错误导致模块导入即崩溃（程序无法启动）。
+    """
+    raw = os.getenv("ESCALATION_MODELS", "[]")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"[warn] ESCALATION_MODELS 不是合法 JSON，已回退空列表：{e}")
+        return []
+    return data if isinstance(data, list) else []
+
+
+ESCALATION_MODELS = _load_escalation_models()
 
 
 def build_escalation_models() -> list:

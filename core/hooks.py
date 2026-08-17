@@ -6,8 +6,10 @@ context.context 才是我们的 TaskContext。
 """
 from __future__ import annotations
 
+import atexit
 import json
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -20,6 +22,33 @@ from runtime.log import log_info, log_warn, log_debug
 # 无进展工具：这些工具不产生攻击进展，调用它们不计入「本轮工具调用」，
 # 否则 think/todo/checkpoint 会合法绕过「连续 N 轮空转 → 机械换题」防线。
 _NO_PROGRESS_TOOLS = {"think", "todo_add", "todo_list", "todo_mark", "checkpoint", "list_tools"}
+
+# ---- events.jsonl 缓冲落盘：避免每轮多次 open/write/close（IO 优化） ----
+_EMIT_BUFFER: dict = {}
+_EMIT_BUFFER_LOCK = threading.Lock()
+_EMIT_FLUSH_THRESHOLD = 100  # 单文件缓冲条数，达到即刷盘
+
+
+def _flush_emit_buffer(workdir_str: str = "") -> None:
+    """把指定文件（空串=全部）的缓冲行批量写盘。进程退出时由 atexit 兜底。"""
+    with _EMIT_BUFFER_LOCK:
+        if workdir_str:
+            keys = [k for k in _EMIT_BUFFER if k == workdir_str]
+        else:
+            keys = list(_EMIT_BUFFER.keys())
+        for k in keys:
+            lines = _EMIT_BUFFER.pop(k, None)
+            if not lines:
+                continue
+            try:
+                Path(k).parent.mkdir(parents=True, exist_ok=True)
+                with open(k, "a", encoding="utf-8") as f:
+                    f.write("".join(lines))
+            except Exception:
+                pass
+
+
+atexit.register(_flush_emit_buffer)
 
 
 def _boost_role_by_trigger(task_ctx) -> None:
@@ -279,9 +308,16 @@ def _extract_hint_keywords(hint: str) -> list:
 _EXPLOIT_LEDGER_TOOLS = {"shell", "http_request", "run_batch"}
 
 
-def _ledger_signature(tool: str, args: str) -> str:
-    """把工具调用参数归一化为签名，用于判断是否是同一 payload 变体。"""
-    raw = f"{tool}:{args}".lower()
+def _ledger_signature(tool: str, args: Any) -> str:
+    """把工具调用参数归一化为签名，用于判断是否是同一 payload 变体。
+
+    args 兼容 str（旧调用方）或 dict（工具管线传入），统一序列化后归一化。
+    """
+    if isinstance(args, dict):
+        raw = json.dumps(args, ensure_ascii=False, default=str)
+    else:
+        raw = str(args)
+    raw = f"{tool}:{raw}".lower()
     # 去掉随机 token/nonce/sessid 等常见噪声，保留结构
     raw = re.sub(r"\b[a-f0-9]{16,64}\b", "<hex>", raw)
     raw = re.sub(r"\b\d{6,}\b", "<num>", raw)
@@ -289,7 +325,7 @@ def _ledger_signature(tool: str, args: str) -> str:
     return raw[:160]
 
 
-def _record_payload_ledger(task_ctx, tool: str, args: str, text: str) -> None:
+def _record_payload_ledger(task_ctx, tool: str, args: Any, text: str) -> None:
     """在 exploit 阶段记账：同一签名失败 2 次就告警，并注入系统提示避免继续重复。"""
     if not getattr(task_ctx, "payload_ledger", None):
         task_ctx.payload_ledger = []
@@ -303,8 +339,10 @@ def _record_payload_ledger(task_ctx, tool: str, args: str, text: str) -> None:
             if hit:
                 entry["hit"] = True
             return
+    preview = (json.dumps(args, ensure_ascii=False, default=str) if isinstance(args, dict)
+               else str(args))[:120]
     task_ctx.payload_ledger.append({"signature": sig, "tool": tool,
-                                     "args_preview": args[:120], "hit": hit, "count": 1})
+                                     "args_preview": preview, "hit": hit, "count": 1})
 
 
 def _ledger_failed_summary(task_ctx, top_n: int = 8) -> str:
@@ -476,8 +514,22 @@ class EventStreamHooks(RunHooks):
         entry = {"kind": kind, "ts": round(time.time(), 1), "code": self.code, **data}
         line = json.dumps(entry, ensure_ascii=False)
         _log_event(self.code, kind, data)
-        with open(self.workdir / "events.jsonl", "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        # 缓冲落盘：满阈值批量写，避免每轮多次 open/write/close
+        path = str(self.workdir / "events.jsonl")
+        with _EMIT_BUFFER_LOCK:
+            buf = _EMIT_BUFFER.setdefault(path, [])
+            buf.append(line + "\n")
+            if len(buf) >= _EMIT_FLUSH_THRESHOLD:
+                lines = _EMIT_BUFFER.pop(path)
+            else:
+                lines = None
+        if lines is not None:
+            try:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write("".join(lines))
+            except Exception:
+                pass
         # 发射到进程级事件总线（内存历史 + SQLite 落库订阅者）
         BUS.emit(self.task_id, kind, **data)
 

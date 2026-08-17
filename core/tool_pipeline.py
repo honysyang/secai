@@ -337,96 +337,27 @@ def _guard_output_text(text: str) -> str:
 
 
 def _ledger_signature(tool: str, args: Dict[str, Any]) -> str:
-    raw = f"{tool}:{json.dumps(args, ensure_ascii=False, default=str)}".lower()
-    raw = re.sub(r"\b[a-f0-9]{16,64}\b", "<hex>", raw)
-    raw = re.sub(r"\b\d{6,}\b", "<num>", raw)
-    raw = re.sub(r"\s+", "", raw)
-    return raw[:160]
+    """归一化工具调用签名（统一收敛到 core.hooks 的增强实现，避免双份漂移）。"""
+    from core.hooks import _ledger_signature as _sig
+    return _sig(tool, args)
 
 
 def _record_payload_ledger(task_ctx: TaskContext, tool: str, args: Dict[str, Any], text: str) -> None:
-    sig = _ledger_signature(tool, args)
-    hit = any(k in text.lower() for k in (
-        "flag{", '"correct": true', '"vulnerable": true',
-        '"differentiated": true', "login success", "logged in"))
-    for entry in task_ctx.payload_ledger:
-        if entry.get("signature") == sig:
-            entry["count"] = entry.get("count", 0) + 1
-            if hit:
-                entry["hit"] = True
-            return
-    preview = json.dumps(args, ensure_ascii=False, default=str)[:120]
-    task_ctx.payload_ledger.append({"signature": sig, "tool": tool,
-                                     "args_preview": preview, "hit": hit, "count": 1})
+    """exploit 阶段 payload 记账（统一收敛到 core.hooks 的增强实现）。"""
+    from core.hooks import _record_payload_ledger as _rec
+    _rec(task_ctx, tool, args, text)
 
 
 def _score_tool_result(tool: str, text: str, ctx: TaskContext) -> int:
-    """简化版增量打分（复用 hooks.py 的核心逻辑）。"""
-    low = text.lower()
-    if any(k in low for k in (
-            "flag{", '"correct": true', '"correct":true',
-            '"vulnerable": true', '"vulnerable":"true"',
-            '"differentiated": true', '"vuln": true', '"vuln":"true"',
-            "login success", "logged in", "session=", "响应存在差异")):
-        return 1
-    # hint 方向锁
-    if getattr(ctx, "hint_grace_active", False):
-        hint_dir = ctx.blackboard.get("hint_directive", {}).get("value", "")
-        kws = re.findall(r"[A-Za-z][A-Za-z0-9_.\-]{3,}", hint_dir or "")
-        stop = {"this", "that", "with", "from", "what", "does", "the", "and", "you", "your", "hint"}
-        kws = [w for w in set(kws) if w.lower() not in stop][:8]
-        if kws and not any(k.lower() in low for k in kws):
-            return 0
-    # 敏感文件
-    sens_re = re.compile(
-        r"(config\.php|\.git/|backup|\.env|phpinfo|/flag|flag\.txt|wp-config|"
-        r"\.bak|\.sql|\.zip|web\.config|id_rsa|shadow)", re.I)
-    sensitive = {m.lower() for m in sens_re.findall(text)}
-    if sensitive - ctx.seen_signatures:
-        ctx.seen_signatures |= sensitive
-        return 1
-    # 枚举类工具：状态码差异 / 新路径
-    http_re = re.compile(r"\b(?:200|201|204|301|302|307|308|401|403|405|500)\b")
-    positive = {"200", "201", "204", "301", "302", "307", "308"}
-    enum_tools = {"run_tool", "fuzz", "parallel_shell"}
-    if tool in enum_tools:
-        codes = set(http_re.findall(text))
-        has_pos = bool(codes & positive)
-        has_neg = bool(codes - positive)
-        if has_pos and (len(codes) >= 2 or has_neg):
-            return 1
-        path_re = re.compile(r"(?:/[A-Za-z0-9_.~%-]{2,}){1,4}")
-        new_paths = {p.lower() for p in path_re.findall(text)} - ctx.seen_signatures
-        if new_paths:
-            ctx.seen_signatures |= new_paths
-            return 1
-    # 交互类工具行为差异
-    if tool in ("shell", "http_request"):
-        hints = (
-            "syntax error", "mysql", "sqlite", "postgresql", "ORA-", "warning:",
-            "sql", "union", "select", "sleep(", "benchmark(", "pg_sleep",
-            "whoami", "id\n", "root:", "admin", "secret", "internal", "localhost",
-            "deserialization", "serial", "gadget", "__destruct", "__wakeup",
-            "rce", "popen", "system(", "eval(", "exec(", "shell_exec",
-        )
-        if any(k in low for k in hints):
-            return 1
-        if tool == "http_request":
-            codes = set(http_re.findall(text))
-            if (codes & positive and any(k in low for k in ("error", "syntax", "warning",
-                                                              "exception", "admin", "root",
-                                                              "flag", "internal", "localhost",
-                                                              "serial", "deserialization"))):
-                return 1
-    return 0
+    """信息增量打分（统一收敛到 core.hooks 的 v3 增强实现，避免双份漂移）。"""
+    from core.hooks import _score_tool_result as _score
+    return _score(tool, text, ctx)
 
 
 def _is_network_unreachable(text: str) -> bool:
-    low = text.lower()
-    return any(k in low for k in (
-        "connection refused", "no route to host", "timed out", "timeout",
-        "name or service not known", "network is unreachable",
-        "could not resolve host", "连接超时", "网络不可达"))
+    """网络不可达检测（统一收敛到 core.hooks）。"""
+    from core.hooks import _is_network_unreachable as _net
+    return _net(text)
 
 
 # 并发包装器：给同步阻塞型工具加 around 超时/取消

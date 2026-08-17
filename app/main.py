@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -44,7 +45,9 @@ import adapters.db as db_mod
 from demo_tools import build_default_tools
 from core.events import BUS
 from runtime.fork_analyst import fork_analyze, update_blackboard_with_fork
-from core.hooks import EventStreamHooks, _ledger_failed_summary
+from core.hooks import EventStreamHooks, _ledger_failed_summary, _flush_emit_buffer
+from runtime.reporting import (first_strike, write_cost_report,
+                               export_trajectory, write_dashboard)
 
 from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
 from arsenal.registries.role_registry import assign_role
@@ -170,43 +173,6 @@ def _tool_groups_for(role_name: str, desc: str) -> tuple:
         return tuple(groups)  # 二进制/协议题：去掉 web 组，避免差分实验/联网干扰
     groups.append("web")       # Web/通用题：distinguish + web_search
     return tuple(groups)
-
-
-async def _first_strike(addrs: list) -> str:
-    """首轮机械预侦察：在 LLM 介入前发起常见入口/敏感路径/状态码探测，省一轮 LLM 回合。
-
-    使用 asyncio.to_thread 把同步 requests.get 放到后台线程执行，避免阻塞事件循环；
-    各路径之间用 asyncio.gather 并发，缩短预侦察耗时。
-    """
-    if not addrs:
-        return ""
-    addr = next((a for a in addrs if a.startswith(("http://", "https://"))), None)
-    if not addr:
-        return ""
-    base = addr.rstrip("/")
-    paths = ["/", "/robots.txt", "/.git/HEAD", "/index.php", "/index.html",
-             "/login", "/admin", "/api", "/upload", "/flag", "/flag.txt",
-             "/.env", "/config.php", "/includes/config.php", "/health",
-             "/wp-login.php", "/phpinfo.php", "/server-status", "/swagger-ui.html",
-             "/api/v1/", "/favicon.ico"]
-
-    def _probe(path: str) -> dict:
-        url = base + path
-        try:
-            r = requests.get(url, timeout=8, verify=False, allow_redirects=False)
-            title = re.search(r"<title>([^<]*)</title>", r.text, re.I)
-            return {
-                "path": path, "status": r.status_code, "len": len(r.content),
-                "title": (title.group(1) if title else "")[:80],
-                "server": r.headers.get("Server", "")[:40],
-                "powered": r.headers.get("X-Powered-By", "")[:40],
-                "ct": r.headers.get("Content-Type", "")[:40],
-            }
-        except Exception as e:
-            return {"path": path, "error": str(e)[:80]}
-
-    rows = await asyncio.gather(*[asyncio.to_thread(_probe, p) for p in paths])
-    return "首轮预侦察:\n" + json.dumps(rows, ensure_ascii=False, indent=2)
 
 
 async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None, model_pool=None) -> None:
@@ -496,7 +462,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     # 首轮机械预侦察：在 LLM 介入前先收集常见入口/敏感路径/状态码，省一轮 LLM 回合
     recon0 = ""
     try:
-        recon0 = await _first_strike(addrs)
+        recon0 = await first_strike(addrs)
         log_info(f"[first-strike] 单题 {code} 预侦察完成：{len(recon0)} 字符")
     except Exception as e:
         log_warn(f"[first-strike] 单题 {code} 预侦察失败：{str(e)[:120]}")
@@ -882,6 +848,11 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     finally:
         # 第三道闸门：统一回收所有后台子任务
         await _cancel_all_subtasks(ctx, reason="parent_finished")
+        # 冲刷事件缓冲，保证 events.jsonl 完整落盘（证据留痕）
+        try:
+            _flush_emit_buffer(str(challenge_workdir / "events.jsonl"))
+        except Exception:
+            pass
         # 清理单题 session 文件，避免堆积（保留 events/artifacts 作为证据）
         try:
             (SESSIONS_DIR / f"challenge_{code}.sqlite").unlink(missing_ok=True)
@@ -909,60 +880,15 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         db.task_finished(code, outcome, answer)  # 登记题目终态（监控页状态/结论）
     # 成本报告：单题 token 明细 + 缓存命中率 + 估算成本，供赛后复盘
     try:
-        _write_cost_report(challenge_workdir, code, outcome, ctx)
+        write_cost_report(challenge_workdir, code, outcome, ctx, death_reason)
     except Exception:
         pass
     # 轨迹导出：事件总线全量落盘 trajectory_<code>.jsonl（append-only 回放用）
     try:
-        _export_trajectory(challenge_workdir, code, outcome, ctx)
+        export_trajectory(challenge_workdir, code, outcome, ctx)
     except Exception:
         pass
     return outcome
-
-
-def _export_trajectory(workdir: Path, code: str, outcome: str, ctx) -> None:
-    """把事件总线历史落盘 trajectory_<code>.jsonl，供赛后回放与复盘。"""
-    events = BUS.history(code)
-    lines = [json.dumps(ev, ensure_ascii=False) for ev in events]
-    lines.append(json.dumps({
-        "kind": "trajectory_end", "ts": time.time(), "code": code,
-        "outcome": outcome, "turns": getattr(ctx, "turn_count", 0),
-        "death_reason": getattr(ctx, "death_reason", ""),
-    }, ensure_ascii=False))
-    with (workdir / f"trajectory_{code}.jsonl").open("w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-
-
-def _write_cost_report(workdir: Path, code: str, outcome: str, ctx) -> None:
-    """单题成本报告落盘 cost_report.json：token 明细 / 缓存命中率 / 死因 / 轮次。"""
-    tu = ctx.token_usage
-    cache_read = tu.get("cache_read", 0)
-    cache_write = tu.get("cache_write", 0)
-    prompt_total = cache_read + cache_write
-    hit_rate = (cache_read / prompt_total) if prompt_total > 0 else 0.0
-    report = {
-        "code": code,
-        "outcome": outcome,
-        "turns": getattr(ctx, "turn_count", 0),
-        "tokens": {
-            "input": tu.get("input", 0),
-            "output": tu.get("output", 0),
-            "total": tu.get("total", 0),
-            "requests": tu.get("requests", 0),
-        },
-        "cache": {
-            "cache_read": cache_read,
-            "cache_write": cache_write,
-            "hit_rate": round(hit_rate, 4),
-        },
-        "death_reason": getattr(ctx, "death_reason", ""),
-        "subtask_count": len(getattr(ctx, "subtasks", [])),
-        "cache_hits": getattr(ctx, "cache_hits", 0),
-        "cache_misses": getattr(ctx, "cache_misses", 0),
-        "ts": int(time.time()),
-    }
-    with (workdir / "cost_report.json").open("w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
 
 
 async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict:
@@ -1005,40 +931,65 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     log_info(f"== 全局角色提示：{base_role['role']} ==")
 
     # ① 战略家·立法与规划（全局一次；合并管理者 + 规划师，减少一轮 LLM 调用）
+    # 立法幂等：同任务已有缓存宪章/计划则复用，避免重跑强模型（resume/重启场景）
     log_info("== 战略家：写使命宪章与作战计划 ==")
     set_status(workdir, "legislate", "running")
-    combined_doc = ""
-    for attempt in range(2):
+    _task_hash = hashlib.sha256(task.encode("utf-8")).hexdigest()[:16]
+    _charter_cache = DATA_DIR / "mission_charter.md"
+    _charter_meta = DATA_DIR / "mission_charter.meta.json"
+    charter = ""
+    global_plan = ""
+    try:
+        if _charter_cache.exists() and _charter_meta.exists():
+            meta = json.loads(_charter_meta.read_text(encoding="utf-8"))
+            if isinstance(meta, dict) and meta.get("task_hash") == _task_hash:
+                charter = _charter_cache.read_text(encoding="utf-8")
+                global_plan = str(meta.get("plan", ""))
+                log_info("== 战略家：复用已缓存宪章/计划（同任务幂等）==")
+    except Exception as e:
+        log_warn(f"[legislate] 读取宪章缓存失败，重新立法：{str(e)[:120]}")
+        charter = ""
+        global_plan = ""
+
+    if not charter:
+        combined_doc = ""
+        for attempt in range(2):
+            try:
+                combined_result = await run_with_model_fallback(
+                    strategist_agent,
+                    input=(f"用户任务：\n{task}\n\n"
+                           f"角色提示：{base_role['role']}\n"
+                           f"角色风格：{base_role.get('style', '')[:200]}\n\n"
+                           f"请一次性输出使命宪章和作战计划。"),
+                    hooks=hooks,
+                    model_pool=global_model_pool,
+                    agent_name="Strategist")
+                combined_doc = str(combined_result.final_output)
+                break
+            except Exception as e:
+                log_warn(f"[retry] 战略家立法/规划失败（{attempt + 1}/2）：{str(e)[:200]}")
+                if attempt == 1:
+                    log_error(f"== 战略家立法/规划失败：{str(e)[:200]}，无法继续 ==")
+                    set_status(workdir, "legislate", "error")
+                    return {"status": "error", "reason": f"strategist_failed: {type(e).__name__}",
+                            "results": [], "report": ""}
+                await asyncio.sleep(3)
+        # 简单拆分：宪章取「# 使命宪章」到「# 作战计划」之间的内容；计划取剩余部分
+        charter_part = combined_doc
+        plan_part = ""
+        if "# 作战计划" in combined_doc:
+            idx = combined_doc.index("# 作战计划")
+            charter_part = combined_doc[:idx]
+            plan_part = combined_doc[idx:]
+        charter = charter_part.strip()
+        global_plan = plan_part.strip() or charter
         try:
-            combined_result = await run_with_model_fallback(
-                strategist_agent,
-                input=(f"用户任务：\n{task}\n\n"
-                       f"角色提示：{base_role['role']}\n"
-                       f"角色风格：{base_role.get('style', '')[:200]}\n\n"
-                       f"请一次性输出使命宪章和作战计划。"),
-                hooks=hooks,
-                model_pool=global_model_pool,
-                agent_name="Strategist")
-            combined_doc = str(combined_result.final_output)
-            break
+            save_charter(DATA_DIR / "mission_charter.md", charter)
+            (_charter_meta).write_text(
+                json.dumps({"task_hash": _task_hash, "plan": global_plan},
+                           ensure_ascii=False), encoding="utf-8")
         except Exception as e:
-            log_warn(f"[retry] 战略家立法/规划失败（{attempt + 1}/2）：{str(e)[:200]}")
-            if attempt == 1:
-                log_error(f"== 战略家立法/规划失败：{str(e)[:200]}，无法继续 ==")
-                set_status(workdir, "legislate", "error")
-                return {"status": "error", "reason": f"strategist_failed: {type(e).__name__}",
-                        "results": [], "report": ""}
-            await asyncio.sleep(3)
-    # 简单拆分：宪章取「# 使命宪章」到「# 作战计划」之间的内容；计划取剩余部分
-    charter_part = combined_doc
-    plan_part = ""
-    if "# 作战计划" in combined_doc:
-        idx = combined_doc.index("# 作战计划")
-        charter_part = combined_doc[:idx]
-        plan_part = combined_doc[idx:]
-    charter = charter_part.strip()
-    global_plan = plan_part.strip() or charter
-    save_charter(DATA_DIR / "mission_charter.md", charter)
+            log_warn(f"[legislate] 保存宪章缓存失败：{str(e)[:120]}")
     set_status(workdir, "legislate", "finish")
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
@@ -1409,72 +1360,33 @@ async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
         report_text = "（战报后台生成中，请查看 data/field_notes.md）"
         log_info("[report] 战报后台生成中，未阻塞主进程结束")
 
-    # 无论是否超时，确保战报最终写入 field_notes（后台任务完成时会写）
+    # 无论是否超时，确保战报最终写入 field_notes（join 等待，避免进程退出时战报丢失）
     async def _persist_report():
-        final = await report_task
+        try:
+            final = await asyncio.wait_for(asyncio.shield(report_task), timeout=30.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            final = "（战报生成超时，未写入）"
         try:
             with (DATA_DIR / "field_notes.md").open("a", encoding="utf-8") as f:
                 f.write(f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{final}\n")
-        except Exception:
-            pass
+        except Exception as e:
+            log_warn(f"[report] 写入 field_notes 失败：{str(e)[:120]}")
         print("\n===== 战报 =====\n" + final)
         set_status(workdir, "report", "finish")
 
-    asyncio.create_task(_persist_report())
+    try:
+        await asyncio.wait_for(_persist_report(), timeout=35.0)
+    except asyncio.TimeoutError:
+        log_warn("[report] 战报写入超时，跳过（不影响主流程）")
 
     # 四指标看板：汇总所有 worker_*/cost_report.json → dashboard.json
     try:
-        _write_dashboard(workdir)
+        write_dashboard(workdir)
     except Exception:
         pass
 
     log_info(f"== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
     return {"status": "finished", "results": results, "report": report_text}
-
-
-def _write_dashboard(workdir: Path) -> None:
-    """赛后四指标看板：缓存命中率 / 零增量事件数 / 轮次有效动作比 / 单题 token 成本。
-
-    扫描 workdir 下 worker_*/cost_report.json 汇总为 dashboard.json。
-    """
-    reports = []
-    for rep in sorted(workdir.glob("worker_*/cost_report.json")):
-        try:
-            data = json.loads(rep.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                reports.append(data)
-        except Exception:
-            continue
-    if not reports:
-        return
-    cache_read = sum(r.get("cache", {}).get("cache_read", 0) for r in reports)
-    cache_write = sum(r.get("cache", {}).get("cache_write", 0) for r in reports)
-    prompt_total = cache_read + cache_write
-    total_tokens = sum(r.get("tokens", {}).get("total", 0) for r in reports)
-    total_turns = sum(r.get("turns", 0) for r in reports)
-    solved = sum(1 for r in reports if r.get("outcome") == "solved")
-    dashboard = {
-        "generated_at": int(time.time()),
-        "challenge_count": len(reports),
-        "solved_count": solved,
-        "cache": {
-            "cache_read": cache_read,
-            "cache_write": cache_write,
-            "hit_rate": round(cache_read / prompt_total, 4) if prompt_total else 0.0,
-        },
-        "tokens": {"total": total_tokens, "per_challenge": round(total_tokens / len(reports), 1)},
-        "turns": {"total": total_turns,
-                  "per_challenge": round(total_turns / len(reports), 1),
-                  "actions_per_turn": 0.0},
-        "zero_gain_events": 0,
-        "per_challenge": reports,
-    }
-    with (workdir / "dashboard.json").open("w", encoding="utf-8") as f:
-        json.dump(dashboard, f, ensure_ascii=False, indent=2)
-    log_info(f"[dashboard] 四指标看板已生成：{len(reports)} 题，"
-             f"命中率 {dashboard['cache']['hit_rate']:.1%}，"
-             f"单题 token {dashboard['tokens']['per_challenge']:.0f}，"
-             f"单题轮次 {dashboard['turns']['per_challenge']:.1f}")
 
 
 if __name__ == "__main__":

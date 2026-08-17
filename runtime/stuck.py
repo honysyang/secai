@@ -17,7 +17,6 @@ from agents import Runner
 from arsenal.registries.skill_registry import load_skills
 from core.agents_def import compactor_agent
 from core.task_context import TaskContext
-from runtime.model_fallback import run_with_model_fallback
 
 
 # 模型惰性检测阈值（可通过环境变量覆盖）
@@ -329,8 +328,9 @@ async def compact_session(ctx: TaskContext, session, compactor_model=None,
                           model_pool=None) -> Optional[str]:
     """自救时对单题 session 进行历史压缩。
 
-    使用 compactor_agent 对当前 session 历史进行摘要；摘要成功后清空 SQLiteSession
-    中的历史消息（保留任务元信息在 ctx 中），并把摘要写入 ctx.compaction_summary。
+    复用 context_manager._summarize 的统一摘要指令（与主循环 compact_if_needed
+    同一口径），避免两条压缩路径指令漂移；摘要成功后清空 SQLiteSession 中的历史
+    消息（保留任务元信息在 ctx 中），并把摘要写入 ctx.compaction_summary。
     失败时返回 None，不抛出异常，避免中断外层主循环。
     """
     from agents.memory import SQLiteSession
@@ -339,27 +339,12 @@ async def compact_session(ctx: TaskContext, session, compactor_model=None,
     if not isinstance(session, SQLiteSession):
         return None
 
-    # 构造摘要输入：题目、角色、阶段、黑板关键内容、失败路径、已尝试动作
     try:
         items = await session.get_items()
     except Exception:
         return None
-
-    failed_paths = [
-        k for k, v in ctx.blackboard.items()
-        if isinstance(v, dict) and v.get("status") == "failed"
-    ]
-    tried_major = _format_failed_actions(items)
-    board_summary = _format_blackboard_summary(ctx.blackboard)
-
-    compact_input = (
-        f"题目：{ctx.task[:500]}\n\n"
-        f"角色：{ctx.role.get('role', '未知')}\n"
-        f"当前阶段：{ctx.phase}\n\n"
-        f"黑板关键内容：\n{board_summary}\n\n"
-        f"已证伪方向（不要重复）：\n{', '.join(failed_paths[:10]) or '（无）'}\n\n"
-        f"最近失败路径上的主要动作：\n{tried_major}"
-    )
+    if not items:
+        return None
 
     # 若有指定模型，克隆 compactor_agent 使用该模型；否则使用默认 MODEL
     agent = compactor_agent
@@ -377,31 +362,17 @@ async def compact_session(ctx: TaskContext, session, compactor_model=None,
             )
 
     try:
-        result = await run_with_model_fallback(
-            agent,
-            input=compact_input,
-            context=ctx,
-            session=session,
-            max_turns=1,
-            model_pool=model_pool,
-            agent_name="Compactor",
-        )
-        summary = str(result.final_output).strip()
-    except Exception:
-        return None
-
-    if not summary:
-        return None
-
-    # 摘要成功：清空 SQLiteSession 历史（保留 ctx 中的任务元信息），并写入摘要
-    try:
+        # 统一摘要口径：复用 context_manager._summarize（与主循环压缩一致）
+        from core.context_manager import _summarize
+        summary = await _summarize(agent, items, ctx.compaction_summary)
+        if not summary or not str(summary).strip():
+            return None
+        ctx.compaction_summary = str(summary)[:2000]
         await session.clear_session()
-    except Exception:
-        # 即使清空失败也不抛异常，摘要仍可使用
-        pass
-
-    ctx.compaction_summary = summary
-    return summary
+        return ctx.compaction_summary
+    except Exception as e:
+        log_warn(f"[compact] 自救压缩失败：{str(e)[:200]}")
+        return None
 
 
 def switch_model_prompt(ctx: TaskContext, old_model: str,
