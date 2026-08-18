@@ -62,19 +62,20 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 | 零 LLM 跑分调度 | EV 选题、容器 SOP、hint 前置、换题决策、**自适应容器并发**全部代码机械执行 |
 | 自适应容器并发 | 持续 start 直到 `container_busy` 被拒，并发度随平台真实上限自动收敛（2/3/4 自适应） |
 | 通关机械判决 | `correct=true` 后复核平台 `is_completed`，通关即退出，不等 LLM finalize |
-| 子任务并发 | `spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离 |
+| 子任务并发 | `spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离；临时分身上限 N≤2（三道闸门：明确目标/独立预算/统一回收） |
 
 ### 2.2 执行与上下文
 
 | 特性 | 说明 |
 |---|---|
-| 多智能体协作 | Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）→ Coach（教练） |
+| 多智能体协作 | 单主线 Executor + 用完即弃临时分身：Strategist（立法+规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）；Planner/Coach 已并入 Strategist 或由 fork_analyst 替代 |
 | 解法模板化 | solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式，正向复用 |
-| 软干预教练 | hint 后仍卡壳触发 Coach 给具体方向（写黑板半持久），不换题不重规划 |
+| 破局干预 | 3 轮零增量 → `fork_analyst` 复盘一次（写 next_directive）→ 再 3 轮零增量机械换题；coach / plan-mode 默认关闭（`ENABLE_COACH` 可复活） |
 | 信息增量判停 | 从「看阶段切换」升级为「看产出质量」，正向证据清零、零增量累计 |
 | 提交铁律 | 工具输出先全文扫 flag 再机械提交，不靠 LLM 自觉 |
 | Prompt 注入防御 | 工具输出统一检测注入特征，命中追加安全提醒，按不可信数据处理 |
 | 上下文生命周期 | 四层架构 + token 压缩 + 断点续跑 + 全局黑板（落盘持久化）+ 死路蒸馏 |
+| 子任务情报共享 | 子任务运行期发现的新结论 append 到 `sub_intel.jsonl`，主线每轮增量合并（verified 才回流、不覆盖父结论），不必等子任务结束 |
 
 ### 2.3 成本与模型治理
 
@@ -83,6 +84,7 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 | 成本治理 | 爆破/hint 预算 → 无感知换脑（switch）→ 挂起（suspend），token + 时钟双档 |
 | 多模型灾备池 | 分析型 Agent 默认主模型（glm），执行型 Agent 默认 fast 模型（deepseek-v4-flash）；额度/限流/鉴权/状态码失败自动切换候选模型，保持同一 session 继续作答 |
 | 模型惰性治理 | 连续无进展优先自救换思路，自救无效切换模型接管；自救时压缩上下文防污染历史 |
+| 缓存防线 | 静态 system prompt 每轮 hash 断言（漂移即 `[cache-guard]` ERROR）；压缩 append-only（定点截断旧输出 + 摘要锚点，不 clear_session 保前缀缓存）；战报/看板输出真实 `prefix_hit_rate`（目标 ≥85%） |
 | 比赛连续性保险 | 未预期异常退出后自动重启（指数退避，默认最多 5 次），避免单点崩溃导致全程退出 |
 
 ### 2.4 可观测性与声明式内容
@@ -114,10 +116,9 @@ flowchart TB
     end
 
     subgraph Orchestrator["app/main.py（主编排）"]
-        MGR["① Manager 立法"]
-        PLN["② Planner 规划"]
-        SCH["③ 调度器循环<br/>list→EV选题→start→单题→close"]
-        RPT["④ Reporter 战报"]
+        STG["① Strategist 立法+规划（一次性）"]
+        SCH["② 调度器循环<br/>list→EV选题→start→单题→close"]
+        RPT["③ Reporter 战报 + 死路蒸馏"]
     end
 
     subgraph Core["core/ 核心模块"]
@@ -257,26 +258,23 @@ sudo setcap cap_net_admin,cap_net_raw+ep /usr/sbin/openvpn
 
 | Agent | 角色定位 | 产物 | 触发 |
 |---|---|---|---|
-| **Manager** | 立法（为什么打） | 使命宪章（目标/原则/约束/终止判据） | 任务开始，一次 |
-| **Planner** | 深度分析（打哪里、按什么顺序） | 作战计划（任务研判/攻击面/flag 定位/分步计划） | 任务开始 + 停滞 replan |
-| **Executor** | 执行（怎么打） | 证据、黑板、flag | 每轮循环 |
-| **Subtask Executor** | 子任务并发执行 | `finish_subtask` 结构化结论（summary/findings/flag） | 主 Agent `spawn_subtask` 后并发调度 |
-| **Reporter** | 战报 + 死路蒸馏 | 战报 + field_notes | 任务结束，一次 |
-| **Compactor** | 历史压缩 | 压缩摘要 | 上下文超阈值 |
-| **Coach** | 软干预教练 | 1~2 条具体可试方向（写黑板半持久） | hint 后仍零增益 3 轮，每题目 1 次 |
+| **Strategist** | 立法 + 深度分析（为什么打、按什么顺序） | 使命宪章 + 作战计划（研判/攻击面/flag 定位/分步计划） | 任务开始，一次性；`build_strategist` 工厂化按需构建 |
+| **Executor** | 执行（怎么打） | 证据、黑板、flag | 每轮循环（单主线） |
+| **Subtask Executor** | 子任务并发执行（N≤2） | `finish_subtask` 结构化结论（summary/findings/flag），运行期情报共享主线 | 主 Agent `spawn_subtask` 后并发调度，三道闸门 |
+| **Reporter** | 战报 + 死路蒸馏 | 战报（代码校验 `## 战报`/`## 死路蒸馏` 两节）+ field_notes | 任务结束，一次；`build_reporter` 工厂化 |
+| **Compactor** | 历史压缩（append-only） | 压缩摘要（定点截断旧输出 + 锚点追加） | 上下文超阈值 / 卡壳自救强制 |
+
+> 已退役：Manager/Planner 并入 Strategist（兼容别名删除）；Coach 由 `runtime/fork_analyst.py`（轨迹分叉分析，一次性强模型调用，不常驻）替代。
 
 ### 5.2 数据流
 
 ```mermaid
 flowchart LR
-    TASK["task<br/>完整任务书"] --> MGR["Manager<br/>立法"]
-    TASK --> PLN["Planner<br/>规划"]
-    MGR -->|charter 使命宪章| PLN
-    PLN -->|plan 作战计划| EXE["Executor<br/>动态 instructions"]
-    MGR -->|charter| EXE
+    TASK["task<br/>完整任务书"] --> STG["Strategist<br/>立法+规划"]
+    STG -->|charter+plan| EXE["Executor<br/>动态 instructions"]
     EXE -->|黑板+事件流| FB["反馈回路"]
-    FB -->|"停滞5轮→replan"| PLN
-    FB -->|"超阈值→compact"| CMP["Compactor"]
+    FB -->|"3轮零增量→fork_analyze一次"| STG
+    FB -->|"超阈值/自救→compact"| CMP["Compactor"]
     EXE -->|结束| RPT["Reporter<br/>战报+死路蒸馏"]
 ```
 
@@ -289,7 +287,7 @@ Executor 的 instructions 是**动态函数**，每轮从 `TaskContext` 读取�
 ### 6.1 通用流程（所有任务共用主干）
 
 ```
-任务接收 → ① 立法 → ② 规划 → ③ 按杀伤链执行 → ④ 报告 + 死路蒸馏
+任务接收 → ① Strategist 立法+规划（一次性）→ ② 调度执行（按杀伤链）→ ③ 报告 + 死路蒸馏
 ```
 
 跑分模式 = 通用流程 + **调度器层**（选题/容器/换题/hint 的机械编排），杀伤链本身不变。
@@ -298,9 +296,8 @@ Executor 的 instructions 是**动态函数**，每轮从 `TaskContext` 读取�
 
 ```mermaid
 flowchart TD
-    START["启动"] --> LEGISLATE["① Manager 立法 → charter"]
-    LEGISLATE --> PLAN["② Planner 规划 → global_plan"]
-    PLAN --> LOOP{"③ 调度器主循环<br/>（3 槽并发）"}
+    START["启动"] --> LEGISLATE["① Strategist 立法+规划 → charter+plan"]
+    LEGISLATE --> LOOP{"② 调度器主循环<br/>（3 槽并发）"}
 
     LOOP -->|"deadline 到达 / 平台 TaskEnded"| END["终止"]
     LOOP --> LIST["list_challenges 拉题目"]
@@ -314,7 +311,7 @@ flowchart TD
     SINGLE -->|"停滞按难度分级→看hint/换题<br/>网络不可达2次→换题<br/>拿到flag→机械提交<br/>finalize→solved"| DONE
     SINGLE -->|"fatal→全局终止"| END
 
-    END --> REPORT["④ Reporter 战报 + 死路蒸馏"]
+    END --> REPORT["③ Reporter 战报 + 死路蒸馏"]
 ```
 
 ---
@@ -413,7 +410,7 @@ flowchart LR
 
 | 机制 | 说明 |
 |---|---|
-| Token 压缩 | 超 30000 token 触发 Compactor 摘要，回退到回合边界避免 400 |
+| Token 压缩 | 超 20000 token 触发 Compactor 摘要（append-only：定点截断旧输出 + 锚点追加，保前缀缓存）；卡壳自救可 force 强制压缩 |
 | 信息增量信号 | `zero_gain_turns`：正向证据清零、零增量累计，统一驱动 replan/判停 |
 | 提交铁律 | `_spill_output` 截断前先扫全文 flag → 机械 `submit_flag` |
 | 全局黑板 | 40 字符摘要注入 + LRU 淘汰（50 条），完整值按需 `blackboard get`；落盘 `blackboard.json` 跨尝试/挂起恢复 |
@@ -534,7 +531,7 @@ SECAI/
 │   ├── main.py             # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
 │   └── server.py           # SSE 实时流服务（三页 + 监控 API）
 ├── core/
-│   ├── agents_def.py       # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
+│   ├── agents_def.py       # Agent 工厂（build_strategist/build_reporter/build_executor）+ 动态 instructions
 │   ├── context_manager.py  # 上下文压缩 + 断点续跑
 │   ├── events.py           # 进程级事件总线（内存历史 + 订阅者分发）
 │   ├── hooks.py            # 事件流 + 渐进披露 + 增量打分 + AI 思考提取 + 网络不可达检测
@@ -545,11 +542,13 @@ SECAI/
 │   ├── platform_tools.py   # 平台 API 工具（异常上抛）
 │   └── scheduler.py        # 跑分调度器（EV选题/难度分级/停滞决策，纯函数）
 ├── runtime/
-│   ├── budget.py           # 成本治理（爆破/hint 预算 + 换脑/挂起）
+│   ├── budget.py           # 成本治理 + 阈值常量收口（爆破/hint 预算/墙钟/干预上限）
 │   ├── status.py           # 阶段状态机
 │   ├── deadline.py         # 比赛硬总时限
 │   ├── model_pool.py       # 多模型灾备池（额度/失败自动切换）
-│   ├── stuck.py            # 模型惰性治理（自救优先 + 切换接管 + 上下文压缩）
+│   ├── stuck.py            # 模型惰性治理（自救优先 + 切换接管，压缩走 context_manager 薄包装）
+│   ├── fork_analyst.py     # 轨迹分叉分析（卡壳复盘，产出 next_directive，不常驻）
+│   ├── reporting.py        # 预侦察/成本报告/轨迹导出/看板四指标
 │   └── log.py              # 统一日志（终端+文件双写，级别/颜色，AI 思考实时输出）
 ├── adapters/
 │   ├── config.py           # env 配置 + 模型
@@ -571,7 +570,7 @@ SECAI/
 │       ├── vuln_registry.py
 │       ├── poc_registry.py
 │       └── knowledge_registry.py
-├── demo_tools.py           # 执行工具 + 提交铁律 + 注入防御 + 工具按需加载
+├── demo_tools.py           # 执行工具 + 提交铁律 + 注入防御 + 工具按需加载 + 子任务情报共享
 ├── prompts/                # 任务模板（tsec_task.txt）
 ├── static/                 # 前端三页（index/monitor/agents）
 ├── docs/                   # 架构设计 + 使用手册 + 诊断报告

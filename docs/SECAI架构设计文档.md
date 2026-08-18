@@ -34,26 +34,27 @@ SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，
 
 核心能力：
 
-- **多智能体协作**：Manager（立法）→ Planner（规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）→ Coach（教练）
-- **子任务并发**：`spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离
+- **多智能体协作**：单主线 Executor + 用完即弃临时分身：Strategist（立法+规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）；Planner/Coach 已并入 Strategist 或由 fork_analyst 替代
+- **子任务并发**：`spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离；临时分身上限 N≤2（明确目标/独立预算/统一回收三闸门）
 - **跑分调度**：面向 TSecBench 等靶场平台的「选题 → 启动 → 渗透 → 提交 → 关闭 → 换题」机械编排
 - **自适应容器并发**：持续 start 直到 container_busy 被拒，并发度随平台真实上限自动收敛（2/3/4 自适应）；close 检查返回值 + 失败重试
 - **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出，不等 LLM finalize
 - **解法模板化**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式，正向复用
-- **软干预教练**：hint 后仍卡壳触发 Coach 给具体方向（写黑板半持久），不换题不重规划
+- **破局干预**：3 轮零增量 → fork_analyst 复盘一次（写 next_directive）→ 再 3 轮零增量机械换题；coach/plan-mode 默认关闭可复活
 - **成本治理**：爆破/hint 预算 → 无感知换脑（switch）→ 挂起（suspend），token + 时钟双档止损
 - **信息增量判停**：从「看阶段切换」升级为「看产出质量」，正向证据清零、零增量累计，统一驱动 replan/判停
 - **提交铁律**：工具输出先全文扫 flag 再机械提交，不靠 LLM 自觉
 - **Prompt 注入防御**：工具输出统一检测注入特征，命中追加安全提醒、按不可信数据对待
 - **题级角色派任**：每道题按 unique_code 前缀派任对应角色皮肤
 - **上下文生命周期**：分层管理 + token 压缩 + 断点续跑 + 死路蒸馏 + 全局黑板（落盘持久化）
-- **事件总线 + 落库**：进程级 EventBus → SQLite（tasks/events 表，WAL），events.jsonl 双写留痕
+- **事件总线 + 落库**：进程级 EventBus → SQLite（tasks/events 表，WAL，唯一真相源），events.jsonl 仅人读留痕
 - **渐进披露 + 技能预算**：技能按触发词解锁，注入带预算（同屏 3 篇 / 每篇 1200 字 / 总 8k）
 - **声明式内容**：skills / tools / roles / vulns / pocs / payloads / knowledge 全部本地化、自包含、可扩展
 - **实时可视化**：标准库后端 + SSE 实时流 + 三页前端（对话/监控/智能体 kill-chain）
 - **多模型灾备池**：额度/限流/鉴权/状态码失败自动切换候选模型，保持同一 session 继续作答
 - **模型惰性治理**：连续无进展优先自救换思路，自救无效切换模型接管；自救时压缩上下文防污染历史
-- **统一日志系统**：终端 + 文件双写，时间戳/级别/颜色分级；黑板、flag、漏洞、证据等关键结论醒目打印
+- **缓存防线**：静态 system prompt 每轮 hash 断言（漂移即 `[cache-guard]` ERROR）；压缩 append-only（定点截断 + 锚点追加，不 clear_session 保前缀缓存）；战报/看板输出真实 prefix_hit_rate（目标 ≥85%）
+- **统一日志系统**：终端 + 文件双写，时间戳/级别/颜色分级；AI 思考（reasoning）实时打印；黑板、flag、漏洞、证据等关键结论醒目输出
 
 技术栈约束（硬性）：
 
@@ -100,10 +101,9 @@ flowchart TB
     end
 
     subgraph Orchestrator["app/main.py（主编排）"]
-        MGR["① Manager 立法"]
-        PLN["② Planner 规划"]
-        SCH["③ 调度器循环<br/>list→EV选题→start→单题→close"]
-        RPT["④ Reporter 战报"]
+        STG["① Strategist 立法+规划（一次性）"]
+        SCH["② 调度器循环<br/>list→EV选题→start→单题→close"]
+        RPT["③ Reporter 战报 + 死路蒸馏"]
     end
 
     subgraph Core["core/ 核心模块"]
@@ -189,27 +189,26 @@ flowchart TB
 
 | Agent | 角色定位 | 产物 | 触发时机 |
 |---|---|---|---|
-| **Manager** 管理者 | 立法（为什么打） | 使命宪章（目标/原则/约束/终止判据） | 任务开始，一次 |
-| **Planner** 规划师 | 深度分析（打哪里、按什么顺序） | 作战计划 plan（任务研判/攻击面/flag 定位/分步计划） | 任务开始 + 停滞 replan |
-| **Executor** 执行者 | 执行（怎么打） | 证据、黑板、flag | 每轮循环 |
-| **Subtask Executor** | 子任务并发执行 | `finish_subtask` 结构化结论（summary/findings/flag） | 主 Agent `spawn_subtask` 后并发调度 |
-| **Reporter** 报告者 | 战报 + 死路蒸馏 | 战报 + field_notes | 任务结束，一次 |
-| **Compactor** 压缩器 | 历史压缩 | 压缩摘要 | 上下文超阈值时 |
-| **Coach** 教练 | 软干预：卡壳给方向 | 1~2 条具体可试方向（写黑板半持久） | hint 后仍零增益 3 轮，每题目 1 次 |
+| **Strategist** 战略家 | 立法 + 深度分析（为什么打、按什么顺序） | 使命宪章 + 作战计划 plan（任务研判/攻击面/flag 定位/分步计划） | 任务开始，一次性；`build_strategist` 工厂化按需构建 |
+| **Executor** 执行者 | 执行（怎么打） | 证据、黑板、flag | 每轮循环（单主线） |
+| **Subtask Executor** | 子任务并发执行（N≤2，三道闸门） | `finish_subtask` 结构化结论（summary/findings/flag），运行期情报共享主线 | 主 Agent `spawn_subtask` 后并发调度 |
+| **Reporter** 报告者 | 战报 + 死路蒸馏 | 战报（代码校验 `## 战报`/`## 死路蒸馏` 两节）+ field_notes | 任务结束，一次；`build_reporter` 工厂化 |
+| **Compactor** 压缩器 | 历史压缩（append-only） | 压缩摘要（定点截断旧输出 + 锚点追加） | 上下文超阈值 / 卡壳自救强制 |
+
+> 已退役：Manager/Planner 并入 Strategist（兼容别名删除）；Coach 由 `runtime/fork_analyst.py`（轨迹分叉分析，一次性强模型调用，不常驻）替代。破局链收敛为两级：3 轮零增量 → fork_analyze 一次 → 再 3 轮零增量机械换题。
 
 ### 4.2 数据流
 
 ```
 task(完整任务书)
    │
-   ├─→ Manager ──→ charter(使命宪章)
-   │
-   ├─→ Planner ──→ plan(作战计划)  ← 输入 = task + charter + role
+   ├─→ Strategist ──→ charter + plan(使命宪章 + 作战计划)
    │
    └─→ Executor(动态 instructions)
          注入：角色风格 + 阶段 + charter + plan + 纪律 + playbooks
               + field_notes + 压缩摘要 + 黑板 + brief
-         反馈：黑板 + 事件流 → replan(停滞) / compact(超阈值)
+         反馈：黑板 + 事件流 → fork_analyze(停滞3轮，一次) / compact(超阈值/自救)
+         子任务：spawn_subtask(独立会话) ── sub_intel.jsonl ──→ 主线每轮合并
 ```
 
 ### 4.3 Executor 的动态 instructions
@@ -248,13 +247,13 @@ def _instructions(ctx, agent):
 
 ```
 任务接收
-  → ① Manager 立法（使命宪章：目标/原则/约束/终止判据）
-  → ② Planner 规划（作战计划：任务研判/攻击面/flag 定位/分步计划）
-  → ③ Executor 执行（按 5 阶段杀伤链推进：recon→enumerate→detect→exploit→post）
-       ├─ 停滞 → replan（重新规划，最多 3 次）
-       ├─ 超阈值 → compact（上下文压缩）
+  → ① Strategist 立法+规划（一次性：使命宪章 + 作战计划）
+  → ② Executor 执行（按 5 阶段杀伤链推进：recon→enumerate→detect→exploit→post）
+       ├─ 停滞 3 轮 → fork_analyze（复盘一次，写 next_directive；再 3 轮零增量机械换题）
+       ├─ 超阈值/自救 → compact（append-only 压缩）
+       ├─ 独立分支 → spawn_subtask（N≤2，情报经 sub_intel.jsonl 共享主线）
        └─ 关键进展 → 写黑板 / checkpoint
-  → ④ Reporter 报告（战报 + 死路蒸馏 → field_notes 沉淀）
+  → ③ Reporter 报告（战报 + 死路蒸馏 → field_notes 沉淀）
 ```
 
 跑分模式是在这套通用流程上，**增加调度器层**（选题/容器/换题/hint 的机械编排），杀伤链本身不变。
@@ -262,18 +261,18 @@ def _instructions(ctx, agent):
 ### 5.3 跑分模式完整流程（3 槽并发）
 
 ```
-① Manager 立法 → charter
-② Planner 规划 → global_plan
-③ 调度器主循环（零 LLM，3 槽并发）：
+① Strategist 立法+规划 → charter + plan
+② 调度器主循环（零 LLM，3 槽并发）：
    while True:
      ├─ deadline 检查（比赛时限）
      ├─ list_challenges 拉题目
      ├─ 补满 3 槽（排除活跃题，避免重复选题）：
-     │    ├─ EV 选题（死路降权）
+     │    ├─ EV 选题（死路降权 + 零启动倾斜）
      │    └─ start_challenge 启动容器 → 创建单题 asyncio 任务
      ├─ asyncio.wait(FIRST_COMPLETED) 等任一题完成
      ├─ 完成处理：close 容器 → 记录结果 → 补位
      └─ 任一题 fatal（任务结束）→ 取消其余任务 → 终止
+③ 终局重扫（_endgame_sweep）：主循环退出后再拉列表，补漏题 / 重试 stuck
 ④ Reporter 战报 + 死路蒸馏
 ```
 
@@ -724,7 +723,7 @@ SECAI/
 
 1. **角色/阶段正交分离**：流程阶段（recon→post）合并进 phase 状态机，角色只保留题型风格，避免"阶段角色永不触发"（报告 P0-5）。
 2. **单 Executor + 阶段状态机**：替代多 Agent 分治，减少上下文切换成本。
-3. **Planner + replan 可修正闭环**：深度分析产计划，停滞 5 轮重新规划（上限 3 次）。
+3. **Strategist 一次性立法+规划**：Manager/Planner 并入 Strategist（`build_strategist` 工厂化，宪章缓存幂等）；卡壳时 `fork_analyze` 复盘一次写 next_directive，再 3 轮零增量机械换题（破局链两级收敛，coach/plan-mode 默认关闭可复活）。
 4. **信息增量信号统一判停/replan**：从"看阶段切换"升级为"看产出质量"。
 5. **提交铁律代码机械化**：flag 扫描 + 机械提交，不靠 LLM 自觉（报告 P0-1）。
 6. **调度器零 LLM 编排**：选题/换题/看 hint/容器 SOP 全代码（报告 P0-2/P0-4）。
@@ -738,14 +737,19 @@ SECAI/
 14. **自适应容器并发**：不硬编码容器上限，持续 start 直到 container_busy 被拒，并发度随平台真实上限收敛；close 检查返回值 + 失败重试，堵住名额静默泄漏。
 15. **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出不等 LLM finalize；多 flag 题明确告知剩余面数。
 16. **解法模板化（正向复用）**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式；与 field_notes（负向死路）分工，形成正负双向跨题复用。
-17. **软干预教练（Coach）**：hint 后仍卡壳触发 Coach 给 1~2 条具体方向，写题级黑板半持久（verified=False），不重规划不换题，只做轻量纠偏。
-18. **多模型灾备池（ModelPool）**：分析型 Agent（Manager/Planner/Reporter/Coach/Compactor）默认主模型（glm），执行型 Agent（Executor/Subtask）默认 fast 模型（deepseek-v4-flash）；主模型额度/限流/鉴权/状态码失败时自动 `next()` 切换候选模型（`ESCALATION_MODELS`），保持同一 `SQLiteSession` 继续作答；所有模型耗尽抛 `ModelExhaustedError` 交外层调度器。
+17. **破局干预（fork_analyst）**：3 轮零增量触发轨迹分叉分析（一次性强模型调用，不常驻），产出一条 next_directive 写黑板；再 3 轮零增量直接机械换题。Coach 机制保留但默认关闭（`ENABLE_COACH=true` 复活）。
+18. **多模型灾备池（ModelPool）**：分析型 Agent（Strategist/Reporter/Compactor）默认主模型（glm），执行型 Agent（Executor/Subtask）默认 fast 模型（deepseek-v4-flash），一律工厂化按需构建、无模块级可变单例；主模型额度/限流/鉴权/状态码失败时自动 `next()` 切换候选模型（`ESCALATION_MODELS`），保持同一 `SQLiteSession` 继续作答；所有模型耗尽抛 `ModelExhaustedError` 交外层调度器。
 19. **模型惰性治理（自救优先）**：连续 `MODEL_SWITCH_TURNS` 轮零增量先自救（解锁新技能 + 阶段重置 + 上下文压缩），自救 `MODEL_SELF_RESCUE_MAX` 次无效再切换候选模型接管；阈值均可环境变量配置。
 20. **比赛连续性保险**：`app/main.py` 入口对未预期异常退出（模型/网络/工具/进程异常）自动重启，指数退避，默认最多 5 次；平台 `TaskEnded` / `TaskNotFound` 正常终止不触发重启。
 21. **题目列表空值保护**：`list_challenges` 返回空列表或非列表时，不静默误判为「全部完成」，而是抛异常走重试逻辑，避免漏题提前退出。
 22. **错误提交熔断纠偏**：`wrong_submit_count` 叠加「期间无任何信息增量」且阈值 6 次才熔断，避免误杀越权/支付类快题的多次试错得分模式。
 23. **槽位泄漏双保险**：平台侧 running 但本地未活跃容器自动检测并关闭；`close_challenge` 失败进入重试队列，避免名额静默泄漏。
 24. **统一日志系统**：终端 + `data/logs/secai-YYYYMMDD.log` 双写，级别分级（INFO/WARN/ERROR）带颜色；黑板、flag、漏洞、证据等关键结论醒目打印，DEBUG 细节只落盘不刷屏。
+25. **缓存防线（动静分离 + hash 断言）**：静态 system prompt 字节级稳定，每轮 `_pre_step` 重算 hash 断言（漂移即 `[cache-guard]` ERROR + 累计 violations）；动态上下文只走 user message 尾部，目标 prefix_hit_rate ≥85%。
+26. **压缩收敛 + append-only**：压缩实现唯一归属 `core/context_manager`（`compact_if_needed(force=...)`），卡壳自救走薄包装；收尾统一为定点截断旧工具输出 + 摘要锚点追加，仅超长硬阈值才 clear_session（前缀缓存不归零）。
+27. **子任务情报共享（R2）**：子任务新结论性情报 append 到 `sub_intel.jsonl`（免锁），主线每轮增量合并——verified 才回流、不覆盖父结论；子任务从 recon 阶段起跑，flag 计数以平台 `correct_flag_count` 为唯一真相源。
+28. **阈值常量收口**：墙钟预算/干预上限/hint 宽限等全部集中 `runtime/budget.py`，其他文件只 import。
+29. **事件流单一真相源**：SQLite 为唯一真相源，events.jsonl 仅人读留痕（崩溃现场除外）；关键事件（flag/阶段切换/网络异常/agent 结束）立即刷盘绕过缓冲。
 
 ### 16.2 实战教训
 
