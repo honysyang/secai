@@ -29,7 +29,8 @@ from core.agents_def import (build_strategist, build_reporter, build_executor,
                             EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context,
                             _prompt_hash)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
-                            should_pull_hint_by_budget)
+                            should_pull_hint_by_budget, WALLCLOCK_BUDGET,
+                            HINT_GRACE_TURNS, MAX_STUCK_INTERVENTIONS)
 from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
 from runtime.model_fallback import run_with_model_fallback
 import runtime.stuck as stuck_mod
@@ -111,6 +112,36 @@ def _load_field_notes(max_chars: int = 3000) -> str:
     return FIELD_NOTES_FILE.read_text(encoding="utf-8")[-max_chars:]
 
 
+def _merge_subtask_intel(ctx, challenge_workdir: Path) -> None:
+    """R2：把子任务共享情报（sub_intel.jsonl）增量合并进主线黑板。
+
+    只合并结论性 verified 条目；主线黑板已有 verified 结论的同名 key 不覆盖
+    （防伪证回流、防覆盖主线决策）。子任务运行期间即可见，无需等其结束。
+    """
+    p = challenge_workdir / "sub_intel.jsonl"
+    if not p.exists():
+        return
+    try:
+        merged = 0
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            k = item.get("key")
+            v = item.get("entry")
+            if not k or not isinstance(v, dict) or not v.get("verified"):
+                continue
+            cur = ctx.blackboard.get(k)
+            if cur is not None and cur.get("verified"):
+                continue
+            ctx.blackboard[k] = v
+            merged += 1
+        if merged:
+            log_info(f"[黑板合并] 单题 {ctx.current_code} 共享子任务情报 {merged} 条")
+    except Exception:
+        pass
+
+
 def _append_mechanical_note(code: str, outcome: str, ctx) -> None:
     """题级机械沉淀（零 LLM）：战果 + 死路从黑板/提交记录直接提取。"""
     failed = [k for k, v in ctx.blackboard.items()
@@ -148,13 +179,7 @@ COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（
 ENABLE_COACH = os.getenv("ENABLE_COACH", "false").lower() in ("1", "true", "yes")
 ENABLE_PLAN_MODE = os.getenv("ENABLE_PLAN_MODE", "false").lower() in ("1", "true", "yes")
 STRONG_MODEL_MAX_TURNS = 3  # 强模型（破局）每题目最多轮数，超限切回快模型
-# 单题「自救+切换模型+hint+coach+replan」累计上限，按难度分档防死循环：
-# 简单题快速放弃，hard 题给更多利用机会（链式利用需要更多轮次）。
-MAX_STUCK_INTERVENTIONS = {
-    "easy": 3,
-    "medium": 5,
-    "hard": 8,
-}
+# 单题「自救+切换模型+hint+replan」累计干预上限见 runtime.budget.MAX_STUCK_INTERVENTIONS（B4 收口）
 
 
 def _max_interventions(difficulty: str) -> int:
@@ -247,6 +272,9 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
             sub_ctx.submitted = set(ctx.submitted)
             sub_ctx.correct_flags = list(ctx.correct_flags)
             sub_ctx.blackboard = copy.deepcopy(ctx.blackboard)
+            # R2：子任务标记 + 启动快照 keys——set 新 key（不在快照）时共享情报给主线
+            sub_ctx.is_subtask = True
+            sub_ctx._snapshot_keys = set(ctx.blackboard.keys())
             sub_ctx.token_usage = dict(ctx.token_usage)
             sub_ctx.enabled_tools = set(ctx.enabled_tools) if ctx.enabled_tools is not None else None
             sub_ctx.phase = "recon"  # 子任务从 recon 起跑（R3：避免继承父阶段语义错位）
@@ -311,9 +339,9 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
                 # 合并子任务 token 用量到父任务（原子累加）
                 for k in ("input", "output", "total", "requests"):
                     ctx.token_usage[k] = ctx.token_usage.get(k, 0) + sub_ctx.token_usage.get(k, 0)
-                # 合并 flag：如果子任务拿到 flag，主任务也获得
-                if sub["result"].get("flag"):
-                    ctx.correct_flags.append(sub["result"]["flag"])
+                # R4：子任务 flag 不 append 进父 correct_flags——flag 计数以平台
+                # correct_flag_count 为唯一真相源（_is_completed 已按平台复核），
+                # 避免双轨记账与平台不一致；子任务 flag 仍可见于黑板 subtask:<id>。
                 # 关闭子任务 session（修补 6：连接/句柄生命周期闭环）
                 try:
                     sub_session.close()
@@ -516,17 +544,11 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
     if db is not None:
         db.task_started(code, desc)  # 登记题目生命周期（监控页任务列表/状态）
 
-    # 单题墙上时间预算：按难度分档硬顶（高分作战硬约束）
-    _WALLCLOCK_BUDGET = {
-        "easy": 10 * 60,    # 10 分钟
-        "medium": 15 * 60,  # 15 分钟
-        "hard": 25 * 60,    # 25 分钟
-    }
-    ctx.wallclock_budget = _WALLCLOCK_BUDGET.get(str(difficulty).lower(), 15 * 60)
+    # 单题墙上时间预算：按难度分档硬顶（runtime.budget.WALLCLOCK_BUDGET，B4 收口）
+    ctx.wallclock_budget = WALLCLOCK_BUDGET.get(str(difficulty).lower(), 15 * 60)
     ctx.challenge_start_ts = time.monotonic()
     ctx.wrong_submit_count = 0
     ctx.hint_grace_active = False
-    HINT_GRACE_TURNS = 5
 
     next_input = f"开始攻击本题容器：{addrs}。"
     if recon0:
@@ -626,6 +648,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             # 强模型轮数计数（含本轮）
             if getattr(ctx, "_on_strong_model", False):
                 ctx.strong_model_uses += 1
+            # R2：每轮合并子任务共享情报（运行期可见，不重复子任务已排除的方向）
+            _merge_subtask_intel(ctx, challenge_workdir)
             ledger_text = _ledger_failed_summary(ctx) if ctx.phase == "exploit" else ""
             dynamic_ctx = _build_dynamic_context(
                 RunContextWrapper(context=ctx), charter, ctx.plan or global_plan,
@@ -663,12 +687,6 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
             返回 (break_flag, next_input, death_reason)。
             """
             nonlocal intervention_count, hint_used, coach_used
-            prev_phase = getattr(ctx, "_prev_phase", ctx.phase)
-            if ctx.phase == prev_phase:
-                ctx.stuck_turns += 1
-            else:
-                ctx.stuck_turns = 0
-            ctx._prev_phase = ctx.phase
 
             if ctx.turn_gain:
                 ctx.zero_gain_turns = 0
@@ -854,7 +872,6 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         while True:
             turn_count += 1
             ctx.turn_count = turn_count
-            ctx._prev_phase = ctx.phase
             should_break, dr = await _pre_step()
             if should_break:
                 outcome = "stuck" if dr != "solved" else "solved"
@@ -1276,15 +1293,30 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         except Exception:
             events_text = ""
         summary = json.dumps(results, ensure_ascii=False)[:1000]
-        try:
-            report = await run_with_model_fallback(
+        prompt = (f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
+                  f"各题结果：{summary}\n\n事件流尾部：\n{events_text}")
+
+        async def _one_report() -> str:
+            rep = await run_with_model_fallback(
                 build_reporter(model=global_model_pool.current.model),
-                input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
-                       f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
+                input=prompt,
                 hooks=hooks,
                 model_pool=global_model_pool,
                 agent_name="Reporter")
-            return str(report.final_output)
+            return str(rep.final_output)
+
+        try:
+            text = await _one_report()
+            # A5：软约束机械化——战报必须含「## 战报」与「## 死路蒸馏」两节，
+            # 缺节重试一次；仍缺节则落原文并记 [report] ERROR（赛后追责）
+            if "## 战报" not in text or "## 死路蒸馏" not in text:
+                log_warn("[report] 战报缺节（需要 ## 战报 / ## 死路蒸馏），重试一次")
+                text2 = await _one_report()
+                if "## 战报" in text2 and "## 死路蒸馏" in text2:
+                    text = text2
+                else:
+                    log_error("[report] 重试后战报仍缺节，落原文（格式纪律未机械化到位）")
+            return text
         except Exception as e:
             log_error(f"== 报告生成失败：{str(e)[:200]}，降级为无战报 ==")
             return f"（战报生成失败：{str(e)[:200]}）"

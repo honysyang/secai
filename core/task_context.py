@@ -58,7 +58,6 @@ class TaskContext:
     plan: str = ""                            # 作战计划（Planner 深度分析产出，注入执行者系统提示）
     boosted_roles: List[str] = field(default_factory=list)  # 已注入的阶段增强角色（证据触发，去重用）
     role_boost: str = ""                      # 当前注入的阶段增强打法（下一轮 instructions 追加）
-    stuck_turns: int = 0                      # 当前阶段连续未切换的轮数（replan 触发用）
     replan_count: int = 0                     # 已执行 replan 次数（防止无限重规划）
     turn_gain: bool = False                   # 本轮是否产出正向信息增量（hooks 打分，main 每轮清零）
     zero_gain_turns: int = 0                  # 连续零信息增量轮数（判停/replan 共用，>0 的正向增量才清零）
@@ -84,6 +83,8 @@ class TaskContext:
     _on_strong_model: bool = False        # 当前是否处于强模型接管状态
     # ---- 降级计数：静默吞咽的失败在此留数（修补 7），赛后按 N 排查 ----
     silent_failures: int = 0              # 静默吞掉的异常/失败次数（close 失败/归档失败等）
+    # ---- 子任务标识（R2）：区分主线/分身，子任务情报共享用 ----
+    is_subtask: bool = False              # 是否后台子任务（spawn_subtask 创建）
 
 
 # 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness；对齐 Harness 验收 N≤2）

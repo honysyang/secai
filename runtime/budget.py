@@ -33,6 +33,19 @@ COST_LIMITS = {
 }
 SUSPEND_SECONDS = int(os.getenv("SUSPEND_SECONDS", "2700"))  # 墙上时钟挂起档，0=关闭
 
+# ================= 单题墙上时间 / hint 宽限 / 干预上限（B4 收口，只在本文件定义） =================
+WALLCLOCK_BUDGET = {
+    "easy": 10 * 60,    # 单题墙上时间预算：10 分钟
+    "medium": 15 * 60,  # 15 分钟
+    "hard": 25 * 60,    # 25 分钟
+}
+HINT_GRACE_TURNS = 5   # hint 后无转化的宽限轮数，超限机械换题（hint_stale）
+MAX_STUCK_INTERVENTIONS = {
+    "easy": 3,         # 单题「自救+切换模型+hint+replan」累计干预上限
+    "medium": 5,
+    "hard": 8,
+}
+
 # ================= 换脑候选 =================
 # JSON 列表，每项 {"model","base_url","api_key","role"}；缺省回退主模型
 def _load_escalation_models() -> list:

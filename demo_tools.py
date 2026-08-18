@@ -827,6 +827,17 @@ def blackboard(ctx: RunContextWrapper[TaskContext], action: str, key: str = "",
             entry["supersedes"] = supersedes
         c.blackboard[key] = entry
         _persist_blackboard(ctx)  # 落盘，挂起/重试时保留进度
+        # R2：子任务情报共享——新 key + 结论性状态时 append 到 sub_intel.jsonl
+        # （append-only 免锁竞争；主线每轮读后增量合并，运行期即可见，不必等子任务结束）
+        if (getattr(c, "is_subtask", False)
+                and key not in getattr(c, "_snapshot_keys", set())
+                and status in ("confirmed", "done", "success", "failed")):
+            try:
+                intel = {"key": key, "entry": entry}
+                with open(c.workdir / "sub_intel.jsonl", "a", encoding="utf-8") as f:
+                    f.write(json.dumps(intel, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
         ev = f"，证据={evidence[:60]}" if evidence else ""
         log_info(f"[黑板] {key} = {str(value)[:60]}（{status}，verified={verified}{ev}）")
         return json.dumps({"ok": True, "key": key, "entry": entry},

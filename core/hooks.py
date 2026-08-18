@@ -319,13 +319,21 @@ def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
         text, re.I)
     if logic_match and any(k in low for k in ("coupon", "优惠", "金额", "price", "discount",
                                               "order", "checkout", "balance", "credit")):
-        if not _already("logic_flaw_hint", logic_match.group(0)):
-            _set("logic_flaw_hint", logic_match.group(0))
-            log_warn("[闭环] 检测到业务逻辑漏洞线索，强制构造异常业务流")
-            return ("已发现业务逻辑相关字段（优惠券/金额/积分/订单）。请立即：\n"
-                    "1. 尝试金额篡改（负数、超大数、0.01→0）、重复领券、并发抢购、越权查看他人订单；\n"
-                    "2. 重点观察响应中的 price/amount/balance/discount 变化；\n"
-                    "3. 找到可让余额/价格异常归零或获得未授权商品的接口，触发后读取 flag 或提交。")
+        # R6：业务逻辑闭环限频——含 price 等字段的正常 JSON 响应也会命中此触发器，
+        # 每题每类最多发 2 次，防闭环指令轰炸稀释「[闭环]优先级最高」的权威性
+        _logic_count = int(bb.get("logic_flaw_triggered", {}).get("count", 0))
+        if _logic_count < 2:
+            bb["logic_flaw_triggered"] = {
+                "value": _logic_count + 1, "status": "done", "ts": int(time.time()),
+                "verified": False,
+            }
+            if not _already("logic_flaw_hint", logic_match.group(0)):
+                _set("logic_flaw_hint", logic_match.group(0))
+                log_warn("[闭环] 检测到业务逻辑漏洞线索，强制构造异常业务流")
+                return ("已发现业务逻辑相关字段（优惠券/金额/积分/订单）。请立即：\n"
+                        "1. 尝试金额篡改（负数、超大数、0.01→0）、重复领券、并发抢购、越权查看他人订单；\n"
+                        "2. 重点观察响应中的 price/amount/balance/discount 变化；\n"
+                        "3. 找到可让余额/价格异常归零或获得未授权商品的接口，触发后读取 flag 或提交。")
 
     return None
 
