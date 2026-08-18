@@ -84,5 +84,5 @@ class TaskContext:
     _on_strong_model: bool = False        # 当前是否处于强模型接管状态
 
 
-# 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness）
-SUBTASK_MAX_CONCURRENT = 3
+# 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness；对齐 Harness 验收 N≤2）
+SUBTASK_MAX_CONCURRENT = 2
