@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 import re
 import threading
 import time
@@ -107,6 +108,53 @@ def _output_text(response) -> str:
             else:
                 parts.append(str(summary))
     return "\n".join(p for p in parts if p).strip()
+
+
+def _extract_reasoning(response) -> str:
+    """从 Response 提取模型思考（reasoning）文本，供终端/日志实时展示。
+
+    优先读取 output 中的 reasoning 项（summary 多段拼接）；SDK 未暴露时兜底
+    读取 raw_response.choices[0].message.reasoning_content（DeepSeek 直返字段）。
+    任何异常都返回空串，不影响主流程。
+    """
+    parts = []
+    for item in getattr(response, "output", []) or []:
+        get = (lambda k, d=None: item.get(k, d)) if isinstance(item, dict) \
+            else (lambda k, d=None: getattr(item, k, d))
+        if get("type", "") != "reasoning":
+            continue
+        summary = get("summary") or get("text") or ""
+        if isinstance(summary, list):
+            for s in summary:
+                if isinstance(s, dict):
+                    parts.append(str(s.get("text", "")))
+                else:
+                    parts.append(str(s))
+        elif isinstance(summary, str):
+            parts.append(summary)
+    if not parts:
+        try:
+            raw = getattr(response, "raw_response", None)
+            msg = raw.choices[0].message
+            rc = getattr(msg, "reasoning_content", None)
+            if rc:
+                parts.append(str(rc))
+        except Exception:
+            pass
+    return "\n".join(p for p in parts if p).strip()
+
+
+def _log_thinking(agent: str, reasoning: str) -> None:
+    """把 AI 思考（reasoning）实时打印：终端 INFO 可见（截断防刷屏）+ 完整落 DEBUG 文件。
+
+    终端默认开启，长题嫌刷屏可设环境变量 SECAI_SHOW_THINKING=0 关闭。
+    """
+    show = os.getenv("SECAI_SHOW_THINKING", "1").lower() in ("1", "true", "yes")
+    if show:
+        brief = reasoning if len(reasoning) <= 800 else \
+            reasoning[:800] + "\n…（已截断，完整见日志文件与 events.jsonl）"
+        log_info(f"[思考:{agent}] {brief}")
+    log_debug(f"[思考全量:{agent}] {reasoning}")
 
 
 def _auto_advance_phase(task_ctx, text: str) -> bool:
@@ -584,6 +632,10 @@ class EventStreamHooks(RunHooks):
         # 完整文本进事件流（不截断），另发一条 token 事件供 UI 实时显示用量与 cache 命中
         text = _output_text(response)
         self._emit("thought", agent=agent.name, text=text, usage=cur)
+        # AI 思考（reasoning）实时打印：终端 INFO 可见，完整进 DEBUG 文件
+        reasoning = _extract_reasoning(response)
+        if reasoning:
+            _log_thinking(agent.name, reasoning)
         if task_ctx is not None:
             self._emit("token", agent=agent.name, usage=cur,
                        total=dict(task_ctx.token_usage))

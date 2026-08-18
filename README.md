@@ -29,9 +29,10 @@
 - [11. 能力覆盖](#11-能力覆盖)
 - [12. 内容资产](#12-内容资产)
 - [13. 前端可视化](#13-前端可视化)
-- [14. 目录结构](#14-目录结构)
-- [15. 文档](#15-文档)
-- [16. 下一步拓展](#16-下一步拓展roadmap)
+- [14. 日志与 AI 思考观测](#14-日志与-ai-思考观测)
+- [15. 目录结构](#15-目录结构)
+- [16. 文档](#16-文档)
+- [17. 下一步拓展](#17-下一步拓展roadmap)
 - [免责声明](#免责声明)
 
 ---
@@ -94,7 +95,7 @@ SECAI 是一个把「AI 自动化渗透测试」从 Demo 提升为**可工程化
 | 题级角色派任 | 每道题按 unique_code 前缀派任对应角色皮肤 |
 | 题级独立工作区 | 每题独立 `worker_{code}/`（events/session/artifacts），并发不交错 |
 | 实时可视化 | 标准库后端 + SSE 实时流 + 三页前端（对话/监控/智能体 kill-chain） |
-| 统一日志系统 | 终端 + 文件双写，时间戳/级别/颜色分级；黑板、flag、漏洞、证据等关键结论醒目打印 |
+| 统一日志系统 | 终端 + 文件双写，时间戳/级别/颜色分级；**AI 思考（reasoning）实时打印**，黑板、flag、漏洞、证据等关键结论醒目输出 |
 
 ---
 
@@ -237,6 +238,9 @@ cp .env.example .env
 # 启动实时可视化前端
 .venv/bin/python -m app.server
 # 浏览器打开 http://localhost:8000
+
+# 关闭 AI 思考（reasoning）实时打印（长题嫌刷屏时，默认开启）
+SECAI_SHOW_THINKING=0 .venv/bin/python -m app.main
 ```
 
 ### 4.5 VPN 权限（一次性，跑内网靶场必须）
@@ -479,7 +483,50 @@ flowchart LR
 
 ---
 
-## 14. 目录结构
+## 14. 日志与 AI 思考观测
+
+### 14.1 统一日志系统
+
+日志由 `runtime/log.py` 统一管理：**终端 + 文件双写**，按天滚动到 `data/logs/secai-YYYYMMDD.log`（跨次运行连续追加，便于赛后对比）。
+
+| 通道 | 级别 | 特点 |
+|---|---|---|
+| 终端 | INFO+ | 按级别着色（灰 DEBUG / 绿 INFO / 黄 WARN / 红 ERROR），时间戳到秒，简洁 |
+| 文件 | DEBUG 全量 | 完整时间戳（跨天可追溯）、纯文本便于 grep |
+
+### 14.2 AI 思考（reasoning）实时输出
+
+每轮 LLM 调用结束后，模型推理链（reasoning）会**实时打印到终端**，让观察者直接看到 AI 是怎么思考的：
+
+```text
+12:30:05 [INFO] [思考:Executor[web]] 目标指纹是 Flask，优先尝试 SSTI 与 JWT 伪造；
+                先用 get_poc 查现成打法，没有就第一性原理做差分实验……
+12:30:06 [INFO] 调用工具：Executor[web] → get_poc
+12:30:07 [INFO] 工具返回：get_poc（234 字符）...
+```
+
+- 终端显示截断至 800 字符（防刷屏），**完整推理链**同时写入 DEBUG 文件（`[思考全量:<agent>]`）与 `events.jsonl` 的 `thought` 事件
+- 提取兜底：优先 SDK output 的 `reasoning` 项，缺失时读取 `raw_response.choices[0].message.reasoning_content`（DeepSeek 直返字段）
+- 关闭开关：`SECAI_SHOW_THINKING=0`（长题嫌刷屏时）
+
+### 14.3 关键事件日志一览
+
+| 事件 | 级别 | 内容 |
+|---|---|---|
+| `[思考:<agent>]` | INFO | 模型推理链（reasoning），截断 800 字符 |
+| 智能体启动 / 结束 | INFO | `agent_start` / `agent_end`（结论前 500 字符） |
+| 调用工具 / 工具返回 | INFO | 工具名 + 返回长度 + 摘要（异常返回升 WARN） |
+| Token | INFO | 本轮用量 + 累计（含 cache_read/cache_write） |
+| 技能披露 / 阶段切换 | WARN | 证据触发的关键转折 |
+| 网络不可达 | WARN | `net_unreachable`，连续 2 次机械换题 |
+| `[prompt-drift]` | WARN | 静态 system prompt 字节漂移（缓存防线告警） |
+| `[cache-guard]` | ERROR | 静态 prompt hash 断言失败，前缀缓存已断 |
+| `[思考全量:<agent>]` | DEBUG | 完整推理链（仅文件） |
+| `llm_call` / `thought` / `reward` | DEBUG | 细粒度事件（仅文件） |
+
+---
+
+## 15. 目录结构
 
 ```
 SECAI/
@@ -490,7 +537,7 @@ SECAI/
 │   ├── agents_def.py       # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
 │   ├── context_manager.py  # 上下文压缩 + 断点续跑
 │   ├── events.py           # 进程级事件总线（内存历史 + 订阅者分发）
-│   ├── hooks.py            # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
+│   ├── hooks.py            # 事件流 + 渐进披露 + 增量打分 + AI 思考提取 + 网络不可达检测
 │   ├── task_context.py     # TaskContext 执行现场 + 全局状态
 │   └── charter.py          # 宪章落盘
 ├── bench_platform/
@@ -503,7 +550,7 @@ SECAI/
 │   ├── deadline.py         # 比赛硬总时限
 │   ├── model_pool.py       # 多模型灾备池（额度/失败自动切换）
 │   ├── stuck.py            # 模型惰性治理（自救优先 + 切换接管 + 上下文压缩）
-│   └── log.py              # 统一日志（终端+文件双写，级别/颜色）
+│   └── log.py              # 统一日志（终端+文件双写，级别/颜色，AI 思考实时输出）
 ├── adapters/
 │   ├── config.py           # env 配置 + 模型
 │   └── db.py               # SQLite 落库（tasks/events 表，WAL，线程安全）
@@ -538,7 +585,7 @@ SECAI/
 
 ---
 
-## 15. 文档
+## 16. 文档
 
 | 文档 | 内容 |
 |---|---|
@@ -550,7 +597,7 @@ SECAI/
 
 ---
 
-## 16. 下一步拓展（Roadmap）
+## 17. 下一步拓展（Roadmap）
 
 ### 沙箱（执行隔离）
 
