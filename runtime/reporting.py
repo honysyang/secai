@@ -87,6 +87,8 @@ def write_cost_report(workdir: Path, code: str, outcome: str, ctx,
         "subtask_count": len(getattr(ctx, "subtasks", [])),
         "cache_hits": getattr(ctx, "cache_hits", 0),
         "cache_misses": getattr(ctx, "cache_misses", 0),
+        # 降级计数（修补 7）：静默吞掉的失败留数，N>0 即赛后排查清单
+        "silent_failures": getattr(ctx, "silent_failures", 0),
         "ts": int(time.time()),
     }
     with (workdir / "cost_report.json").open("w", encoding="utf-8") as f:

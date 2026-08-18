@@ -82,6 +82,8 @@ class TaskContext:
     # ---- 强弱模型分工：强模型（破局）每题目最多 STRONG_MODEL_MAX_TURNS 轮 ----
     strong_model_uses: int = 0            # 已用强模型轮数（主循环计数，超限切回快模型）
     _on_strong_model: bool = False        # 当前是否处于强模型接管状态
+    # ---- 降级计数：静默吞咽的失败在此留数（修补 7），赛后按 N 排查 ----
+    silent_failures: int = 0              # 静默吞掉的异常/失败次数（close 失败/归档失败等）
 
 
 # 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness；对齐 Harness 验收 N≤2）

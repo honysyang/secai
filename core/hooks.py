@@ -28,7 +28,11 @@ _NO_PROGRESS_TOOLS = {"think", "todo_add", "todo_list", "todo_mark", "checkpoint
 # ---- events.jsonl 缓冲落盘：避免每轮多次 open/write/close（IO 优化） ----
 _EMIT_BUFFER: dict = {}
 _EMIT_BUFFER_LOCK = threading.Lock()
-_EMIT_FLUSH_THRESHOLD = 100  # 单文件缓冲条数，达到即刷盘
+_EMIT_FLUSH_THRESHOLD = 20  # 单文件缓冲条数，达到即刷盘（Q1：阈值由 100 降到 20，崩溃丢帧更少）
+# 关键事件：flag 提交/阶段切换/网络异常/智能体结束/prompt 漂移，立即刷盘绕过缓冲
+# （Q1：kill -9/OOM 崩溃现场恰恰最需要事件流，不能让缓冲吞掉现场）
+_CRITICAL_EVENT_KINDS = {"reward", "phase_changed", "net_unreachable",
+                         "agent_end", "prompt_drift"}
 
 
 def _flush_emit_buffer(workdir_str: str = "") -> None:
@@ -337,13 +341,15 @@ _SENSITIVE_RE = re.compile(
     r"\.bak|\.sql|\.zip|web\.config|id_rsa|shadow)", re.I)
 _ENUM_TOOLS = {"run_tool", "fuzz", "parallel_shell"}   # 枚举类工具的状态码算增量
 # shell/http_request 等交互类工具的行为差异关键词（SQLi/命令注入/SSRF/反序列化）
-_BEHAVIOR_DIFF_HINTS = (
-    "syntax error", "mysql", "sqlite", "postgresql", "ORA-", "warning:",
-    "sql", "union", "select", "sleep(", "benchmark(", "pg_sleep",
-    "whoami", "id\n", "root:", "admin", "secret", "internal", "localhost",
-    "deserialization", "serial", "gadget", "__destruct", "__wakeup",
-    "rce", "popen", "system(", "eval(", "exec(", "shell_exec",
+# D2 收紧：强信号命中即算增量；弱词（admin/root 等）必须与错误/异常强信号同现才算
+_STRONG_BEHAVIOR_HINTS = (
+    "syntax error", "mysql", "sqlite", "postgresql", "ORA-", "pg_sleep",
+    "whoami", "id\n", "uid=", "root:", "deserialization", "serial",
+    "gadget", "__destruct", "__wakeup", "popen", "system(", "eval(",
+    "exec(", "shell_exec", "sleep(", "benchmark(", "flag{",
 )
+_WEAK_BEHAVIOR_HINTS = ("admin", "root", "secret", "internal", "localhost")
+_ERROR_CONTEXT_RE = re.compile(r"error|exception|failed|denied|refused", re.I)
 
 
 def _extract_hint_keywords(hint: str) -> list:
@@ -420,26 +426,31 @@ def _score_tool_result(tool: str, text: str, ctx) -> int:
     """
     low = text.lower()
 
-    # hint 方向锁：hint_grace_active 期间，工具输出必须包含 hint 关键词才算有效增量
-    if getattr(ctx, "hint_grace_active", False):
-        hint_dir = ctx.blackboard.get("hint_directive", {}).get("value", "")
-        kws = _extract_hint_keywords(hint_dir)
-        if kws and not any(k.lower() in low for k in kws):
-            return 0  # 与 hint 无关的输出一律零增量 → 方向上锁
-
-    # ① 铁证：任何工具
+    # ① 铁证：任何工具，永远优先于 hint 方向锁（读到 flag 必须 +1，D1 修复）
     if any(k in low for k in (
             "flag{", '"correct": true', '"correct":true',
             '"vulnerable": true', '"vulnerable":"true"',
             '"differentiated": true', '"vuln": true', '"vuln":"true"',
-            "login success", "logged in", "session=", "响应存在差异")):
+            "login success", "logged in")):
         return 1
-    # ② 新敏感文件：任何工具，首次出现才算（去重）
+
+    # ② hint 方向锁：锁定期内，命中 hint 方向 → 判定已转化并解锁；未命中 → 零增量
+    #（D1 修复：hint 转化成功后解锁，避免已推进的题被判零增量而被机械换题）
+    if getattr(ctx, "hint_grace_active", False):
+        hint_dir = ctx.blackboard.get("hint_directive", {}).get("value", "")
+        kws = _extract_hint_keywords(hint_dir)
+        if kws and any(k.lower() in low for k in kws):
+            ctx.hint_grace_active = False   # 命中 hint 方向 → 已转化，解锁
+            return 1
+        if kws:
+            return 0  # 与 hint 无关的输出一律零增量 → 方向上锁
+
+    # ③ 新敏感文件：任何工具，首次出现才算（去重）
     sensitive = {m.lower() for m in _SENSITIVE_RE.findall(text)}
     if sensitive - ctx.seen_signatures:
         ctx.seen_signatures |= sensitive
         return 1
-    # ③ 枚举类工具：状态码必须包含正向存活码（2xx/3xx）才说明扫到可访问端点
+    # ④ 枚举类工具：状态码必须包含正向存活码（2xx/3xx）才说明扫到可访问端点
     if tool in _ENUM_TOOLS:
         codes = set(_HTTP_STATUS_RE.findall(text))
         has_positive = bool(codes & _POSITIVE_STATUS_CODES)
@@ -454,16 +465,18 @@ def _score_tool_result(tool: str, text: str, ctx) -> int:
         if new_paths:
             ctx.seen_signatures |= new_paths
             return 1
-    # ④ 交互类工具：行为差异也算增量，避免 payload 被误判为零进展
+    # ⑤ 交互类工具：行为差异也算增量，避免 payload 被误判为零进展
     if tool in ("shell", "http_request"):
-        if any(k in low for k in _BEHAVIOR_DIFF_HINTS):
+        if any(k in low for k in _STRONG_BEHAVIOR_HINTS):
             return 1
-        # HTTP 单次请求中同时出现状态码 + 响应长度/关键词线索，说明触发了后端逻辑
+        # D2 收紧：弱词（admin/root/secret/internal/localhost）必须与错误/异常同现才算
+        if any(k in low for k in _WEAK_BEHAVIOR_HINTS) and _ERROR_CONTEXT_RE.search(low):
+            return 1
+        # HTTP 单次请求中同时出现状态码 + 响应关键词线索，说明触发了后端逻辑
         if tool == "http_request":
             codes = set(_HTTP_STATUS_RE.findall(text))
             if (codes & _POSITIVE_STATUS_CODES
                     and any(k in low for k in ("error", "syntax", "warning", "exception",
-                                              "admin", "root", "flag", "internal", "localhost",
                                               "serial", "deserialization"))):
                 return 1
     return 0
@@ -563,12 +576,13 @@ class EventStreamHooks(RunHooks):
         entry = {"kind": kind, "ts": round(time.time(), 1), "code": self.code, **data}
         line = json.dumps(entry, ensure_ascii=False)
         _log_event(self.code, kind, data)
-        # 缓冲落盘：满阈值批量写，避免每轮多次 open/write/close
+        # 缓冲落盘：满阈值批量写，避免每轮多次 open/write/close；
+        # 关键事件立即刷盘绕过缓冲（Q1：崩溃现场不丢）
         path = str(self.workdir / "events.jsonl")
         with _EMIT_BUFFER_LOCK:
             buf = _EMIT_BUFFER.setdefault(path, [])
             buf.append(line + "\n")
-            if len(buf) >= _EMIT_FLUSH_THRESHOLD:
+            if kind in _CRITICAL_EVENT_KINDS or len(buf) >= _EMIT_FLUSH_THRESHOLD:
                 lines = _EMIT_BUFFER.pop(path)
             else:
                 lines = None

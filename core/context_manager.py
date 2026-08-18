@@ -16,6 +16,7 @@ from agents import Runner, Agent
 
 from core.task_context import TaskContext
 from core.memory import render_blackboard_snapshot
+from runtime.log import log_info, log_error
 
 # 会话 L2 层 token 量超过此值触发压缩
 COMPACT_TOKEN_THRESHOLD = 20000
@@ -180,6 +181,70 @@ def _archive_items(ctx: TaskContext, items: List[Any]) -> None:
         pass
 
 
+def _truncate_old_tool_outputs(session, keep_recent: int = 12,
+                               max_output_len: int = 300) -> int:
+    """对 session 中较旧的工具输出做定点截断（保留结论行），不删任何消息。
+
+    直接 UPDATE SQLite 的 message_data：把 keep_recent 条之前、超过
+    max_output_len 的工具输出正文替换为截断标记。消息条数、顺序、id 全部不变，
+    截断点之前的前缀字节不变 → 前缀缓存仍然命中截断点之前的部分。
+
+    返回截断的消息条数。任何异常都返回 0（宁可不截，不可破坏历史）。
+    压缩实现唯一归属本模块（修补 1：压缩收敛单一入口）。
+    """
+    import json as _json
+    import sqlite3 as _sql
+
+    db_path = getattr(session, "db_path", None)
+    if not db_path:
+        return 0
+    table = getattr(session, "messages_table", "session_messages")
+    sid = session.session_id
+    truncated = 0
+    try:
+        conn = _sql.connect(str(db_path))
+        try:
+            rows = conn.execute(
+                f"SELECT id, message_data FROM {table} "
+                f"WHERE session_id = ? ORDER BY id ASC", (sid,)).fetchall()
+            cutoff = max(0, len(rows) - keep_recent)  # 只动旧消息，最近的原样保留
+            for row_id, raw in rows[:cutoff]:
+                try:
+                    item = _json.loads(raw)
+                except Exception:
+                    continue
+                changed = False
+                # function_call_output 是工具结果的主要载体
+                content = item.get("content") if isinstance(item, dict) else None
+                if item.get("type") == "function_call_output":
+                    out = item.get("output", "")
+                    if isinstance(out, str) and len(out) > max_output_len:
+                        head = out[:120].split("\n")[0]  # 保留结论行
+                        item["output"] = (
+                            f"{head}\n…[压缩截断，原文 {len(out)} 字符，"
+                            f"全文见 artifacts/ 或黑板]")
+                        changed = True
+                elif isinstance(content, list):
+                    for part in content:
+                        if (isinstance(part, dict)
+                                and part.get("type") in ("input_text", "output_text")
+                                and len(str(part.get("text", ""))) > 4000):
+                            text = str(part["text"])
+                            part["text"] = (text[:200] +
+                                            f"\n…[压缩截断，原文 {len(text)} 字符]")
+                            changed = True
+                if changed:
+                    conn.execute(f"UPDATE {table} SET message_data = ? WHERE id = ?",
+                                 (_json.dumps(item, ensure_ascii=False), row_id))
+                    truncated += 1
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+    return truncated
+
+
 async def _summarize(agent: Agent, old_items: List[Any], prev_summary: str) -> str:
     """复用当前 Agent 的 system 与 tools，把压缩指令作为最后一条 user message，
 
@@ -202,7 +267,8 @@ async def _summarize(agent: Agent, old_items: List[Any], prev_summary: str) -> s
     return str(result.final_output)
 
 
-async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None) -> bool:
+async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None,
+                            force: bool = False) -> bool:
     """会话过大时压缩：旧历史→摘要（写 ctx.compaction_summary），按 token 预算保留最近原文。
 
     触发用 items 粗估 token（会话 L2 层口径）；ctx.last_prompt_tokens 是 SDK 返回的
@@ -211,16 +277,20 @@ async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None) -> b
 
     当传入 agent 时，摘要复用该 agent 的 system + tools + 历史消息前缀，使压缩请求
     成为原请求的前缀扩展，最大化 KV cache 命中。未传 agent 则直接返回 False（保守策略）。
+
+    force=True 跳过阈值检查：卡壳自救路径（stuck.compact_session）强制压缩用。
+    压缩收尾统一为 append-only（P0-2 口径）：定点截断旧工具输出 + 摘要锚点追加，
+    不清空历史；仅当截断后仍超超长硬阈值才 clear_session 兜底。
     """
     if agent is None:
         return False
     items = await session.get_items()
     estimate = _estimate_tokens(items)
     _emit_token_estimate(ctx, estimate, ctx.last_prompt_tokens)
-    if estimate <= COMPACT_TOKEN_THRESHOLD:
+    if not force and estimate <= COMPACT_TOKEN_THRESHOLD:
         return False
 
-    old, recent = _split_for_compact(items, COMPACT_KEEP_RECENT_TOKENS,
+    old, _recent = _split_for_compact(items, COMPACT_KEEP_RECENT_TOKENS,
                                      COMPACT_KEEP_MIN_ROUNDS)
     if not old:
         return False  # 全部原文都在保留预算内，无可摘要，不压缩
@@ -231,27 +301,37 @@ async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None) -> b
     summary = await _summarize(agent, old, ctx.compaction_summary)
     if len(summary) > COMPACTION_SUMMARY_CHARS:
         summary = summary[:COMPACTION_SUMMARY_CHARS]
-
-    # 防孤儿：recent 首条若是 tool 响应（function_call_output），
-    # 其配对的 assistant tool_calls 已被裁掉，OpenAI 会 400——丢弃前导孤儿
-    while recent and _is_orphan_tool_output(recent[0]):
-        recent = recent[1:]
-
-    # 黑板快照锚点：把当前已确认关键事实作为一条 user 消息前置插入，确保
-    # 压缩后关键事实（flag/死路/hint/next_directive）100% 在场，避免依赖 AI 摘要自觉。
-    snapshot = _render_blackboard_snapshot(ctx)
-    if snapshot:
-        recent.insert(0, {
-            "role": "user",
-            "content": f"【压缩锚点·黑板快照】\n{snapshot}",
-        })
-
-    # 清空会话后重写：原轨迹已归档，session 只保留「黑板快照 + 最近原文」
-    await session.clear_session()
-    await session.add_items(recent)
     ctx.compaction_summary = summary
+
+    # append-only 收尾（P0-2 统一口径）：
+    # ① 定点截断旧工具输出正文（消息条数/顺序/id 不变，截断点之前的前缀缓存仍命中）
+    # ② 摘要锚点追加到上下文尾部，模型下一轮自然看到
+    # ③ 仅当截断后仍超超长硬阈值才 clear_session 兜底（记 ERROR，赛后追责）
+    truncated = _truncate_old_tool_outputs(session)
+    log_info(f"[compact] 单题 {ctx.current_code} 定点截断 {truncated} 条旧输出，"
+             f"历史结构保留（append-only）")
+    try:
+        await session.add_items([{
+            "role": "user",
+            "content": (f"[黑板快照·压缩锚点]\n{summary}\n"
+                        f"（以上是对更早历史的压缩；被截断的工具输出全文可查 artifacts/ "
+                        f"或黑板；禁止重复已证伪方向）")
+        }])
+    except Exception:
+        pass
+    try:
+        items_after = await session.get_items()
+        total_chars = sum(len(str(i)) for i in items_after)
+        HARD_CAP = 400_000  # 约 10 万 token 量级，按模型上下文调整
+        if total_chars > HARD_CAP:
+            log_error(f"[compact] 单题 {ctx.current_code} 截断后仍 {total_chars} 字符 "
+                      f"> {HARD_CAP}，被迫 clear_session（前缀缓存归零，赛后排查）")
+            await session.clear_session()
+        after_count = len(items_after)
+    except Exception:
+        after_count = len(items) + 1
     _emit_compact(ctx, estimate_before=estimate, items_before=len(items),
-                  items_after=len(recent))
+                  items_after=after_count)
     return True
 
 

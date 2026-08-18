@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import List
 
@@ -69,8 +70,13 @@ def _parse_frontmatter(text: str) -> dict:
     return meta
 
 
+@lru_cache(maxsize=1)
 def load_roles() -> List[dict]:
-    """扫描 roles/*.md，返回角色定义列表（保持文件顺序）。"""
+    """扫描 roles/*.md，返回角色定义列表（保持文件顺序）。
+
+    lru_cache(maxsize=1)：角色文件运行时不变，避免热路径（每个工具结果事件
+    的 _boost_role_by_trigger）反复磁盘 IO + YAML/md 解析（A6 修复）。
+    """
     roles: List[dict] = []
     for p in sorted(ROLES_DIR.glob("*.md")):
         text = p.read_text(encoding="utf-8")

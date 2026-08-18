@@ -1,11 +1,12 @@
-"""通用多智能体端到端 Demo：
-管理者立法 → 角色派任 → 执行者执行（渐进披露 + 历史压缩 + 断点续跑）→ 报告者收尾。
+"""TSec Benchmark 跑分主程序（多智能体安全攻防编排）。
 
-不依赖任何靶场平台 / flag / 提交铁律，只跑通「多智能体 + 角色 + 多 Skills 渐进披露」主流程。
+调度循环选题 → 单题状态机（pre/step/post）→ 三闸门子任务 → 终局重扫 → 报告收尾。
+依赖：平台客户端（BENCHMARK_TOKEN/BENCHMARK_BASE_URL）、flag 机械提交铁律、
+多模型灾备池（ModelPool）、事件总线落库（SQLite + events.jsonl 双写）。
 
 用法：
-    python -m app.main "<任务描述>" [角色提示]
-    python -m app.main                              # 使用默认本地侦察任务
+    python -m app.main                              # 跑分模式（配置了 BENCHMARK_TOKEN 自动进调度器）
+    python -m app.main "<任务描述>" [角色提示]       # 通用渗透任务
     python -m app.main --resume                     # 从上次 checkpoint 续跑
 """
 from __future__ import annotations
@@ -24,7 +25,7 @@ from agents import Runner, RunContextWrapper
 from agents.exceptions import MaxTurnsExceeded
 from agents.memory import SQLiteSession
 
-from core.agents_def import (strategist_agent, reporter_agent, build_executor,
+from core.agents_def import (build_strategist, build_reporter, build_executor,
                             EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context,
                             _prompt_hash)
 from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
@@ -141,8 +142,11 @@ def load_notes_for(code: str, max_chars: int = 900) -> str:
 SUBTASK_MAX_TURNS = 8  # 每个子任务最多 LLM 回合数（内部 ReAct，Agent 可 finalize 提前结束）
 SUBTASK_TIMEOUT_SECONDS = 600  # 每个后台子任务总超时（10 分钟）
 ZERO_GAIN_REPLAN_TURNS = 3  # 连续零信息增量轮数触发 fork_analyze（对齐指南：3 轮即破局分析）
-REPLAN_MAX = 2           # 最多 replan 次数，防止无限重规划
-COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（每题目仅 1 次）
+REPLAN_MAX = 1           # 破局链收敛为两级（R1）：只 fork_analyze 复盘一次，再 3 轮零增量即机械换题
+COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（默认关闭，R1 收敛）
+# R1：coach / plan-mode 软干预默认关闭（代码保留，赛后用日志对比决定是否复活）
+ENABLE_COACH = os.getenv("ENABLE_COACH", "false").lower() in ("1", "true", "yes")
+ENABLE_PLAN_MODE = os.getenv("ENABLE_PLAN_MODE", "false").lower() in ("1", "true", "yes")
 STRONG_MODEL_MAX_TURNS = 3  # 强模型（破局）每题目最多轮数，超限切回快模型
 # 单题「自救+切换模型+hint+coach+replan」累计上限，按难度分档防死循环：
 # 简单题快速放弃，hard 题给更多利用机会（链式利用需要更多轮次）。
@@ -245,7 +249,7 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
             sub_ctx.blackboard = copy.deepcopy(ctx.blackboard)
             sub_ctx.token_usage = dict(ctx.token_usage)
             sub_ctx.enabled_tools = set(ctx.enabled_tools) if ctx.enabled_tools is not None else None
-            sub_ctx.phase = ctx.phase
+            sub_ctx.phase = "recon"  # 子任务从 recon 起跑（R3：避免继承父阶段语义错位）
             sub_ctx.plan = ctx.plan
             sub_ctx.wallclock_budget = budget.timeout_seconds
             sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
@@ -310,6 +314,11 @@ async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, mode
                 # 合并 flag：如果子任务拿到 flag，主任务也获得
                 if sub["result"].get("flag"):
                     ctx.correct_flags.append(sub["result"]["flag"])
+                # 关闭子任务 session（修补 6：连接/句柄生命周期闭环）
+                try:
+                    sub_session.close()
+                except Exception as e:
+                    log_warn(f"[degraded] 子任务 {sub['id']} 关闭 session 失败：{str(e)[:120]}")
 
         # 立即后台启动，不等主循环
         ctx.subtask_jobs[sub["id"]] = asyncio.create_task(_run_one())
@@ -763,8 +772,9 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                     log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
                     return True, "", "stuck_with_failed_paths"
 
-            # 软干预教练
-            if (hint_used and ctx.zero_gain_turns >= COACH_AFTER_HINT_TURNS
+            # 软干预教练（R1：默认关闭，代码保留；ENABLE_COACH=true 复活）
+            if (ENABLE_COACH and hint_used
+                    and ctx.zero_gain_turns >= COACH_AFTER_HINT_TURNS
                     and not coach_used):
                 coach_used = True
                 advice = await _coach(ctx, brief, challenge_hooks)
@@ -777,13 +787,17 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 return False, (f"本题卡住。教练建议（可尝试的新方向）：\n{advice}\n\n"
                                f"请结合建议继续尝试，产出新证据。"), ""
 
-            # replan
-            if ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS and ctx.replan_count < REPLAN_MAX:
-                ctx.plan = await _replan(ctx, brief, charter, role, hooks)
-                ctx.replan_count += 1
-                ctx.zero_gain_turns = 0
-                intervention_count += 1
-                return False, "作战计划已更新，按新计划继续攻击本题。", ""
+            # 破局链两级熔断（R1）：3 轮零增量 → fork_analyze 复盘一次（写 next_directive）；
+            # 复盘后 3 轮仍零增量 → 直接机械换题（不再 coach / plan-mode 兜底）
+            if ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS:
+                if ctx.replan_count < REPLAN_MAX:
+                    ctx.plan = await _replan(ctx, brief, charter, role, hooks)
+                    ctx.replan_count += 1
+                    ctx.zero_gain_turns = 0
+                    intervention_count += 1
+                    return False, "作战计划已更新，按新计划继续攻击本题。", ""
+                log_warn(f"[skip] 单题 {code} fork_analyze 后 {ZERO_GAIN_REPLAN_TURNS} 轮仍零增量，机械换题")
+                return True, "", "directive_no_progress"
 
             # 累计干预上限
             if intervention_count >= _max_interventions(difficulty):
@@ -791,8 +805,8 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                          f"（难度 {difficulty or 'unknown'} 上限 {_max_interventions(difficulty)}）仍无进展，机械换题")
                 return True, "", "intervention_exhausted"
 
-            # Plan Mode 触发
-            if (ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS
+            # Plan Mode 触发/退出（R1：默认关闭，代码保留；ENABLE_PLAN_MODE=true 复活）
+            if (ENABLE_PLAN_MODE and ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS
                     and ctx.plan_mode_history == 0
                     and not ctx.plan_mode):
                 ctx.plan_mode = True
@@ -802,8 +816,7 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                 intervention_count += 1
                 return False, "请基于当前已知事实，输出/修正本题的作战计划。禁止调用工具。", ""
 
-            # Plan Mode 退出
-            if ctx.plan_mode:
+            if ENABLE_PLAN_MODE and ctx.plan_mode:
                 ctx.plan_mode = False
                 ctx.plan_mode_history += 1
                 log_info(f"[plan-mode] 单题 {code} 退出 PLAN MODE")
@@ -865,13 +878,21 @@ async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         # 冲刷事件缓冲，保证 events.jsonl 完整落盘（证据留痕）
         try:
             _flush_emit_buffer(str(challenge_workdir / "events.jsonl"))
-        except Exception:
-            pass
+        except Exception as e:
+            ctx.silent_failures += 1
+            log_warn(f"[degraded] 单题 {code} 冲刷事件缓冲失败：{str(e)[:120]}")
         # 清理单题 session 文件，避免堆积（保留 events/artifacts 作为证据）
         try:
             (SESSIONS_DIR / f"challenge_{code}.sqlite").unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            ctx.silent_failures += 1
+            log_warn(f"[degraded] 单题 {code} 清理 session 文件失败：{str(e)[:120]}")
+        # 关闭 SQLiteSession（修补 6：连接/句柄生命周期闭环）
+        try:
+            session.close()
+        except Exception as e:
+            ctx.silent_failures += 1
+            log_warn(f"[degraded] 单题 {code} 关闭 session 失败：{str(e)[:120]}")
     answer = ""
     if outcome == "solved" and ctx.final_payload:
         answer = str(ctx.final_payload.get("findings", ""))[:500]
@@ -936,10 +957,8 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     global_model_pool = ModelPool()
 
     log_info(f"== 模型池就绪：{global_model_pool} ==")
-    # 同步更新外层 Agent 默认模型为当前模型池入口，避免首次调用仍用旧默认
-    if global_model_pool is not None:
-        strategist_agent.model = global_model_pool.current.model
-        reporter_agent.model = global_model_pool.current.model
+    # 注意：外层 Agent 一律工厂化按需构建（build_strategist/build_reporter），
+    # 不再有模块级可变单例（A2），此处无需同步模型。
 
     # 清理旧 checkpoint / 事件流（调度器模式：题目进度在平台侧，本地不依赖续跑状态）
     for f in ("state.json", "session.sqlite"):
@@ -976,7 +995,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         for attempt in range(2):
             try:
                 combined_result = await run_with_model_fallback(
-                    strategist_agent,
+                    build_strategist(model=global_model_pool.current.model),
                     input=(f"用户任务：\n{task}\n\n"
                            f"角色提示：{base_role['role']}\n"
                            f"角色风格：{base_role.get('style', '')[:200]}\n\n"
@@ -1259,7 +1278,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         summary = json.dumps(results, ensure_ascii=False)[:1000]
         try:
             report = await run_with_model_fallback(
-                reporter_agent,
+                build_reporter(model=global_model_pool.current.model),
                 input=(f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
                        f"各题结果：{summary}\n\n事件流尾部：\n{events_text}"),
                 hooks=hooks,

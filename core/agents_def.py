@@ -72,14 +72,12 @@ STRATEGIST_INSTRUCTIONS = """你是 SecAI 的战略家，负责在动手前一�
 - 获取信息后必须立即产出宪章 + 计划，禁止反复调用同一工具空转；
 - 只输出文档本身，不要寒暄。"""
 
-strategist_agent = Agent(name="Strategist", instructions=STRATEGIST_INSTRUCTIONS,
-                         tools=intel_tools(),
-                         model=MODEL, model_settings=STRATEGIST_SETTINGS)
-
-
-# 为保持旧代码/外部引用的兼容性，保留旧变量名（指向同一个 Agent 实例）
-manager_agent = strategist_agent
-planner_agent = strategist_agent
+def build_strategist(model=None) -> Agent:
+    """构建战略家（一次性立法/规划）。工厂化（A2）：不暴露可变单例，
+    调用点按需构建并传入模型，杜绝并发下互踩全局实例。"""
+    return Agent(name="Strategist", instructions=STRATEGIST_INSTRUCTIONS,
+                 tools=intel_tools(),
+                 model=model or MODEL, model_settings=STRATEGIST_SETTINGS)
 
 
 # ================= 执行者（静态系统提示 + 每轮动态上下文注入） =================
@@ -319,8 +317,10 @@ REPORTER_INSTRUCTIONS = """你是 SecAI 的报告者，负责把执行过程翻�
 ## 死路蒸馏 —— 已证伪方向清单（每条一行：方向 + 为什么死），供下次接力注入
 只输出这两节。不评价、不抒情、不建议。"""
 
-reporter_agent = Agent(name="Reporter", instructions=REPORTER_INSTRUCTIONS,
-                       model=MODEL, model_settings=REPORTER_SETTINGS)
+def build_reporter(model=None) -> Agent:
+    """构建报告者（战报 + 死路蒸馏）。工厂化（A2）：每场构建一次，不写回模块级变量。"""
+    return Agent(name="Reporter", instructions=REPORTER_INSTRUCTIONS,
+                 model=model or MODEL, model_settings=REPORTER_SETTINGS)
 
 
 # ================= 历史压缩器（上下文超阈值时调用） =================

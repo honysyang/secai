@@ -4,6 +4,10 @@
 - task_id：题目 unique_code（或 "generic" / "sub_<id>"），用于区分不同题/子任务的事件流
 - data：原始事件负载（含 agent 智能体名、tool、text、usage 等，由调用方决定）
 
+⚠️ 观测口径声明（C3，单一真相源）：
+  事件流以 SQLite（adapters/db.py）为唯一真相源；events.jsonl 仅为人读留痕，
+  下游分析脚本禁止读 jsonl（崩溃现场保护除外，此时 jsonl 是唯一残留证据）。
+
 transcript 落盘（events.jsonl）仍由 hooks.py 完成（保留现有文件留痕），本模块只负责
 内存历史 + 订阅者分发（SQLite 落库等）。Agent 只发射事件，不写两套。
 """

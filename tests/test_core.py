@@ -99,6 +99,66 @@ class TestToolPipeline(unittest.TestCase):
         self.assertEqual(sig1, sig2)  # 随机 hex 归一化
 
 
+class TestScoring(unittest.TestCase):
+    """信息增量打分回归（D1/D2 验收）：hint 锁铁证前置 + 命中方向解锁 + 弱词收紧。
+
+    从 hooks 独立 import 打分纯函数，可直接对历史工具输出回放。
+    """
+
+    def _ctx(self, hint_directive: str = "", lock: bool = False):
+        from core.task_context import TaskContext
+        ctx = TaskContext(workdir=Path("."))
+        if hint_directive:
+            ctx.blackboard["hint_directive"] = {"value": hint_directive}
+        if lock:
+            setattr(ctx, "hint_grace_active", True)
+        return ctx
+
+    def test_hint_lock_unlocks_on_direction_hit(self):
+        # D1：锁定期内命中 hint 方向 → +1 且解锁
+        from core.hooks import _score_tool_result
+        ctx = self._ctx(hint_directive="尝试 JWT 伪造，检查 /api/token", lock=True)
+        self.assertEqual(
+            _score_tool_result("shell", "POST /api/token 返回 jwt 签名错误", ctx), 1)
+        self.assertFalse(getattr(ctx, "hint_grace_active", False))  # 已转化，解锁
+
+    def test_flag_ironclad_beats_hint_lock(self):
+        # D1：铁证（flag{）在锁定期内也必须 +1（输出不含 hint 词）
+        from core.hooks import _score_tool_result
+        ctx = self._ctx(hint_directive="检查 /etc/passwd", lock=True)
+        self.assertEqual(
+            _score_tool_result("shell", "读取到 flag{test_flag_123} 提交", ctx), 1)
+
+    def test_hint_lock_blocks_unrelated(self):
+        from core.hooks import _score_tool_result
+        ctx = self._ctx(hint_directive="尝试 JWT 伪造", lock=True)
+        self.assertEqual(
+            _score_tool_result("shell", "扫描了 100 个端口，全部关闭", ctx), 0)
+
+    def test_session_eq_no_longer_ironclad(self):
+        # D2：宽词 "session=" 不再是铁证
+        from core.hooks import _score_tool_result
+        ctx = self._ctx()
+        self.assertEqual(
+            _score_tool_result("http_request", "Set-Cookie: session=abc123", ctx), 0)
+
+    def test_weak_hint_needs_error_context(self):
+        # D2：弱词 admin/root 单独出现不算进展，与 error 同现才算
+        from core.hooks import _score_tool_result
+        ctx = self._ctx()
+        self.assertEqual(
+            _score_tool_result("shell", "<title>Admin Dashboard</title> 正常页面", ctx), 0)
+        self.assertEqual(
+            _score_tool_result("shell", "Error: Access denied for user 'admin'", ctx), 1)
+
+    def test_strong_hint_counts(self):
+        # D2：强信号（mysql 报错/SQLi 特征）命中即算增量
+        from core.hooks import _score_tool_result
+        ctx = self._ctx()
+        self.assertEqual(
+            _score_tool_result("shell", "MySQL syntax error near '1'", ctx), 1)
+
+
 class TestReporting(unittest.TestCase):
     def test_write_cost_report(self):
         from runtime.reporting import write_cost_report
