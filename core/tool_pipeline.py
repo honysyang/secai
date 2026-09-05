@@ -16,18 +16,22 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import ipaddress
 import json
 import re
 import uuid
 from abc import ABC
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
 from agents import RunContextWrapper
 
 from core.task_context import TaskContext
 from runtime.budget import brute_gate as _budget_brute_gate
 from runtime.log import log_info, log_warn
+from sandbox import SandboxBlockedError, SandboxUnavailableError, confine as _l5_confine
+from sandbox.policy import Policy as SandboxPolicy
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +303,215 @@ def with_pipeline(pipeline: ToolPipeline):
 
 
 # ---------------------------------------------------------------------------
+# R3 L5 防护中间件（L5 护栏层落地：pentest/scope + sandbox + pentest/approval）
+# ---------------------------------------------------------------------------
+# 执行链：ScopeCheck(纯函数) → sandbox.confine → (T3) ApprovalGate → 执行。
+# 仅在 ctx.context.l5_guardrail（core.task_context.L5GuardrailConfig）配置时生效；
+# 旧模式（无 l5_guardrail）三个中间件完全透传，保证存量行为零扰动。
+# 拦截消息一律结构化 JSON，Agent 可直接解析。
+
+# 会携带网络目标参数、需做越范围扫描的工具（其余工具无法判定目标 → 不误伤）
+_SCOPE_TARGET_TOOLS = {"shell", "run_batch", "parallel_shell", "http_request"}
+# 携带「命令文本」的工具（危险词表扫描 + 沙箱化对象）
+_CMD_TEXT_TOOLS = {"shell", "run_batch", "parallel_shell"}
+_CMD_FIELD = {"shell": "command", "run_batch": "script", "parallel_shell": "commands"}
+# 沙箱 around 替换执行（真实 bwrap 包 shell）的工具
+_SANDBOX_EXEC_TOOLS = {"shell"}
+
+_IP_RE = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+_URL_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+")
+_HOSTPORT_RE = re.compile(r"(?<![\w.])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}):[0-9]{1,5}\b",
+                          re.IGNORECASE)
+
+
+def _l5_cfg(ctx) -> Any | None:
+    """取运行上下文上的 L5 护栏配置（None=护栏关闭，旧模式透传）。"""
+    inner = getattr(ctx, "context", None)
+    return getattr(inner, "l5_guardrail", None) if inner is not None else None
+
+
+def _scope_action(ctx, tool: str) -> str:
+    phase = getattr(getattr(ctx, "context", None), "phase", "")
+    return f"{phase}/{tool}" if phase else tool
+
+
+def _extract_targets(tool: str, args: dict[str, Any]) -> list[str]:
+    """从工具参数中提取网络目标候选（合法 IPv4/IPv6/URL host/裸 host:port）。
+
+    只处理会直接触达网络的工具；提取不出候选返回空列表（调用方决定是否兜底绑定目标）。
+    """
+    if tool not in _SCOPE_TARGET_TOOLS:
+        return []
+    if tool == "http_request":
+        text = str(args.get("url", ""))
+    else:
+        text = " ".join(str(args.get(f, "")) for f in _CMD_FIELD.values() if args.get(f))
+    if not text:
+        return []
+    found: list[str] = []
+    for m in _IP_RE.finditer(text):
+        cand = m.group(0)
+        try:
+            ipaddress.ip_address(cand)
+        except ValueError:
+            continue
+        if cand not in found:
+            found.append(cand)
+    for tok in _URL_RE.findall(text):
+        try:
+            host = urlparse(tok).hostname
+        except ValueError:
+            host = None
+        if host and host not in found:
+            found.append(host)
+    for m in _HOSTPORT_RE.finditer(text):
+        host = m.group(1)
+        if host not in found:
+            found.append(host)
+    return found
+
+
+def _cmd_text(tool: str, args: dict[str, Any]) -> str:
+    return str(args.get(_CMD_FIELD[tool], "") or "") if tool in _CMD_FIELD else ""
+
+
+def _block_message(error: str, tool: str, detail: str, **extra: Any) -> str:
+    payload = {"ok": False, "error": error, "tool": tool, "detail": detail}
+    payload.update(extra)
+    return json.dumps(payload, ensure_ascii=False)
+
+
+class ScopeGuardMiddleware(ToolMiddleware):
+    """越范围硬拦截：工具参数中出现不在授权范围的网络目标 → 结构化拦截，不执行。"""
+
+    name = "l5_scope"
+
+    def guard(self, ctx, tool, args):
+        cfg = _l5_cfg(ctx)
+        if cfg is None or getattr(cfg, "scope", None) is None:
+            return None
+        scope = cfg.scope
+        targets = _extract_targets(tool, args or {})
+        if not targets:
+            bound = getattr(cfg, "target", "") or ""
+            targets = [bound] if bound else []
+        if not targets:
+            return None  # 无目标可判定（本地命令等），交由沙箱/审批闸门
+        for t in targets:
+            r = scope.check(t, _scope_action(ctx, tool))
+            if not r.allowed:
+                log_warn(f"[l5_scope] 拦截 {tool} 越范围目标 {t}（{r.matched_rule}）：{r.reason}")
+                return _block_message("scope_block", tool, r.reason,
+                                      target=t, matched_rule=r.matched_rule)
+        return None
+
+
+class L5SandboxMiddleware(ToolMiddleware):
+    """命令分级 + bwrap 沙箱（fail-closed）。
+
+    guard：危险命令（rm -rf / 等）/ 超出 Policy 档位 / 无后端 → 结构化拦截（不执行）；
+    around：shell 命令在有后端时真实 bwrap 执行；后端故障返回错误且绝不裸跑回退。
+    """
+
+    name = "l5_sandbox"
+
+    def guard(self, ctx, tool, args):
+        cfg = _l5_cfg(ctx)
+        if cfg is None:
+            return None
+        if tool not in _CMD_TEXT_TOOLS:
+            return None
+        text = _cmd_text(tool, args or {})
+        if not text.strip():
+            return None
+        policy = getattr(cfg, "policy", None) or SandboxPolicy()
+        backend = getattr(cfg, "backend", None)
+        # 护栏已开启但未显式配置沙箱后端 → fail-closed（执行型工具禁止裸跑）。
+        # 不使用模块默认后端：around 只对显式 cfg.backend 做 bwrap 执行替换，
+        # 若 guard 用默认后端放行而 around 不替换会造成「看似沙箱实则裸跑」的假象。
+        if backend is None:
+            log_warn(f"[l5_sandbox] {tool} 护栏模式未配置沙箱后端，fail-closed 拒绝裸跑")
+            return _block_message(
+                "sandbox_unavailable", tool,
+                "护栏模式已开启但未配置沙箱后端（fail-closed）：执行型工具禁止裸跑")
+        try:
+            _l5_confine(text, policy, backend=backend, workdir=_workdir_str(ctx))
+        except SandboxBlockedError as e:
+            log_warn(f"[l5_sandbox] 拦截 {tool}：{e}")
+            return _block_message("danger_block", tool, str(e))
+        except SandboxUnavailableError as e:
+            log_warn(f"[l5_sandbox] fail-closed 拦截 {tool}：{e}")
+            return _block_message("sandbox_unavailable", tool, str(e))
+        # 词表/后端都通过，但该工具尚未接入 bwrap 执行替换（仅 shell 已沙箱化）：
+        # 护栏模式下拒绝其裸跑（fail-closed），防止脚本内容绕过词表后在宿主裸执行。
+        if tool not in _SANDBOX_EXEC_TOOLS:
+            log_warn(f"[l5_sandbox] {tool} 未接入沙箱化执行，护栏模式拒绝裸跑")
+            return _block_message(
+                "sandbox_unavailable", tool,
+                "护栏模式下 run_batch/parallel_shell 尚未接入 bwrap 沙箱化执行，"
+                "fail-closed 拒绝裸跑（脚本内容无法被命令词表覆盖）；请改用 shell 逐条执行，"
+                "或由工具适配器（R4）在沙箱内运行")
+        return None
+
+    async def around(self, ctx, tool, args, execute):
+        cfg = _l5_cfg(ctx)
+        if (cfg is None or tool not in _SANDBOX_EXEC_TOOLS
+                or getattr(cfg, "backend", None) is None):
+            return await execute()
+        text = (args or {}).get("command", "")
+        if not text.strip():
+            return await execute()
+        policy = getattr(cfg, "policy", None) or SandboxPolicy()
+        backend = cfg.backend
+        try:
+            res = _l5_confine(["bash", "-c", text], policy, backend=backend,
+                              workdir=_workdir_str(ctx))
+        except (SandboxBlockedError, SandboxUnavailableError) as e:
+            return f"[error] L5 沙箱拒绝执行（未执行任何命令）：{e}"
+
+        try:
+            timeout = min(int((args or {}).get("timeout", 30) or 30), 120)
+            er = await asyncio.to_thread(backend.run, res.argv, timeout=timeout,
+                                         cwd=_workdir_str(ctx))
+        except SandboxUnavailableError as e:
+            return f"[error] L5 沙箱执行失败，fail-closed 未裸跑：{e}"
+        return _format_sandbox_output(er)
+
+
+def _workdir_str(ctx) -> str | None:
+    inner = getattr(ctx, "context", None)
+    wd = getattr(inner, "workdir", None) if inner is not None else None
+    return str(wd) if wd is not None else None
+
+
+def _format_sandbox_output(er, preview: int = 4000) -> str:
+    """与 shell 工具本体一致的输出格式（沙箱化执行后拼装）。"""
+    out = f"rc={er.rc}\nstdout:\n{er.stdout[:preview]}\nstderr:\n{er.stderr[:1000]}"
+    if er.timed_out:
+        out += "\n[error] L5 沙箱命令超时，已终止"
+    return out
+
+
+class ApprovalGateMiddleware(ToolMiddleware):
+    """T3 人工审批门：tier 需审批的工具无人工放行 → 结构化暂停/拒绝，不执行。"""
+
+    name = "l5_approval"
+
+    def guard(self, ctx, tool, args):
+        cfg = _l5_cfg(ctx)
+        if cfg is None or getattr(cfg, "approval", None) is None:
+            return None
+        gate = cfg.approval
+        session_id = (getattr(cfg, "task_id", "") or ""
+                      or getattr(getattr(ctx, "context", None), "current_code", "") or "l5")
+        result = gate.request(session_id, tool, dict(args or {}))
+        if result.ok:
+            return None
+        log_warn(f"[l5_approval] {tool} 未获审批（{result.status}），暂停执行")
+        return result.as_message()
+
+
+# ---------------------------------------------------------------------------
 # 默认管线（全局共用，覆盖大多数横切关注点）
 # ---------------------------------------------------------------------------
 
@@ -312,6 +525,10 @@ DEFAULT_PIPELINE = ToolPipeline([
     NetworkUnreachableMiddleware(),
     AutoSubmitFlagMiddleware(),
 ])
+# R3：L5 护栏中间件挂入默认管线（无 l5_guardrail 配置时透传，存量零扰动）
+DEFAULT_PIPELINE.add(ScopeGuardMiddleware())
+DEFAULT_PIPELINE.add(L5SandboxMiddleware())
+DEFAULT_PIPELINE.add(ApprovalGateMiddleware())
 
 
 # ---------------------------------------------------------------------------

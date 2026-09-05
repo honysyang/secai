@@ -26,6 +26,25 @@ class SubtaskBudget:
 
 
 @dataclass
+class L5GuardrailConfig:
+    """R3 L5 护栏运行配置（挂到 TaskContext.l5_guardrail；None = 护栏关闭，旧模式透传）。
+
+    字段均为鸭子类型（避免 core → pentest/sandbox 的静态依赖）：
+    - scope: pentest.scope.ScopeConstraint | None   —— 授权范围守卫（越范围硬拦截）
+    - policy: sandbox.policy.Policy | None          —— 命令分级策略（默认 workspace-write）
+    - backend: sandbox.SandboxBackend | None        —— 沙箱后端（None = 按 fail-closed 处理）
+    - approval: pentest.approval.ApprovalGate | None —— T3 人工审批门
+    对应执行链：ScopeCheck → sandbox.confine → (T3) ApprovalGate → 执行。
+    """
+    task_id: str = ""                # 审计维度（事件总线 task_id / engagement）
+    scope: Any = None
+    target: str = ""                 # 会话绑定目标（参数无可解析目标时的兜底检查）
+    policy: Any = None
+    backend: Any = None
+    approval: Any = None
+
+
+@dataclass
 class TaskContext:
     """通用任务上下文：只承载「执行现场 + 渐进披露」，与任何具体靶场解耦。"""
     workdir: Path
@@ -96,6 +115,8 @@ class TaskContext:
     open_sub_sessions: Dict[str, Any] = field(default_factory=dict, repr=False)  # subtask id → session 句柄
     # ---- R2 H7：惰性点锚点登记（±5 步回放自动导出的数据源） ----
     stuck_anchors: List[Dict[str, Any]] = field(default_factory=list)  # [{turn, reason, ts}]，收尾统一导出回放
+    # ---- R3 L5：护栏运行配置（None = 关闭；设置后 tool_pipeline 的 L5 中间件生效） ----
+    l5_guardrail: Any = None       # L5GuardrailConfig | None
 
 
 # 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness；对齐 Harness 验收 N≤2）
