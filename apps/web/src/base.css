@@ -1,0 +1,33 @@
+/* 壳级全局 base：全高挂载 + 主题 token 四件套。
+ * 顺序即依赖：design-platform.css 定义 --secai-alias-*（body 上、暗色
+ * body[data-secai-dark]），scrollbar.css 读取该文件的 alias 滚动条 token，
+ * shiki.css 别名 markdown code-block token。 */
+
+@import './theme/base.css';
+@import './theme/design-platform.css';
+@import './theme/scrollbar.css';
+@import './theme/shiki.css';
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--secai-font-family);
+  /* 灰阶抗锯齿优先于次像素渲染（WebKit/Blink 与 macOS Firefox；其余引擎忽略） */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--secai-alias-label-primary);
+  background: var(--secai-alias-bg-base);
+}
+
+/* 表单控件不继承 body 字体（UA 样式表各自钉死），应用字体栈需显式重放 */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}

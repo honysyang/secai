@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>SECAI-PT · 破阵</title>
+  </head>
+  <body>
+    <script>
+      // 主题预引导：首帧渲染前按系统偏好写 data-secai-dark，避免亮暗闪跳
+      // （与 src/main.tsx 的 matchMedia 监听同源，运行期持续跟随系统）。
+      ;(() => {
+        const dark =
+          typeof matchMedia !== 'undefined' &&
+          matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        document.body.toggleAttribute('data-secai-dark', dark)
+      })()
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

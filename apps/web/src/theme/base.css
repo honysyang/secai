@@ -1,0 +1,14 @@
+/* Base design-system variables (SECAI-PT): font stacks and motion curve that
+ * component CSS and the alias token sheets reference. Code font stack
+ * deliberately omits a bare `monospace` tail (Windows CJK falls back to SimSun
+ * otherwise). */
+:root {
+  --secai-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --secai-font-family-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas,
+    'Liberation Mono', Menlo, Courier, 'PingFang SC', 'Microsoft YaHei';
+  --secai-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --secai-transition-duration: 0.2s;
+  --secai-transition-duration-fast: 0.1s;
+  --secai-transition-duration-slow: 0.3s;
+}

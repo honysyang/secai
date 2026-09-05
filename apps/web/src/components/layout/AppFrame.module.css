@@ -1,0 +1,61 @@
+/* 三栏骨架（F0 占位版）：sidebar | conversation | details。
+ * 轨道宽度以 grid-template-columns 内联写入（与 dsh AppFrame 同款做法），
+ * F2 阶段升级为拖拽分隔（cols.ts 让步链）。颜色只消费 --secai-* token。 */
+
+.frame {
+  display: grid;
+  grid-template-rows: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--secai-alias-bg-base);
+}
+
+.sidebarCol {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--secai-specific-sidebar-fill);
+  border-right: 1px solid var(--secai-alias-border-l1);
+}
+
+.centerCol {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.detailsCol {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--secai-alias-border-l2);
+}
+
+.paneTitle {
+  padding: 14px 16px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--secai-alias-label-secondary);
+}
+
+.paneBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 16px 16px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.placeholder {
+  border: 1px dashed var(--secai-alias-border-l3);
+  border-radius: 10px;
+  padding: 16px 14px;
+  color: var(--secai-alias-label-caption);
+  background: var(--secai-alias-bg-layer-1);
+}
