@@ -15,7 +15,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core.events import BUS as _REAL_BUS  # noqa: F401（确保模块可导入）
 from core.task_context import TaskContext
 from harness.runner.executor import ExecutorLoop
 from harness.runner.state import RunnerState

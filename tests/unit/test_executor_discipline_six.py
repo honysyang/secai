@@ -23,7 +23,7 @@ class ExecutorDisciplineSixTest(unittest.TestCase):
     def test_discipline_items_are_exactly_six(self):
         """工作纪律条目收口为 6 条：行首编号恰为 1..6，无 7+。"""
         block = _discipline_block()
-        nums = [int(m) for m in re.findall(r"^\s*(\d+)\.\s", block, re.M)]
+        nums = [int(m) for m in re.findall(r"^\s*(\d+)\.\s", block, re.MULTILINE)]
         self.assertEqual(nums, [1, 2, 3, 4, 5, 6], f"纪律条目应 1..6，实际 {nums}")
         self.assertNotIn("\n7.", block)
         self.assertNotIn("\n8.", block)

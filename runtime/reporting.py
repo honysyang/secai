@@ -9,7 +9,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import requests
 
@@ -120,8 +120,8 @@ STUCK_REPLAY_HALF_WINDOW = 5
 
 
 def write_stuck_replay(workdir: Path, code: str, anchor: dict,
-                       events: Optional[List[dict]] = None,
-                       half_window: int = STUCK_REPLAY_HALF_WINDOW) -> Optional[Path]:
+                       events: list[dict] | None = None,
+                       half_window: int = STUCK_REPLAY_HALF_WINDOW) -> Path | None:
     """惰性点自动导出 ±half_window 步回放（H7，破局链第一段）。
 
     事件窗口以锚点（连续零增益达阈值那一轮）时刻的事件序号为圆心：

@@ -249,9 +249,7 @@ def _cascade_cancel_falsified(ctx) -> int:
             continue
         deps = [d.strip() for d in str(sub.get("depends_on") or "").split(",")
                 if d.strip()]
-        if not deps:
-            continue
-        if any(d in falsified for d in deps):
+        if deps and any(d in falsified for d in deps):
             if _cancel_subtask(ctx, sub["id"], reason="premise_falsified"):
                 cancelled += 1
     if cancelled:
