@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 
@@ -66,8 +67,8 @@ ZERO_GAIN_REPLAN_TURNS = 3  # 连续零信息增量轮数触发 fork_analyze（�
 REPLAN_MAX = 1              # 破局链收敛为两级（R1）：只 fork_analyze 复盘一次，再 3 轮零增量即机械换题
 COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（默认关闭，R1 收敛）
 # R1：coach / plan-mode 软干预默认关闭（代码保留，赛后用日志对比决定是否复活）
-ENABLE_COACH = __import__("os").getenv("ENABLE_COACH", "false").lower() in ("1", "true", "yes")
-ENABLE_PLAN_MODE = __import__("os").getenv("ENABLE_PLAN_MODE", "false").lower() in ("1", "true", "yes")
+ENABLE_COACH = os.getenv("ENABLE_COACH", "false").lower() in ("1", "true", "yes")
+ENABLE_PLAN_MODE = os.getenv("ENABLE_PLAN_MODE", "false").lower() in ("1", "true", "yes")
 STRONG_MODEL_MAX_TURNS = 3  # 强模型（破局）每题目最多轮数，超限切回快模型
 # 单题「自救+切换模型+hint+replan」累计干预上限见 runtime.budget.MAX_STUCK_INTERVENTIONS（B4 收口）
 
