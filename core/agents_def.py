@@ -108,6 +108,30 @@ EXECUTOR_STATIC_INSTRUCTIONS = """你是 SecAI 的执行者，负责执行管理
 """
 
 
+def _versioned_section(ctx_owner, key: str, content: str, title: str,
+                       fallback: str, no_change_line: str) -> str:
+    """大段内容版本化注入（H3）：内容相对上轮未变时只注入一行占位，变化才全量注入。
+
+    - 内容为空 → 返回 title + fallback（如「（无）」）；
+    - 内容签名与上轮一致 → 只注入 no_change_line 单行（如「plan v1 无变更」），
+      版本号取自 injected_versions，未变化不递增；
+    - 内容签名变化（如 replan 后 ctx.plan 更新）→ 版本 +1，全量注入 title+content，
+      并把签名与版本登记回 ctx，供后续轮次比对。
+    """
+    sig = _prompt_hash(content) if content else ""
+    if not content:
+        return f"{title}\n{fallback}"
+    # 状态登记在 TaskContext（可能为兼容旧对象缺失字段，用 setdefault 惰性创建）
+    sigs = ctx_owner.__dict__.setdefault("injected_signatures", {})
+    vers = ctx_owner.__dict__.setdefault("injected_versions", {})
+    if sigs.get(key) == sig:
+        return no_change_line.format(ver=vers.get(key, 1))
+    new_ver = vers.get(key, 0) + 1
+    sigs[key] = sig
+    vers[key] = new_ver
+    return f"{title}\n{content}"
+
+
 def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
                            plan: str, field_notes: str, role_boost: str = "",
                            ledger_text: str = "") -> str:
@@ -117,6 +141,10 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
     当前阶段、宪章、作战计划、已解锁打法、历史档案、压缩摘要、黑板、阶段增强、
     exploit 阶段 payload 失败清单。
     这样同一个 Agent 实例可复用，SDK 不必每轮重建完整系统提示。
+
+    R2 增量注入（H3）：charter/plan 引入版本号，未变更时只注入一行「xxx vX 无变更」，
+    避免每轮把大段立法/规划文本重复塞进新增 input；field_notes 仅首轮注入一次
+    （首轮全文已进对话历史，后续轮不再重复）。注入状态登记在 TaskContext。
     """
     c = ctx.context
     playbooks_text = load_skill_bodies(c.disclosed_skills)
@@ -135,12 +163,19 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
         directive = str(nd.get("value", "")).strip()
     if directive:
         parts.append(("# 破局指令（fork_analyst 给出，优先执行）", directive))
+    # H3：charter/plan 版本化注入（未变更只注入一行）；field_notes 仅首轮注入
+    parts.append(_versioned_section(
+        c, "charter", charter, "# 使命宪章（管理者立法，必须遵守）", "（无）",
+        "# 使命宪章 v{ver} 无变更（沿用首次注入全文，不重复）"))
+    parts.append(_versioned_section(
+        c, "plan", plan, "# 作战计划（规划师深度分析，指导阶段推进）", "（无：未规划）",
+        "# 作战计划 v{ver} 无变更（沿用已注入版本，不重复）"))
+    parts.append(("# 可用打法（随战况渐进披露，当前已解锁）",
+                  playbooks_text or "（暂无可用打法，先用通用侦察）"))
+    if field_notes and not c.field_notes_injected:
+        c.field_notes_injected = True
+        parts.append(("# 历史作战档案（跨题经验与死路蒸馏，仅首轮注入全文）", field_notes))
     parts.extend([
-        ("# 使命宪章（管理者立法，必须遵守）", charter or "（无）"),
-        ("# 作战计划（规划师深度分析，指导阶段推进）", plan or "（无：未规划）"),
-        ("# 可用打法（随战况渐进披露，当前已解锁）",
-         playbooks_text or "（暂无可用打法，先用通用侦察）"),
-        ("# 历史作战档案", field_notes or "（无：首次执行）"),
         ("# 历史压缩摘要（超长对话压缩后保留的关键事实）", c.compaction_summary or "（无）"),
         ("# 全局黑板（已完成事项 / 全局变量，跨轮共享）", _format_blackboard(c.blackboard)),
     ])
@@ -153,7 +188,8 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
         parts.append(("# 阶段增强（证据触发，随战况注入）", role_boost))
     if ledger_text:
         parts.append(("# exploit 差分基线", ledger_text))
-    return "\n\n".join(f"{title}\n{body}" for title, body in parts)
+    return "\n\n".join(part if isinstance(part, str) else f"{part[0]}\n{part[1]}"
+                       for part in parts)
 
 
 EXECUTOR_DYNAMIC_PREFIX = "【动态上下文】\n"

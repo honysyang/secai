@@ -85,6 +85,17 @@ class TaskContext:
     silent_failures: int = 0              # 静默吞掉的异常/失败次数（close 失败/归档失败等）
     # ---- 子任务标识（R2）：区分主线/分身，子任务情报共享用 ----
     is_subtask: bool = False              # 是否后台子任务（spawn_subtask 创建）
+    # ---- R2 H3：动态上下文增量注入状态（charter/plan 版本化 + field_notes 仅首轮） ----
+    injected_signatures: Dict[str, str] = field(default_factory=dict)  # 已全量注入的内容签名（charter/plan → sha256[:16]）
+    injected_versions: Dict[str, int] = field(default_factory=dict)    # 已注入的版本号（每次内容变化 +1）
+    field_notes_injected: bool = False                                 # 历史作战档案是否已注入（仅首轮注入）
+    # ---- R2 H4：零增量轮真实统计（看板 zero_gain_events 的数据源，经 cost_report 落盘） ----
+    zero_gain_total: int = 0              # 累计零信息增量轮次
+    peak_zero_gain_streak: int = 0        # 峰值连续零增量轮数（单次最长停滞长度）
+    # ---- R2 H5：后台子任务 SQLiteSession 句柄登记（收尾统一 close 后再物理删 sub_*.sqlite） ----
+    open_sub_sessions: Dict[str, Any] = field(default_factory=dict, repr=False)  # subtask id → session 句柄
+    # ---- R2 H7：惰性点锚点登记（±5 步回放自动导出的数据源） ----
+    stuck_anchors: List[Dict[str, Any]] = field(default_factory=list)  # [{turn, reason, ts}]，收尾统一导出回放
 
 
 # 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness；对齐 Harness 验收 N≤2）
