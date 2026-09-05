@@ -109,6 +109,8 @@ async def _run_subtasks(ctx, pending, challenge_workdir: Path, brief: str,
             sub_ctx.wallclock_budget = budget.timeout_seconds
             sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
                                         db_path=str(challenge_workdir / f"sub_{sub['id']}.sqlite"))
+            # H5：句柄登记到父 ctx，收尾统一 close 后再物理删 sub_*.sqlite（防残留句柄）
+            ctx.open_sub_sessions[sub["id"]] = sub_session
             sub_hooks = EventStreamHooks(challenge_workdir, f"sub_{sub['id']}")
             try:
                 await asyncio.wait_for(
@@ -174,6 +176,9 @@ async def _run_subtasks(ctx, pending, challenge_workdir: Path, brief: str,
                     sub_session.close()
                 except Exception as e:
                     log_warn(f"[degraded] 子任务 {sub['id']} 关闭 session 失败：{str(e)[:120]}")
+                finally:
+                    # H5：句柄已关 → 从登记表移除（未移除的由父收尾兜底 close + 删文件）
+                    ctx.open_sub_sessions.pop(sub["id"], None)
 
         # 立即后台启动，不等主循环
         ctx.subtask_jobs[sub["id"]] = asyncio.create_task(_run_one())

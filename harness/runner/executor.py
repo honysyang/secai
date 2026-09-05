@@ -539,6 +539,24 @@ class ExecutorLoop:
     async def _cleanup(self) -> None:
         # 第三道闸门：统一回收所有后台子任务
         await _cancel_all_subtasks(self.ctx, reason="parent_finished")
+        # H5：session 收尾物理清理 sub_*.sqlite 残留（句柄安全：先兜底 close 再删文件）
+        try:
+            for sid, s in list(self.ctx.open_sub_sessions.items()):
+                try:
+                    s.close()
+                except Exception as e:
+                    self.ctx.silent_failures += 1
+                    log_warn(f"[degraded] 单题 {self.code} 子任务 {sid} 兜底关闭 session 失败：{str(e)[:120]}")
+            self.ctx.open_sub_sessions.clear()
+        except Exception as e:
+            self.ctx.silent_failures += 1
+            log_warn(f"[degraded] 单题 {self.code} 清理子任务 session 句柄失败：{str(e)[:120]}")
+        try:
+            for p in self.challenge_workdir.glob("sub_*.sqlite"):
+                p.unlink(missing_ok=True)
+        except Exception as e:
+            self.ctx.silent_failures += 1
+            log_warn(f"[degraded] 单题 {self.code} 物理清理 sub_*.sqlite 失败：{str(e)[:120]}")
         # 冲刷事件缓冲，保证 events.jsonl 完整落盘（证据留痕）
         try:
             _flush_emit_buffer(str(self.challenge_workdir / "events.jsonl"))
