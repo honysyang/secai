@@ -1,0 +1,38 @@
+[project]
+name = "secai"
+version = "0.1.0"
+description = "SECAI - AI-driven security assessment harness (pentest agent system)"
+requires-python = ">=3.11"
+dependencies = [
+    "openai-agents>=0.20.0",
+    "requests>=2.31.0",
+    "ddgs>=6.0.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "httpx>=0.28.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = [
+    "e2e: end-to-end tests requiring network/API keys (skipped automatically without keys)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "data", "static", "__pycache__", "nohup.out"]
+
+[tool.ruff.lint]
+# 聚焦真问题（未定义/逻辑错误/未用 import/import 排序/可自动修复的现代化注解）
+# 存量风格噪音（E501/S110/BLE001 等）由 R1-R4 改造批次逐文件消化，不在此阶段全开
+select = ["F", "E4", "E7", "E9", "I", "UP006", "UP035", "UP045", "FURB167", "PLW1510", "B010", "SIM102", "RUF059", "F401"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 历史巨石文件在 R1 拆分前允许存量违规（只减不增）
+"demo_tools.py" = ["UP006", "UP035", "I001"]
+"app/main.py" = ["UP006", "UP035", "I001"]
+"*.py" = ["EXE002"]  # shebang 由脚本文件自行决定
