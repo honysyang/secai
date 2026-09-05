@@ -351,6 +351,10 @@ class ExecutorLoop:
             self.ctx.zero_gain_turns = 0
         else:
             self.ctx.zero_gain_turns += 1
+            # H4：零增量轮真实统计（看板 zero_gain_events 数据源，经 cost_report 落盘）
+            self.ctx.zero_gain_total += 1
+            if self.ctx.zero_gain_turns > self.ctx.peak_zero_gain_streak:
+                self.ctx.peak_zero_gain_streak = self.ctx.zero_gain_turns
 
         if self.ctx.turn_net_fail:
             self.ctx.net_fail_turns += 1

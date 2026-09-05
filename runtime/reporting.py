@@ -89,6 +89,11 @@ def write_cost_report(workdir: Path, code: str, outcome: str, ctx,
         "cache_misses": getattr(ctx, "cache_misses", 0),
         # 降级计数（修补 7）：静默吞掉的失败留数，N>0 即赛后排查清单
         "silent_failures": getattr(ctx, "silent_failures", 0),
+        # H4：零增量轮真实统计（看板 zero_gain_events 按此聚合，不再硬编码 0）
+        "zero_gain": {
+            "total": getattr(ctx, "zero_gain_total", 0),
+            "peak_streak": getattr(ctx, "peak_zero_gain_streak", 0),
+        },
         "ts": int(time.time()),
     }
     with (workdir / "cost_report.json").open("w", encoding="utf-8") as f:
@@ -132,6 +137,10 @@ def write_dashboard(workdir: Path) -> None:
     total_tokens = sum(r.get("tokens", {}).get("total", 0) for r in reports)
     total_turns = sum(r.get("turns", 0) for r in reports)
     solved = sum(1 for r in reports if r.get("outcome") == "solved")
+    # H4：零增量事件数从各题 cost_report 真实汇总（旧报告缺字段按 0 兜底）
+    zero_gain_total = sum(r.get("zero_gain", {}).get("total", 0) for r in reports)
+    peak_zero_gain_streak = max(
+        (r.get("zero_gain", {}).get("peak_streak", 0) for r in reports), default=0)
     dashboard = {
         "generated_at": int(time.time()),
         "challenge_count": len(reports),
@@ -145,7 +154,8 @@ def write_dashboard(workdir: Path) -> None:
                    "per_challenge": round(total_tokens / len(reports), 1)},
         "turns": {"total": total_turns,
                   "per_challenge": round(total_turns / len(reports), 1)},
-        "zero_gain_events": 0,
+        "zero_gain_events": zero_gain_total,
+        "peak_zero_gain_streak": peak_zero_gain_streak,
         "per_challenge": reports,
     }
     with (workdir / "dashboard.json").open("w", encoding="utf-8") as f:
@@ -153,4 +163,5 @@ def write_dashboard(workdir: Path) -> None:
     log_info(f"[dashboard] 四指标看板已生成：{len(reports)} 题，"
              f"命中率 {dashboard['cache']['hit_rate']:.1%}，"
              f"单题 token {dashboard['tokens']['per_challenge']:.0f}，"
-             f"单题轮次 {dashboard['turns']['per_challenge']:.1f}")
+             f"单题轮次 {dashboard['turns']['per_challenge']:.1f}，"
+             f"零增量事件 {zero_gain_total}")
