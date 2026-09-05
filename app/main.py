@@ -4,6 +4,12 @@
 依赖：平台客户端（BENCHMARK_TOKEN/BENCHMARK_BASE_URL）、flag 机械提交铁律、
 多模型灾备池（ModelPool）、事件总线落库（SQLite + events.jsonl 双写）。
 
+R1 可测试性重构后本文件只保留「调度器编排」：run_task 主循环 + _endgame_sweep
+（结构被 tests/test_core.py AST 锁定）+ 入口。单题执行闭环移入
+harness/runner/executor.py（ExecutorLoop）、子任务移入 harness/runner/subtasks.py、
+上下文辅助移入 harness/runner/context.py、立法/战报段移入
+harness/runner/orchestrator.py。
+
 用法：
     python -m app.main                              # 跑分模式（配置了 BENCHMARK_TOKEN 自动进调度器）
     python -m app.main "<任务描述>" [角色提示]       # 通用渗透任务
@@ -11,67 +17,53 @@
 """
 from __future__ import annotations
 
-import copy
 import asyncio
-import hashlib
 import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from agents import Runner, RunContextWrapper
-from agents.exceptions import MaxTurnsExceeded
-from agents.memory import SQLiteSession
-
-from core.agents_def import (build_strategist, build_reporter, build_executor,
-                            EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context,
-                            _prompt_hash)
-from runtime.budget import (HINT_BUDGET_RATIO, COST_LIMITS, SUSPEND_SECONDS,
-                            should_pull_hint_by_budget, WALLCLOCK_BUDGET,
-                            HINT_GRACE_TURNS, MAX_STUCK_INTERVENTIONS)
-from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
-from runtime.model_fallback import run_with_model_fallback
-import runtime.stuck as stuck_mod
-from runtime.stuck import StuckActionType, StuckDetector, compact_session
-from core.charter import save_charter
-from adapters.config import (BENCHMARK_BASE_URL, BENCHMARK_TOKEN,
-                             BASE_URL, MODEL_NAME, API_KEY, VPN_CONFIG,
-                             FAST_MODEL_NAME)
-
-from core.context_manager import compact_if_needed
 import adapters.db as db_mod
-from demo_tools import build_default_tools
-from core.events import BUS
-from runtime.fork_analyst import fork_analyze, update_blackboard_with_fork
-from core.hooks import EventStreamHooks, _ledger_failed_summary, _flush_emit_buffer
-from runtime.reporting import (first_strike, write_cost_report,
-                               export_trajectory, write_dashboard)
-
-from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFound, ContainerBusy
+from adapters.config import (API_KEY, BASE_URL, BENCHMARK_BASE_URL,
+                             BENCHMARK_TOKEN, FAST_MODEL_NAME, MODEL_NAME,
+                             VPN_CONFIG)
+from arsenal.registries import sec_tools
 from arsenal.registries.role_registry import assign_role
 from arsenal.registries.skill_registry import load_skills
-from arsenal.registries import sec_tools
-from bench_platform.scheduler import (select_challenge, decide_stuck_action,
-                                      is_endgame, SINGLE_EMPTY_TURNS)
-from solvecraft.solution_templates import append_solution_template, load_solution_hint
+from bench_platform.platform_client import (ContainerBusy, PlatformClient,
+                                            TaskEnded, TaskNotFound)
+from bench_platform.scheduler import is_endgame, select_challenge
+from core.events import BUS
+from core.hooks import EventStreamHooks
+from harness.runner.executor import run_single_challenge
+from harness.runner.orchestrator import (StrategistFailed, finalize_report,
+                                         legislate_charter)
+from harness.runner.pool import get_global_model_pool, set_global_model_pool
+from runtime.deadline import DEADLINE_SAFE_MARGIN, TASK_DEADLINE_TS
+from runtime.log import log_error, log_info, log_warn
+from runtime.model_pool import ModelPool
 from runtime.status import set_status
-from runtime.deadline import TASK_DEADLINE_TS, DEADLINE_SAFE_MARGIN
-from runtime.log import log_info, log_warn, log_error
-from core.task_context import TaskContext, SUBTASK_MAX_CONCURRENT
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 WORKDIR = DATA_DIR / "worker_generic"
-SESSIONS_DIR = WORKDIR / "sessions"
-SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+WORKDIR.mkdir(parents=True, exist_ok=True)
 _db_initialized = False
 
-# 外层 Agent（Manager/Planner/Reporter/Coach）共享的模型灾备池，
-# 在 run_task 入口初始化，避免与单题 executor 内部模型池冲突。
-global_model_pool: Optional[ModelPool] = None
+# 目标任务
+TSEC_TASK_FILE = Path(__file__).parent.parent / "prompts" / "tsec_task.txt"
+
+
+def build_default_task() -> str:
+    """读跑分任务模板并替换占位符（模板独立在 prompts/tsec_task.txt）。"""
+    token = BENCHMARK_TOKEN or "（未配置 BENCHMARK_TOKEN）"
+    base_url = BENCHMARK_BASE_URL or "（未配置 BENCHMARK_BASE_URL）"
+    return (TSEC_TASK_FILE.read_text(encoding="utf-8")
+            .replace("{BENCHMARK_TOKEN}", token)
+            .replace("{BENCHMARK_BASE_URL}", base_url))
 
 
 def _init_observability() -> None:
@@ -87,869 +79,13 @@ def _init_observability() -> None:
     _db_initialized = True
     log_info("可观测性初始化完成：SQLite 落库 + 事件总线订阅")
 
-# 跑分任务模板已抽离到 prompts/tsec_task.txt（见下方 build_default_task）
-
-#目标任务
-TSEC_TASK_FILE = Path(__file__).parent.parent / "prompts" / "tsec_task.txt"
-
-
-def build_default_task() -> str:
-    """读跑分任务模板并替换占位符（模板独立在 prompts/tsec_task.txt）。"""
-    from adapters.config import BENCHMARK_TOKEN, BENCHMARK_BASE_URL
-    token = BENCHMARK_TOKEN or "（未配置 BENCHMARK_TOKEN）"
-    base_url = BENCHMARK_BASE_URL or "（未配置 BENCHMARK_BASE_URL）"
-    return (TSEC_TASK_FILE.read_text(encoding="utf-8")
-            .replace("{BENCHMARK_TOKEN}", token)
-            .replace("{BENCHMARK_BASE_URL}", base_url))
-
-FIELD_NOTES_FILE = DATA_DIR / "field_notes.md"
-
-
-def _load_field_notes(max_chars: int = 3000) -> str:
-    """读取上次战报尾部（含「死路蒸馏」），作为执行者的历史作战档案注入。"""
-    if not FIELD_NOTES_FILE.exists():
-        return ""
-    return FIELD_NOTES_FILE.read_text(encoding="utf-8")[-max_chars:]
-
-
-def _merge_subtask_intel(ctx, challenge_workdir: Path) -> None:
-    """R2：把子任务共享情报（sub_intel.jsonl）增量合并进主线黑板。
-
-    只合并结论性 verified 条目；主线黑板已有 verified 结论的同名 key 不覆盖
-    （防伪证回流、防覆盖主线决策）。子任务运行期间即可见，无需等其结束。
-    """
-    p = challenge_workdir / "sub_intel.jsonl"
-    if not p.exists():
-        return
-    try:
-        merged = 0
-        for line in p.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            item = json.loads(line)
-            k = item.get("key")
-            v = item.get("entry")
-            if not k or not isinstance(v, dict) or not v.get("verified"):
-                continue
-            cur = ctx.blackboard.get(k)
-            if cur is not None and cur.get("verified"):
-                continue
-            ctx.blackboard[k] = v
-            merged += 1
-        if merged:
-            log_info(f"[黑板合并] 单题 {ctx.current_code} 共享子任务情报 {merged} 条")
-    except Exception:
-        pass
-
-
-def _append_mechanical_note(code: str, outcome: str, ctx) -> None:
-    """题级机械沉淀（零 LLM）：战果 + 死路从黑板/提交记录直接提取。"""
-    failed = [k for k, v in ctx.blackboard.items()
-              if isinstance(v, dict) and v.get("status") == "failed"][:8]
-    wins = [f"correct:{f}" for f in getattr(ctx, "correct_flags", [])][:8]
-    disclosed = ",".join(getattr(ctx, "disclosed_skills", [])[:6])
-    lines = [f"\n# {code} · {outcome} · {time.strftime('%m-%d %H:%M')}",
-             f"- 战果: {', '.join(wins) or '无'}",
-             f"- 死路: {', '.join(failed) or '无'}",
-             f"- 披露技能: {disclosed}"]
-    try:
-        with FIELD_NOTES_FILE.open("a", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    except Exception:
-        pass
-
-
-def load_notes_for(code: str, max_chars: int = 900) -> str:
-    """按题检索档案：本题 + 同前缀题的历史段落，最近 3 段。"""
-    if not FIELD_NOTES_FILE.exists():
-        return ""
-    text = FIELD_NOTES_FILE.read_text(encoding="utf-8")
-    prefix = code.rsplit("-", 1)[0] if "-" in code else code
-    hits = [sec[:max_chars] for sec in text.split("\n# ")
-            if sec.startswith(code) or sec.startswith(prefix + "-")]
-    return "\n---\n".join(hits[-3:])
-
-
-SUBTASK_MAX_TURNS = 8  # 每个子任务最多 LLM 回合数（内部 ReAct，Agent 可 finalize 提前结束）
-SUBTASK_TIMEOUT_SECONDS = 600  # 每个后台子任务总超时（10 分钟）
-ZERO_GAIN_REPLAN_TURNS = 3  # 连续零信息增量轮数触发 fork_analyze（对齐指南：3 轮即破局分析）
-REPLAN_MAX = 1           # 破局链收敛为两级（R1）：只 fork_analyze 复盘一次，再 3 轮零增量即机械换题
-COACH_AFTER_HINT_TURNS = 3  # hint 后仍零增益 3 轮触发软干预教练（默认关闭，R1 收敛）
-# R1：coach / plan-mode 软干预默认关闭（代码保留，赛后用日志对比决定是否复活）
-ENABLE_COACH = os.getenv("ENABLE_COACH", "false").lower() in ("1", "true", "yes")
-ENABLE_PLAN_MODE = os.getenv("ENABLE_PLAN_MODE", "false").lower() in ("1", "true", "yes")
-STRONG_MODEL_MAX_TURNS = 3  # 强模型（破局）每题目最多轮数，超限切回快模型
-# 单题「自救+切换模型+hint+replan」累计干预上限见 runtime.budget.MAX_STUCK_INTERVENTIONS（B4 收口）
-
-
-def _max_interventions(difficulty: str) -> int:
-    """按难度返回累计干预上限，未知难度默认 medium。"""
-    return MAX_STUCK_INTERVENTIONS.get(str(difficulty).lower(),
-                                       MAX_STUCK_INTERVENTIONS["medium"])
-
-
-def _tool_groups_for(role_name: str, desc: str) -> tuple:
-    """按题型返回初始工具组，减少无关工具干扰（配合 build_default_tools）。
-
-    原则：核心工具常驻；平台编排/VPN 始终保留；二进制/协议/Pwn 题不挂 web 组
-    （distinguish/web_search 对二进制帮助有限），其余题型挂 web 组做差分实验。
-    """
-    text = f"{role_name or ''} {desc or ''}".lower()
-    groups = ["platform", "vpn", "seccli"]  # 平台编排 + VPN + 安全 CLI（run_tool）
-    if any(k in text for k in ("二进制", "协议", "pwn", "reverse", "逆向", "f1", "f2")):
-        return tuple(groups)  # 二进制/协议题：去掉 web 组，避免差分实验/联网干扰
-    groups.append("web")       # Web/通用题：distinguish + web_search
-    return tuple(groups)
-
-
-async def _run_subtasks(ctx, pending, challenge_workdir, brief, model=None, model_settings=None, model_pool=None) -> None:
-    """后台并发调度 pending 子任务：立即创建 asyncio.Task，不阻塞主循环。
-
-    子任务用 finish_subtask 结束协议（summary/findings/flag），主 Agent 只拿到结构化结论，
-    不接触子任务的海量工具输出（上下文隔离）。结果写回主黑板（subtask:<id>）。
-    调用方（主循环）负责通过 _reap_subtasks 非阻塞收割结果。
-
-    并发配额：每题同时运行的子任务不超过 SUBTASK_MAX_CONCURRENT，超过时 pending
-    子任务留到下一轮再启动，避免拖死 harness。
-
-    三道闸门：
-    - 明确目标：sub["objective"] 必填（spawn_subtask 已校验）
-    - 独立预算：子任务携带独立 SubtaskBudget，token/turn/墙上时间任一耗尽即停
-    - 回收机制：完成/超时/预算耗尽/父任务停止时统一回收
-    """
-    from core.task_context import SubtaskBudget
-
-    running = sum(1 for j in ctx.subtask_jobs.values() if not j.done())
-    slots = max(0, SUBTASK_MAX_CONCURRENT - running)
-    if slots <= 0:
-        return
-
-    started = 0
-    for sub in pending:
-        if started >= slots:
-            break
-        if sub.get("status") != "pending":
-            continue
-        if sub.get("id") in ctx.subtask_jobs:
-            continue
-        # 第一道闸门：明确目标
-        budget: SubtaskBudget = sub.get("budget")
-        if budget is None or not budget.objective:
-            sub["status"] = "rejected"
-            sub["result"] = {"summary": "[子任务被拒绝] 缺少明确 objective", "findings": [], "flag": None}
-            continue
-        started += 1
-
-        # 第二道闸门：独立预算缺省值
-        if budget.max_tokens <= 0:
-            # 未显式指定时给固定保守默认（约 3 万 token），避免无限燃烧
-            budget.max_tokens = 30000
-        budget.max_turns = min(budget.max_turns, SUBTASK_MAX_TURNS)
-
-        sub_role = ctx.role
-        if sub.get("branch_type"):
-            try:
-                sub_role = assign_role(sub.get("branch_type", ""), sub["desc"])
-            except Exception:
-                pass
-        sub_executor = build_executor(
-            sub_role, ctx.charter, brief,
-            field_notes=_load_field_notes(),
-            model=model, model_settings=model_settings,
-            is_subtask=True)
-
-        async def _run_one(sub=sub, sub_executor=sub_executor, sub_role=sub_role, budget=budget):
-            sub["status"] = "running"
-            # 独立 context：深拷贝避免主子任务状态污染
-            sub_ctx = TaskContext(
-                workdir=challenge_workdir,
-                disclosed_skills=list(ctx.disclosed_skills),
-                task=ctx.task,
-                charter=ctx.charter,
-                role=sub_role,
-            )
-            sub_ctx.current_code = ctx.current_code
-            sub_ctx.submitted = set(ctx.submitted)
-            sub_ctx.correct_flags = list(ctx.correct_flags)
-            sub_ctx.blackboard = copy.deepcopy(ctx.blackboard)
-            # R2：子任务标记 + 启动快照 keys——set 新 key（不在快照）时共享情报给主线
-            sub_ctx.is_subtask = True
-            sub_ctx._snapshot_keys = set(ctx.blackboard.keys())
-            sub_ctx.token_usage = dict(ctx.token_usage)
-            sub_ctx.enabled_tools = set(ctx.enabled_tools) if ctx.enabled_tools is not None else None
-            sub_ctx.phase = "recon"  # 子任务从 recon 起跑（R3：避免继承父阶段语义错位）
-            sub_ctx.plan = ctx.plan
-            sub_ctx.wallclock_budget = budget.timeout_seconds
-            sub_session = SQLiteSession(session_id=f"sub_{sub['id']}",
-                                        db_path=str(challenge_workdir / f"sub_{sub['id']}.sqlite"))
-            sub_hooks = EventStreamHooks(challenge_workdir, f"sub_{sub['id']}")
-            try:
-                await asyncio.wait_for(
-                    run_with_model_fallback(
-                        sub_executor,
-                        input=(f"子任务目标：{budget.objective}\n"
-                               f"任务描述：{sub['desc']}\n"
-                               f"独立完成这个子任务，完成后调用 finish_subtask 提交结构化结论。"),
-                        context=sub_ctx, hooks=sub_hooks, session=sub_session,
-                        max_turns=budget.max_turns,
-                        model_pool=model_pool,
-                        agent_name="Subtask"),
-                    timeout=budget.timeout_seconds)
-                payload = sub_ctx.final_payload or {}
-                if sub_ctx.finalized and payload.get("summary"):
-                    sub["result"] = {
-                        "summary": payload.get("summary", ""),
-                        "findings": payload.get("findings", []),
-                        "flag": payload.get("flag"),
-                    }
-                    budget.reason = "completed"
-                else:
-                    sub["result"] = {
-                        "summary": "[未走结束协议] " + str(payload.get("summary", ""))[:200],
-                        "findings": [], "flag": None,
-                    }
-                    budget.reason = "unfinalized"
-            except asyncio.TimeoutError:
-                sub["result"] = {"summary": "[子任务超时] 达到总时间上限",
-                                 "findings": [], "flag": None}
-                budget.reason = "timeout"
-            except MaxTurnsExceeded:
-                sub["result"] = {"summary": "[未走结束协议] 子任务达到回合上限",
-                                 "findings": [], "flag": None}
-                budget.reason = "turn_budget"
-            except asyncio.CancelledError:
-                sub["result"] = {"summary": "[子任务取消] 被主循环取消",
-                                 "findings": [], "flag": None}
-                budget.reason = "cancelled"
-                raise
-            except Exception as e:
-                sub["result"] = {"summary": f"[子任务异常] {str(e)[:200]}",
-                                 "findings": [], "flag": None}
-                budget.reason = f"exception:{type(e).__name__}"
-            finally:
-                sub["status"] = "done"
-                # 把子任务结果合并回主黑板，但不覆盖主任务已有的 verified 条目
-                key = f"subtask:{sub['id']}"
-                if key not in ctx.blackboard:
-                    ctx.blackboard[key] = {
-                        "value": json.dumps(sub["result"], ensure_ascii=False),
-                        "status": "done", "ts": int(time.time()),
-                        "verified": True,
-                    }
-                # 合并子任务 token 用量到父任务（原子累加）
-                for k in ("input", "output", "total", "requests"):
-                    ctx.token_usage[k] = ctx.token_usage.get(k, 0) + sub_ctx.token_usage.get(k, 0)
-                # R4：子任务 flag 不 append 进父 correct_flags——flag 计数以平台
-                # correct_flag_count 为唯一真相源（_is_completed 已按平台复核），
-                # 避免双轨记账与平台不一致；子任务 flag 仍可见于黑板 subtask:<id>。
-                # 关闭子任务 session（修补 6：连接/句柄生命周期闭环）
-                try:
-                    sub_session.close()
-                except Exception as e:
-                    log_warn(f"[degraded] 子任务 {sub['id']} 关闭 session 失败：{str(e)[:120]}")
-
-        # 立即后台启动，不等主循环
-        ctx.subtask_jobs[sub["id"]] = asyncio.create_task(_run_one())
-        log_info(f"[subtask] 单题 {ctx.current_code} 启动后台子任务 {sub['id']} "
-                 f"（{sub.get('branch_type') or sub_role['role']}）objective={budget.objective[:60]}")
-
-
-def _reap_subtasks(ctx) -> str:
-    """非阻塞收割已完成的子任务，返回结果摘要供主循环注入下一轮 input。"""
-    notes = []
-    for sid, job in list(ctx.subtask_jobs.items()):
-        if not job.done():
-            continue
-        del ctx.subtask_jobs[sid]
-        sub = next((s for s in ctx.subtasks if s.get("id") == sid), None)
-        if sub is None:
-            continue
-        r = sub.get("result", {})
-        flag = r.get("flag")
-        line = (f"[分支回收] {sid}：{r.get('summary', '')[:150]}"
-                + (f"｜flag={flag}" if flag else ""))
-        notes.append(line)
-    return "\n".join(notes)
-
-
-async def _cancel_all_subtasks(ctx, reason: str = "parent_stop") -> None:
-    """取消并等待所有后台子任务，防止主任务退出后子任务继续消耗资源。"""
-    if not ctx.subtask_jobs:
-        return
-    tasks = list(ctx.subtask_jobs.values())
-    for job in tasks:
-        if not job.done():
-            job.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
-    # 记录被取消的子任务终态
-    for sid, job in list(ctx.subtask_jobs.items()):
-        sub = next((s for s in ctx.subtasks if s.get("id") == sid), None)
-        budget = sub.get("budget") if sub else None
-        if sub and not sub.get("result"):
-            sub["status"] = "done"
-            sub["result"] = {"summary": f"[子任务取消] {reason}",
-                             "findings": [], "flag": None}
-            if budget:
-                budget.reason = reason
-        if job.cancelled() and budget:
-            budget.cancelled = True
-    ctx.subtask_jobs.clear()
-    log_info(f"[subtask] 单题 {ctx.current_code} 已取消 {len(tasks)} 个后台子任务：{reason}")
-
-
-def _load_blackboard(workdir: Path) -> dict:
-    """从 workdir/blackboard.json 加载黑板（存在则返回，否则空 dict）。
-
-    挂起/重试同一题时回注上次进度，避免重复已做/已排除的结论。
-    """
-    p = workdir / "blackboard.json"
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-async def _replan(ctx, task: str, charter: str, role: dict, hooks) -> str:
-    """执行中计划修正：调用 fork_analyst 做一次性强模型分析，结果只写 next_directive。
-
-    不再调用常驻 Strategist；fork_analyst 只读取近期轨迹与黑板，产出破局建议。
-    """
-    events = BUS.history(hooks.task_id)
-    role_brief = (
-        f"任务：{task}\n"
-        f"角色：{role.get('role', 'unknown')}\n"
-        f"宪章：{charter[:500]}"
-    )
-    pool = global_model_pool
-    try:
-        strong = pool.switch_to_role("strong") if pool else None
-        model = strong.model if strong else None
-        result = await fork_analyze(
-            events=events,
-            blackboard=ctx.blackboard,
-            role_brief=role_brief,
-            model=model,
-            model_pool=pool,
-        )
-        directive = update_blackboard_with_fork(ctx.blackboard, result)
-        log_info(f"[fork-analyst] 单题 {hooks.task_id} 产出 next_directive：{directive[:80]}")
-        return directive
-    except Exception as e:
-        log_warn(f"[fork-analyst] 调用失败：{e}；回退到静态提示")
-        return "继续探索新的可验证方向，优先使用已解锁技能做最小验证。"
-
-
-async def _coach(ctx, brief, hooks) -> str:
-    """软干预教练：直接返回 blackboard 中 fork_analyst 的 next_directive，避免常驻 Coach Agent。"""
-    fork_entry = ctx.blackboard.get("next_directive")
-    if fork_entry and isinstance(fork_entry, dict) and fork_entry.get("value"):
-        return str(fork_entry["value"])
-    return "当前无明确教练建议。请基于黑板事实，选择一个未验证方向做最小动作并产出证据。"
-
-
-async def _run_single_challenge(code: str, desc: str, addrs: list, charter: str,
-                                task: str, global_plan: str, hooks, workdir: Path,
-                                client: PlatformClient, difficulty: str = "",
-                                flag_total: int = 1, flag_done: int = 0,
-                                model_pool: Optional[ModelPool] = None) -> str:
-    """对一道题执行完整渗透循环，返回 outcome：solved / stuck / fatal。
-
-    单题独立 context + 独立 session；停滞时机械看 hint / 换题（调度器决策），
-    选题/换题/看 hint 不由 LLM 自觉——这是报告 P0-4 的核心修复。
-    """
-    # 题级独立工作区：3 槽并发下每题独立 events/session/artifacts，避免交错
-    challenge_workdir = workdir / f"worker_{code}"
-    challenge_workdir.mkdir(parents=True, exist_ok=True)
-    challenge_hooks = EventStreamHooks(challenge_workdir, code)
-
-    role = assign_role(code, desc)  # 题级派任（P0-5：按 unique_code 前缀 + 描述）
-    log_info(f"== 单题 {code}：派任 {role['role']} ==")
-    log_info(f"单题 {code} 目标：{desc.strip()[:150]}，flag 目标 {flag_total} 面（已拿 {flag_done}）")
-    ctx = TaskContext(workdir=challenge_workdir, disclosed_skills=list(role["playbooks"]),
-                      task=task, charter=charter, role=role)
-    ctx.blackboard = _load_blackboard(challenge_workdir)  # 回注上次尝试进度（挂起/重试）
-    # 按题型动态裁剪初始工具集：减少无关工具对 Agent 注意力的干扰
-    ctx.enabled_tools = build_default_tools(groups=_tool_groups_for(role.get("role", ""), desc))
-    # 调度器独占编排工具：单题循环里 Agent 不得自己选题/启动/关闭容器，避免破坏调度器追踪
-    for t in ("check_vpn", "list_challenges", "start_challenge", "close_challenge"):
-        ctx.enabled_tools.discard(t)
-    ctx.current_code = code
-    ctx.plan = global_plan
-    sol_hint = load_solution_hint(code, desc)
-    brief = (f"# 任务书\n{task}\n\n"
-             f"# 当前题目（只打这道题）\n"
-             f"- unique_code: {code}\n- 描述: {desc}\n- 容器地址: {addrs}\n"
-             f"- flag 进度：已拿 {flag_done}/{flag_total} 面"
-             f"（多 flag 题须逐面提交；系统提交回执会告知剩余面数）\n\n")
-    if sol_hint:
-        brief += (f"# 历史成功解法参考（同类题，可优先尝试）\n{sol_hint}\n\n")
-    brief += ("选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
-              "不要自己调用 list_challenges / start_challenge / close_challenge。")
-    # 模型灾备池：执行者优先 FAST_MODEL（deepseek-v4-flash），glm 兜底。
-    # 传入 model_pool 表示由外层统一分配（全局共享，避免每题重建）；
-    # 未传入则兜底创建独立池（兼容单测/旧调用）。
-    if model_pool is None:
-        model_pool = ModelPool(preferred_name=FAST_MODEL_NAME)
-
-    # 首轮机械预侦察：在 LLM 介入前先收集常见入口/敏感路径/状态码，省一轮 LLM 回合
-    recon0 = ""
-    try:
-        recon0 = await first_strike(addrs)
-        log_info(f"[first-strike] 单题 {code} 预侦察完成：{len(recon0)} 字符")
-    except Exception as e:
-        log_warn(f"[first-strike] 单题 {code} 预侦察失败：{str(e)[:120]}")
-
-    # 缓存命中率观测：本题是否有现成打法/历史笔记可复用
-    has_template = bool(sol_hint)
-    has_notes = bool(load_notes_for(code))
-    has_role_playbooks = bool(role.get("playbooks"))
-    if has_template or has_notes or has_role_playbooks:
-        ctx.cache_hits += 1
-        ctx.cache_notes.append(
-            f"hit: code={code} template={has_template} notes={has_notes} playbooks={has_role_playbooks}")
-    else:
-        ctx.cache_misses += 1
-        ctx.cache_notes.append(f"miss: code={code} 无历史模板/笔记/角色打法")
-
-    field_notes = load_notes_for(code) or _load_field_notes()
-    # Agent Preset 运行时组合：按当前阶段选择默认 preset，强化阶段纪律
-    initial_preset = "recon_focused" if ctx.phase == "recon" else "default"
-    executor = build_executor(role, charter, brief,
-                              field_notes=field_notes,
-                              model=model_pool.current.model,
-                              preset=initial_preset)
-    log_info(f"单题 {code} 模型池：{model_pool}，起始模型 {model_pool.current.name}，preset={initial_preset}")
-    session = SQLiteSession(session_id=f"challenge_{code}",
-                            db_path=str(SESSIONS_DIR / f"challenge_{code}.sqlite"))
-
-    turn_count = 0
-    hint_used = False
-    coach_used = False  # 软干预教练：每题目仅触发 1 次
-    intervention_count = 0  # 累计干预次数：自救+切换模型+hint+coach+replan
-    stuck_detector = StuckDetector()  # 模型惰性检测器（多模型切换 / 单模型自救）
-    outcome = "stopped"
-    death_reason = ""  # 六种死法终态标签，用于赛后分析
-    # 成本治理：本尝试的 token/时钟起点 + 换脑/挂起档
-    cost_limit = COST_LIMITS.get(str(difficulty).lower(), COST_LIMITS.get("medium", {}))
-    switch_tokens = cost_limit.get("switch_tokens", 0)
-    suspend_tokens = cost_limit.get("suspend_tokens", 0)
-    cost_base_tokens = ctx.token_usage.get("total", 0)
-    suspend_time_base = time.monotonic()
-    switched = False
-    suspend_tokens_map = {d: v.get("suspend_tokens", 0)
-                          for d, v in COST_LIMITS.items()}
-    db = db_mod.get_db()
-    if db is not None:
-        db.task_started(code, desc)  # 登记题目生命周期（监控页任务列表/状态）
-
-    # 单题墙上时间预算：按难度分档硬顶（runtime.budget.WALLCLOCK_BUDGET，B4 收口）
-    ctx.wallclock_budget = WALLCLOCK_BUDGET.get(str(difficulty).lower(), 15 * 60)
-    ctx.challenge_start_ts = time.monotonic()
-    ctx.wrong_submit_count = 0
-    ctx.hint_grace_active = False
-
-    next_input = f"开始攻击本题容器：{addrs}。"
-    if recon0:
-        next_input += f"\n\n系统已完成首轮机械预侦察，直接分析以下结果制定攻击路径：\n{recon0}"
-    else:
-        next_input += "先做信息收集，识别技术栈与入口。"
-    try:
-        async def _pre_step() -> tuple:
-            """每轮 step 前：检查硬性终止条件、重置 turn 状态、阶段/模型升级。
-
-            返回 (break_flag, death_reason)。break_flag=True 时外层应终止单题循环。
-            """
-            nonlocal switched
-
-            # ── 静态 prompt 字节级断言（缓存防线关门） ─────────────────────
-            # build_executor 时计算的 hash 必须全赛程不变；变了说明静态模板
-            # 被每轮变量污染，前缀缓存已断，必须立刻暴露而不是默默烧钱。
-            _src_now = getattr(executor, "static_prompt_src", None)
-            _hash_expect = getattr(executor, "static_prompt_hash", None)
-            if _src_now is not None and _hash_expect is not None:
-                _hash_now = _prompt_hash(_src_now + "\n" + ",".join(
-                    sorted(getattr(t, "name", "") for t in executor.tools)))
-                if _hash_now != _hash_expect:
-                    log_error(f"[cache-guard] 单题 {code} 静态 prompt hash 漂移："
-                              f"{_hash_expect} -> {_hash_now}，前缀缓存已断！"
-                              f"检查是否有人往静态模板拼了每轮变量。")
-                    ctx.cache_guard_violations = getattr(
-                        ctx, "cache_guard_violations", 0) + 1
-            # ── 断言结束 ─────────────────────────────────────────────────
-
-            # 墙上时钟硬顶：单题超时强制 stuck，释放槽位
-            elapsed = time.monotonic() - ctx.challenge_start_ts
-            if elapsed >= ctx.wallclock_budget:
-                if ctx.zero_gain_turns < 5 and not getattr(ctx, "_wallclock_extended", False):
-                    ctx._wallclock_extended = True
-                    ctx.wallclock_budget += ctx.wallclock_budget // 2
-                    log_info(f"[extend] 单题 {code} 有进展，墙钟延长半档至 {ctx.wallclock_budget}s")
-                else:
-                    log_warn(f"[skip] 单题 {code} 墙上时间 {elapsed:.0f}s 超过预算 {ctx.wallclock_budget}s，机械换题")
-                    return True, "wallclock_timeout"
-
-            # 错误提交熔断
-            if ctx.wrong_submit_count >= 6 and ctx.zero_gain_turns >= 3:
-                log_warn(f"[skip] 单题 {code} 连续 {ctx.wrong_submit_count} 次错交且无新证据，机械换题")
-                return True, "wrong_submit_fuse"
-
-            # 成本治理：token / 时钟挂起档
-            used = ctx.token_usage.get("total", 0) - cost_base_tokens
-            if (switch_tokens and not switched and used >= switch_tokens
-                    and model_pool.has_alternative):
-                entry = model_pool.next(reason="token_threshold")
-                if entry is not None:
-                    old = getattr(executor.model, "model", "?")
-                    executor.model = entry.model
-                    switched = True
-                    log_warn(f"[switch] 单题 {code} token {used} 到换脑档，{old} -> {entry.name}")
-            if suspend_tokens and used >= suspend_tokens:
-                return True, "token_suspend"
-            if SUSPEND_SECONDS and time.monotonic() - suspend_time_base >= SUSPEND_SECONDS:
-                return True, "time_suspend"
-
-            # turn 状态清零
-            ctx.turn_tool_count = 0
-            ctx.turn_gain = False
-            ctx.turn_net_fail = False
-
-            # 攻坚换强脑：进入 exploit 阶段后切换到 strong 模型，并开启并行工具调用
-            if (ctx.phase == "exploit" and not getattr(ctx, "_brain_upgraded", False)
-                    and model_pool is not None):
-                strong_entry = model_pool.switch_to_role("strong")
-                if strong_entry is not None:
-                    old = getattr(executor.model, "model", "?")
-                    executor.model = strong_entry.model
-                    executor.model_settings.parallel_tool_calls = True
-                    ctx._brain_upgraded = True
-                    ctx._on_strong_model = True
-                    ctx.strong_model_uses = 0
-                    log_warn(f"[brain-up] 单题 {code} 进入 exploit 阶段，"
-                             f"{old} -> {strong_entry.name}，并行工具调用已开启")
-            # 强模型轮数上限：超过 STRONG_MODEL_MAX_TURNS 轮后切回快模型
-            if getattr(ctx, "_on_strong_model", False) and model_pool is not None:
-                if ctx.strong_model_uses >= STRONG_MODEL_MAX_TURNS:
-                    fast_entry = model_pool.switch_to_role("fast")
-                    if fast_entry is not None:
-                        old = getattr(executor.model, "model", "?")
-                        executor.model = fast_entry.model
-                        ctx._on_strong_model = False
-                        log_warn(f"[brain-down] 单题 {code} 强模型已用 {ctx.strong_model_uses} 轮"
-                                 f"（上限 {STRONG_MODEL_MAX_TURNS}），{old} -> {fast_entry.name}")
-            return False, ""
-
-        async def _step() -> bool:
-            """执行一次 Agent step（Runner.run 单轮）。
-
-            处理模型失败 fallback；返回 False 表示需要 continue 外层循环。
-            """
-            # 强模型轮数计数（含本轮）
-            if getattr(ctx, "_on_strong_model", False):
-                ctx.strong_model_uses += 1
-            # R2：每轮合并子任务共享情报（运行期可见，不重复子任务已排除的方向）
-            _merge_subtask_intel(ctx, challenge_workdir)
-            ledger_text = _ledger_failed_summary(ctx) if ctx.phase == "exploit" else ""
-            dynamic_ctx = _build_dynamic_context(
-                RunContextWrapper(context=ctx), charter, ctx.plan or global_plan,
-                field_notes, role_boost=getattr(ctx, "role_boost", ""),
-                ledger_text=ledger_text)
-            full_input = f"{EXECUTOR_DYNAMIC_PREFIX}{dynamic_ctx}\n\n{next_input}"
-            try:
-                await Runner.run(executor, input=full_input, context=ctx,
-                                 hooks=challenge_hooks, session=session, max_turns=1)
-            except MaxTurnsExceeded:
-                pass
-            except Exception as exc:
-                if is_model_failure(exc):
-                    current_name = getattr(executor.model, "model", "?")
-                    model_pool.mark_failed(current_name,
-                                           permanent=is_permanent_model_failure(exc))
-                    entry = model_pool.next(current_name=current_name,
-                                            reason=f"model_failure:{type(exc).__name__}")
-                    if entry is None:
-                        log_error(f"[model-exhausted] 单题 {code} 所有模型均不可用：{exc}")
-                        nonlocal outcome, death_reason
-                        outcome = "stuck"
-                        death_reason = "model_exhausted"
-                        return False  # 外层 break
-                    executor.model = entry.model
-                    log_warn(f"[model-fallback] 单题 {code} {current_name} 失败，"
-                             f"切换到 {entry.name} 继续同一会话：{str(exc)[:300]}")
-                    return False  # 同一输入重试，continue
-                raise
-            return True
-
-        async def _post_step() -> tuple:
-            """每轮 step 后：更新状态、触发干预、调度子任务/压缩/闭环。
-
-            返回 (break_flag, next_input, death_reason)。
-            """
-            nonlocal intervention_count, hint_used, coach_used
-
-            if ctx.turn_gain:
-                ctx.zero_gain_turns = 0
-            else:
-                ctx.zero_gain_turns += 1
-
-            if ctx.turn_net_fail:
-                ctx.net_fail_turns += 1
-            else:
-                ctx.net_fail_turns = 0
-
-            # 致命错误 / 单题完成 / 空转 / 网络不可达
-            if ctx.fatal:
-                return True, "", "fatal_error"
-            if ctx.finalized:
-                return True, "", "solved"
-            if ctx.turn_tool_count == 0:
-                ctx.empty_turns += 1
-                if ctx.empty_turns >= SINGLE_EMPTY_TURNS:
-                    log_warn(f"[skip] 单题 {code} 连续 {ctx.empty_turns} 轮空转，机械换题")
-                    return True, "", "empty_idle"
-            else:
-                ctx.empty_turns = 0
-            if ctx.net_fail_turns >= 2:
-                log_warn(f"[skip] 单题 {code} 连续 {ctx.net_fail_turns} 次网络不可达，机械换题")
-                return True, "", "network_unreachable"
-
-            # 模型惰性治理
-            stuck_action = stuck_detector.check(
-                ctx, model_pool.has_alternative,
-                current_model_name=getattr(executor.model, "model", "?"))
-            if stuck_action.action == StuckActionType.SWITCH_MODEL:
-                current_name = getattr(executor.model, "model", "?")
-                entry = model_pool.next(current_name=current_name,
-                                        reason=f"stuck:{stuck_action.reason}")
-                if entry is not None and entry.name != current_name:
-                    executor.model = entry.model
-                    log_warn(f"[model-switch] 单题 {code} {stuck_action.reason}，"
-                             f"{current_name} -> {entry.name} 接管会话")
-                    ctx.zero_gain_turns = 0
-                    intervention_count += 1
-                    return False, stuck_mod.switch_model_prompt(ctx, current_name, entry.name), ""
-            elif stuck_action.action == StuckActionType.SELF_RESCUE:
-                log_warn(f"[self-rescue] 单题 {code} {stuck_action.reason}"
-                         f"，解锁技能 {stuck_action.extra_skills}，阶段重置")
-                summary = await compact_session(
-                    ctx, session, getattr(executor, "model", None),
-                    model_pool=model_pool)
-                if summary:
-                    log_info(f"[self-rescue] 单题 {code} 历史压缩成功")
-                else:
-                    log_warn(f"[self-rescue] 单题 {code} 历史压缩失败或跳过")
-                ctx.zero_gain_turns = 0
-                intervention_count += 1
-                return False, stuck_action.next_input, ""
-
-            # 单题停滞机械决策
-            action = decide_stuck_action(
-                ctx.zero_gain_turns, hint_used, difficulty,
-                task_text=ctx.task + " " + json.dumps(ctx.blackboard, ensure_ascii=False))
-            if action not in ("hint", "skip"):
-                failed_paths = sum(
-                    1 for v in ctx.blackboard.values()
-                    if isinstance(v, dict) and v.get("status") == "failed")
-                if should_pull_hint_by_budget(
-                        ctx.token_usage.get("total", 0), failed_paths,
-                        difficulty, hint_used, HINT_BUDGET_RATIO,
-                        suspend_tokens_map):
-                    action = "hint"
-            if action == "hint":
-                try:
-                    hint = await asyncio.to_thread(client.get_hint, code)
-                except Exception as e:
-                    hint = f"（获取提示失败：{str(e)[:120]}）"
-                hint_used = True
-                ctx.zero_gain_turns = 0
-                ctx.hint_grace_active = True
-                intervention_count += 1
-                ctx.blackboard["hint_directive"] = {
-                    "value": hint, "status": "confirmed", "ts": int(time.time()),
-                    "verified": True, "evidence": "platform_hint",
-                }
-                log_info(f"  [hint] 单题 {code} 看提示（已写入 hint_directive）")
-                return False, (
-                    f"【系统法令】平台提示已写入黑板 hint_directive，具有最高优先级。\n"
-                    f"原文：{hint}\n\n"
-                    f"接下来 {HINT_GRACE_TURNS} 轮你的每个动作必须直接验证该提示中的断言，"
-                    f"与提示无关的侦察/扫描将被系统判为零增量。"), ""
-
-            if hint_used and ctx.zero_gain_turns >= HINT_GRACE_TURNS:
-                log_warn(f"[hint-stale] 单题 {code} hint 后 {HINT_GRACE_TURNS} 轮无转化，机械换题")
-                return True, "", "hint_stale"
-            if action == "skip":
-                failed_paths = sum(
-                    1 for v in ctx.blackboard.values()
-                    if isinstance(v, dict) and v.get("status") == "failed")
-                if failed_paths == 0:
-                    log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮且无任何失败方向可探索，证据枯竭判死")
-                    return True, "", "evidence_exhausted_no_direction"
-                else:
-                    log_warn(f"[skip] 单题 {code} 已停滞 {ctx.zero_gain_turns} 轮，机械换题")
-                    return True, "", "stuck_with_failed_paths"
-
-            # 软干预教练（R1：默认关闭，代码保留；ENABLE_COACH=true 复活）
-            if (ENABLE_COACH and hint_used
-                    and ctx.zero_gain_turns >= COACH_AFTER_HINT_TURNS
-                    and not coach_used):
-                coach_used = True
-                advice = await _coach(ctx, brief, challenge_hooks)
-                ctx.blackboard["coach_advice"] = {
-                    "value": advice, "status": "done", "ts": int(time.time()),
-                    "verified": False,
-                }
-                log_info(f"[coach] 单题 {code} hint 后仍停滞 {ctx.zero_gain_turns} 轮，教练给方向")
-                intervention_count += 1
-                return False, (f"本题卡住。教练建议（可尝试的新方向）：\n{advice}\n\n"
-                               f"请结合建议继续尝试，产出新证据。"), ""
-
-            # 破局链两级熔断（R1）：3 轮零增量 → fork_analyze 复盘一次（写 next_directive）；
-            # 复盘后 3 轮仍零增量 → 直接机械换题（不再 coach / plan-mode 兜底）
-            if ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS:
-                if ctx.replan_count < REPLAN_MAX:
-                    ctx.plan = await _replan(ctx, brief, charter, role, hooks)
-                    ctx.replan_count += 1
-                    ctx.zero_gain_turns = 0
-                    intervention_count += 1
-                    return False, "作战计划已更新，按新计划继续攻击本题。", ""
-                log_warn(f"[skip] 单题 {code} fork_analyze 后 {ZERO_GAIN_REPLAN_TURNS} 轮仍零增量，机械换题")
-                return True, "", "directive_no_progress"
-
-            # 累计干预上限
-            if intervention_count >= _max_interventions(difficulty):
-                log_warn(f"[skip] 单题 {code} 累计干预 {intervention_count} 次"
-                         f"（难度 {difficulty or 'unknown'} 上限 {_max_interventions(difficulty)}）仍无进展，机械换题")
-                return True, "", "intervention_exhausted"
-
-            # Plan Mode 触发/退出（R1：默认关闭，代码保留；ENABLE_PLAN_MODE=true 复活）
-            if (ENABLE_PLAN_MODE and ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS
-                    and ctx.plan_mode_history == 0
-                    and not ctx.plan_mode):
-                ctx.plan_mode = True
-                ctx.plan_mode_history = 0
-                log_info(f"[plan-mode] 单题 {code} 进入 PLAN MODE，先输出可验证计划")
-                ctx.zero_gain_turns = 0
-                intervention_count += 1
-                return False, "请基于当前已知事实，输出/修正本题的作战计划。禁止调用工具。", ""
-
-            if ENABLE_PLAN_MODE and ctx.plan_mode:
-                ctx.plan_mode = False
-                ctx.plan_mode_history += 1
-                log_info(f"[plan-mode] 单题 {code} 退出 PLAN MODE")
-                return False, "PLAN MODE 已结束。请严格按照刚才的计划执行，继续攻击本题。", ""
-
-            # 子任务调度与收割
-            pending = [s for s in ctx.subtasks if s["status"] == "pending"]
-            if pending:
-                await _run_subtasks(ctx, pending, challenge_workdir, brief,
-                                    model=executor.model,
-                                    model_settings=executor.model_settings,
-                                    model_pool=model_pool)
-            reap = _reap_subtasks(ctx)
-            if reap:
-                ctx.turn_gain = True
-                return False, (f"【分支结果】以下后台子任务已返回，请立即处理：\n\n{reap}\n\n"
-                               f"继续攻击本题：调用工具产出新证据增量，或调用 finalize 提交本题结论。"), ""
-
-            # 历史压缩
-            if await compact_if_needed(session, ctx, agent=executor):
-                log_info("[compact] 单题历史已压缩")
-
-            # 关键证据自动闭环
-            close_notes = [n for n in ctx.notes
-                           if n.startswith("[闭环]") or n.startswith("已确认")
-                           or n.startswith("已发现")]
-            if close_notes:
-                ctx.notes = [n for n in ctx.notes if n not in close_notes]
-                ctx.zero_gain_turns = 0
-                return False, ("系统检测到可利用的关键证据，请立即按以下指令执行（不要继续侦察）：\n\n"
-                               + "\n\n".join(close_notes)), ""
-
-            return False, "继续攻击本题：调用工具产出新证据增量，或调用 finalize 提交本题结论。", ""
-
-        while True:
-            turn_count += 1
-            ctx.turn_count = turn_count
-            should_break, dr = await _pre_step()
-            if should_break:
-                outcome = "stuck" if dr != "solved" else "solved"
-                death_reason = dr
-                break
-            step_continue = await _step()
-            if not step_continue:
-                if death_reason == "model_exhausted":
-                    break
-                continue
-            should_break, next_input, death_reason = await _post_step()
-            if should_break:
-                if death_reason == "solved":
-                    outcome = "solved"
-                else:
-                    outcome = "stuck"
-                break
-    finally:
-        # 第三道闸门：统一回收所有后台子任务
-        await _cancel_all_subtasks(ctx, reason="parent_finished")
-        # 冲刷事件缓冲，保证 events.jsonl 完整落盘（证据留痕）
-        try:
-            _flush_emit_buffer(str(challenge_workdir / "events.jsonl"))
-        except Exception as e:
-            ctx.silent_failures += 1
-            log_warn(f"[degraded] 单题 {code} 冲刷事件缓冲失败：{str(e)[:120]}")
-        # 清理单题 session 文件，避免堆积（保留 events/artifacts 作为证据）
-        try:
-            (SESSIONS_DIR / f"challenge_{code}.sqlite").unlink(missing_ok=True)
-        except Exception as e:
-            ctx.silent_failures += 1
-            log_warn(f"[degraded] 单题 {code} 清理 session 文件失败：{str(e)[:120]}")
-        # 关闭 SQLiteSession（修补 6：连接/句柄生命周期闭环）
-        try:
-            session.close()
-        except Exception as e:
-            ctx.silent_failures += 1
-            log_warn(f"[degraded] 单题 {code} 关闭 session 失败：{str(e)[:120]}")
-    answer = ""
-    if outcome == "solved" and ctx.final_payload:
-        answer = str(ctx.final_payload.get("findings", ""))[:500]
-    _append_mechanical_note(code, outcome, ctx)  # 题级机械沉淀（零 LLM，按题写档案）
-    # 写入缓存命中率到 field notes（赛后分析用）
-    try:
-        with FIELD_NOTES_FILE.open("a", encoding="utf-8") as f:
-            f.write(f"- cache_hits={ctx.cache_hits} cache_misses={ctx.cache_misses}\n")
-            f.write(f"- cache_guard_violations="
-                    f"{getattr(ctx, 'cache_guard_violations', 0)}\n")
-            _cr = ctx.token_usage.get("cache_read", 0)
-            _cw = ctx.token_usage.get("cache_write", 0)
-            _rate = _cr / (_cr + _cw) if (_cr + _cw) else 0
-            f.write(f"- prefix_hit_rate={_rate:.1%} (read={_cr} write={_cw})\n")
-            for note in ctx.cache_notes[-5:]:
-                f.write(f"  {note}\n")
-    except Exception:
-        pass
-    if outcome == "solved":
-        append_solution_template(code, desc, ctx)  # 正向解法模板沉淀（同类题复用）
-    # 六种死法统一日志：便于赛后统计每种死因占比
-    if death_reason:
-        log_warn(f"[death] 单题 {code} 终态={outcome} 死因={death_reason} "
-                 f"轮次={turn_count} token={ctx.token_usage.get('total', 0)}")
-    if db is not None:
-        db.task_finished(code, outcome, answer)  # 登记题目终态（监控页状态/结论）
-    # 成本报告：单题 token 明细 + 缓存命中率 + 估算成本，供赛后复盘
-    try:
-        write_cost_report(challenge_workdir, code, outcome, ctx, death_reason)
-    except Exception:
-        pass
-    # 轨迹导出：事件总线全量落盘 trajectory_<code>.jsonl（append-only 回放用）
-    try:
-        export_trajectory(challenge_workdir, code, outcome, ctx)
-    except Exception:
-        pass
-    return outcome
-
 
 async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict:
+    """跑分任务总入口：立法 → 调度器主循环 → 终局重扫 → 报告收尾。
+
+    主循环结构（while True + _run_one + _endgame_sweep + 最终 return）被
+    tests/test_core.py 的 AST 测试锁定，不得把主循环搬出本函数。
+    """
     _init_observability()  # 事件总线 → SQLite 落库（只初始化一次）
     log_info("===== 跑分任务开始 =====")
     log_info(
@@ -958,7 +94,6 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         f"平台 {'已配置' if BENCHMARK_BASE_URL and BENCHMARK_TOKEN else '未配置'}，"
         f"VPN {'已配置' if VPN_CONFIG else '未配置'}，resume={resume}"
     )
-    # 任务与系统能力摘要：启动期一眼确认「任务是什么、加载了什么、具备哪些能力」
     log_info(f"任务摘要：{task.strip()[:200]}")
     skills = load_skills()
     log_info(f"技能库加载：{len(skills)} 个技能（{', '.join(sorted(skills))[:300]}）")
@@ -969,11 +104,9 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     hooks = EventStreamHooks(workdir, "generic")
 
     # 外层 Agent 全局模型池（与单题 executor 内部模型池隔离，互不污染）；
-    # 主模型 glm 优先，deepseek（flash/pro）仅作灾备兜底。
-    global global_model_pool
-    global_model_pool = ModelPool()
-
-    log_info(f"== 模型池就绪：{global_model_pool} ==")
+    # 主模型 glm 优先，deepseek（flash/pro）仅作灾备兜底。句柄寄宿 harness/runner/pool.py。
+    set_global_model_pool(ModelPool())
+    log_info(f"== 模型池就绪：{get_global_model_pool()} ==")
     # 注意：外层 Agent 一律工厂化按需构建（build_strategist/build_reporter），
     # 不再有模块级可变单例（A2），此处无需同步模型。
 
@@ -986,67 +119,12 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     base_role = assign_role(role_hint, task)
     log_info(f"== 全局角色提示：{base_role['role']} ==")
 
-    # ① 战略家·立法与规划（全局一次；合并管理者 + 规划师，减少一轮 LLM 调用）
-    # 立法幂等：同任务已有缓存宪章/计划则复用，避免重跑强模型（resume/重启场景）
-    log_info("== 战略家：写使命宪章与作战计划 ==")
-    set_status(workdir, "legislate", "running")
-    _task_hash = hashlib.sha256(task.encode("utf-8")).hexdigest()[:16]
-    _charter_cache = DATA_DIR / "mission_charter.md"
-    _charter_meta = DATA_DIR / "mission_charter.meta.json"
-    charter = ""
-    global_plan = ""
+    # ① 战略家·立法与规划（全局一次；立法幂等：同任务缓存宪章/计划则复用）
     try:
-        if _charter_cache.exists() and _charter_meta.exists():
-            meta = json.loads(_charter_meta.read_text(encoding="utf-8"))
-            if isinstance(meta, dict) and meta.get("task_hash") == _task_hash:
-                charter = _charter_cache.read_text(encoding="utf-8")
-                global_plan = str(meta.get("plan", ""))
-                log_info("== 战略家：复用已缓存宪章/计划（同任务幂等）==")
-    except Exception as e:
-        log_warn(f"[legislate] 读取宪章缓存失败，重新立法：{str(e)[:120]}")
-        charter = ""
-        global_plan = ""
-
-    if not charter:
-        combined_doc = ""
-        for attempt in range(2):
-            try:
-                combined_result = await run_with_model_fallback(
-                    build_strategist(model=global_model_pool.current.model),
-                    input=(f"用户任务：\n{task}\n\n"
-                           f"角色提示：{base_role['role']}\n"
-                           f"角色风格：{base_role.get('style', '')[:200]}\n\n"
-                           f"请一次性输出使命宪章和作战计划。"),
-                    hooks=hooks,
-                    model_pool=global_model_pool,
-                    agent_name="Strategist")
-                combined_doc = str(combined_result.final_output)
-                break
-            except Exception as e:
-                log_warn(f"[retry] 战略家立法/规划失败（{attempt + 1}/2）：{str(e)[:200]}")
-                if attempt == 1:
-                    log_error(f"== 战略家立法/规划失败：{str(e)[:200]}，无法继续 ==")
-                    set_status(workdir, "legislate", "error")
-                    return {"status": "error", "reason": f"strategist_failed: {type(e).__name__}",
-                            "results": [], "report": ""}
-                await asyncio.sleep(3)
-        # 简单拆分：宪章取「# 使命宪章」到「# 作战计划」之间的内容；计划取剩余部分
-        charter_part = combined_doc
-        plan_part = ""
-        if "# 作战计划" in combined_doc:
-            idx = combined_doc.index("# 作战计划")
-            charter_part = combined_doc[:idx]
-            plan_part = combined_doc[idx:]
-        charter = charter_part.strip()
-        global_plan = plan_part.strip() or charter
-        try:
-            save_charter(DATA_DIR / "mission_charter.md", charter)
-            (_charter_meta).write_text(
-                json.dumps({"task_hash": _task_hash, "plan": global_plan},
-                           ensure_ascii=False), encoding="utf-8")
-        except Exception as e:
-            log_warn(f"[legislate] 保存宪章缓存失败：{str(e)[:120]}")
-    set_status(workdir, "legislate", "finish")
+        charter, global_plan = await legislate_charter(task, base_role, hooks,
+                                                       workdir, DATA_DIR)
+    except StrategistFailed as e:
+        return {"status": "error", "reason": e.reason, "results": [], "report": ""}
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
     client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
@@ -1066,24 +144,23 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
 
     # 启动前不清理残留容器：依赖平台 max_active 自然淘汰，避免启动阶段
     # 浪费大量时间逐个关闭容器（参考日志 secai-20260814.log #L26-35）。
-    # 若后续出现一上来就 container_busy 导致无法 start 新题的情况，
-    # 可在此加一段异步批量 close 可用/停止状态容器的逻辑。
-    pass
 
     async def _run_one(code: str, desc: str, addrs: list, difficulty: str,
                        chal: dict, model_pool: ModelPool) -> str:
         """运行一道已 start 成功的题，返回 outcome。
 
         start 由主循环同步完成（以便立即感知 container_busy），本函数只负责跑题。
+        单题执行闭环在 harness.runner.executor.run_single_challenge（ExecutorLoop）。
         """
         set_status(workdir, "execute", "running", code=code)
-        outcome = await _run_single_challenge(
+        outcome = await run_single_challenge(
             code, desc, addrs, charter, task, global_plan, hooks, workdir,
             client, difficulty,
             flag_total=chal.get("flag_count") or 1,
             flag_done=chal.get("correct_flag_count") or 0,
             model_pool=model_pool)
         return outcome
+
     try:
         while True:
             # 全局 deadline 检查（比赛硬时限，含安全余量）
@@ -1284,74 +361,8 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         except Exception as e:
             log_warn(f"[endgame] 终局重扫异常：{str(e)[:200]}")
 
-    # ⑤ 报告者·收尾（后台异步生成，不阻塞主进程结束；5 秒内能完成则直接用）
-    set_status(workdir, "report", "running")
-
-    async def _generate_report() -> str:
-        try:
-            events_text = (workdir / "events.jsonl").read_text(encoding="utf-8")[-3000:]
-        except Exception:
-            events_text = ""
-        summary = json.dumps(results, ensure_ascii=False)[:1000]
-        prompt = (f"任务执行结束（{fatal_reason or '题目遍历完成'}）。"
-                  f"各题结果：{summary}\n\n事件流尾部：\n{events_text}")
-
-        async def _one_report() -> str:
-            rep = await run_with_model_fallback(
-                build_reporter(model=global_model_pool.current.model),
-                input=prompt,
-                hooks=hooks,
-                model_pool=global_model_pool,
-                agent_name="Reporter")
-            return str(rep.final_output)
-
-        try:
-            text = await _one_report()
-            # A5：软约束机械化——战报必须含「## 战报」与「## 死路蒸馏」两节，
-            # 缺节重试一次；仍缺节则落原文并记 [report] ERROR（赛后追责）
-            if "## 战报" not in text or "## 死路蒸馏" not in text:
-                log_warn("[report] 战报缺节（需要 ## 战报 / ## 死路蒸馏），重试一次")
-                text2 = await _one_report()
-                if "## 战报" in text2 and "## 死路蒸馏" in text2:
-                    text = text2
-                else:
-                    log_error("[report] 重试后战报仍缺节，落原文（格式纪律未机械化到位）")
-            return text
-        except Exception as e:
-            log_error(f"== 报告生成失败：{str(e)[:200]}，降级为无战报 ==")
-            return f"（战报生成失败：{str(e)[:200]}）"
-
-    report_task = asyncio.create_task(_generate_report())
-    try:
-        report_text = await asyncio.wait_for(report_task, timeout=5.0)
-    except asyncio.TimeoutError:
-        report_text = "（战报后台生成中，请查看 data/field_notes.md）"
-        log_info("[report] 战报后台生成中，未阻塞主进程结束")
-
-    # 无论是否超时，确保战报最终写入 field_notes（join 等待，避免进程退出时战报丢失）
-    async def _persist_report():
-        try:
-            final = await asyncio.wait_for(asyncio.shield(report_task), timeout=30.0)
-        except (asyncio.TimeoutError, asyncio.CancelledError):
-            final = "（战报生成超时，未写入）"
-        try:
-            with (DATA_DIR / "field_notes.md").open("a", encoding="utf-8") as f:
-                f.write(f"\n\n# generic · {time.strftime('%Y-%m-%d %H:%M')}\n{final}\n")
-        except Exception as e:
-            log_warn(f"[report] 写入 field_notes 失败：{str(e)[:120]}")
-        print("\n===== 战报 =====\n" + final)
-        set_status(workdir, "report", "finish")
-
-    try:
-        await asyncio.wait_for(_persist_report(), timeout=35.0)
-    except asyncio.TimeoutError:
-        log_warn("[report] 战报写入超时，跳过（不影响主流程）")
-
-    # 四指标看板：汇总所有 worker_*/cost_report.json → dashboard.json
-    try:
-        write_dashboard(workdir)
-    except Exception:
-        pass
+    # ⑤ 报告者·收尾（后台异步生成战报 + 落 field_notes + 四指标看板，不阻塞主进程结束）
+    report_text = await finalize_report(workdir, results, fatal_reason, hooks, DATA_DIR)
 
     log_info(f"== 跑分结果：{json.dumps(results, ensure_ascii=False)} ==")
     return {"status": "finished", "results": results, "report": report_text}
@@ -1425,7 +436,7 @@ async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
             attempts[code] = attempts.get(code, 0) + 1
             continue
         try:
-            outcome = await _run_single_challenge(
+            outcome = await run_single_challenge(
                 code, desc, addrs, charter, task, global_plan, hooks, workdir,
                 client, difficulty,
                 flag_total=chal.get("flag_count") or 1,
@@ -1456,8 +467,6 @@ async def _endgame_sweep(client: PlatformClient, model_pool: ModelPool,
         log_info(f"[endgame] 重扫结束，仍显示未完成：{still_unfinished[:20]}")
     except Exception:
         pass
-
-
 
 
 if __name__ == "__main__":
