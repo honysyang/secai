@@ -1,0 +1,121 @@
+/* 会话中栏编排：header（目标 + 连接徽章 + ThemeToggle）→ 审批卡区 →
+ * 消息流（flex:1）→ 假设队列 → 死路折叠 → 输入条。 */
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 48px;
+  flex: none;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--secai-alias-border-l1);
+}
+
+.dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.dot[data-status='running'] {
+  background: var(--secai-alias-state-business-primary);
+  animation: secai-head-pulse 1.8s ease-in-out infinite alternate;
+}
+
+.dot[data-status='awaiting_approval'] {
+  background: var(--secai-alias-state-warn-primary);
+}
+
+.dot[data-status='completed'] {
+  background: var(--secai-alias-state-success-primary);
+}
+
+.dot[data-status='failed'] {
+  background: var(--secai-alias-state-error-primary);
+}
+
+.dot[data-status='idle'],
+.dot[data-status='stopped'],
+.dot:not([data-status]) {
+  background: var(--secai-alias-label-tertiary);
+}
+
+@keyframes secai-head-pulse {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 19px;
+  color: var(--secai-alias-label-primary);
+}
+
+.sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--secai-alias-label-caption);
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.linkBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.linkBadge[data-tone='demo'] {
+  color: var(--secai-alias-state-warn-label);
+  background: var(--secai-alias-state-warn-tertiary);
+  border: 1px solid var(--secai-alias-state-warn-primary);
+}
+
+.linkBadge[data-tone='live'] {
+  color: var(--secai-alias-state-success-primary);
+  background: var(--secai-alias-state-success-tertiary);
+}
+
+.linkBadge[data-tone='offline'] {
+  color: var(--secai-alias-label-caption);
+  background: var(--secai-alias-bg-layer-2);
+}
+
+.approvals {
+  flex: none;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--secai-alias-bg-base);
+}

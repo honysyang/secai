@@ -1,22 +1,20 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './base.css'
-import { AppFrame } from './components/layout/AppFrame.tsx'
+import App from './App.tsx'
+import {
+  applyThemeMode,
+  readThemeMode,
+  resolveThemeMode,
+  systemPrefersDark,
+} from './components/theme/theme.ts'
 
-/** 将系统亮暗偏好投影到 body[data-secai-dark] + html color-scheme（token 双套切换点）。 */
-function applySystemTheme(): void {
-  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches
-  document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-  document.body.toggleAttribute('data-secai-dark', dark)
-}
-
-// 亮暗跟随系统：启动即应用一次 + 常驻监听（index.html 预引导脚本只覆盖首帧前）
-const systemDark = window.matchMedia('(prefers-color-scheme: dark)')
-systemDark.addEventListener('change', applySystemTheme)
-applySystemTheme()
+// 首帧即按持久化模式（或 system）落地主题；运行期由 App 内 useThemeControl
+// 接管（index.html 预引导 script 保证首帧前无闪跳，此处为同源兜底）。
+applyThemeMode(resolveThemeMode(readThemeMode(), systemPrefersDark()))
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AppFrame />
+    <App />
   </StrictMode>,
 )

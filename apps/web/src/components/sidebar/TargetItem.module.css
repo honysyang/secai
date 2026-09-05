@@ -1,0 +1,141 @@
+.item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--secai-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.item:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.item[data-active='true'] {
+  background: var(--secai-alias-button-ghost-active-fill);
+  box-shadow: inset 0 0 0 1px var(--secai-alias-button-ghost-active-border);
+}
+
+.item:active {
+  background: var(--secai-alias-interactive-bg-active);
+}
+
+/* 状态圆点：同色光晕 + 内核（dsh 圆点语言）。色相由 data-status 决定 */
+.dot {
+  position: relative;
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.12;
+}
+
+.dot::after {
+  content: '';
+  position: absolute;
+  inset: 26%;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dot[data-status='running'] {
+  color: var(--secai-alias-state-business-primary);
+}
+
+.dot[data-status='running']::before {
+  animation: secai-dot-pulse 1.8s ease-out infinite;
+}
+
+@keyframes secai-dot-pulse {
+  0% { opacity: 0.32; }
+  55% { opacity: 0.1; }
+  100% { opacity: 0.1; }
+}
+
+.dot[data-status='awaiting_approval'] {
+  color: var(--secai-alias-state-warn-primary);
+}
+
+.dot[data-status='completed'] {
+  color: var(--secai-alias-state-success-primary);
+}
+
+.dot[data-status='failed'] {
+  color: var(--secai-alias-state-error-primary);
+}
+
+.dot[data-status='idle'],
+.dot[data-status='stopped'] {
+  color: var(--secai-alias-label-tertiary);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--secai-alias-label-primary);
+}
+
+.meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--secai-alias-label-caption);
+}
+
+.sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 8px 2px 31px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--secai-alias-label-secondary);
+}
+
+.subDot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.75;
+}
+
+.subName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subState {
+  flex: none;
+  font-size: 11px;
+  color: var(--secai-alias-label-caption);
+}

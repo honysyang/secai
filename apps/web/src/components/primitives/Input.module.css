@@ -1,0 +1,40 @@
+/* 单行文本输入：输入面 token（亮白/暗深），描边用弱一档的
+ * l2-darkmode-thin（dsh 输入描边比按钮弱一档的约定），聚焦换品牌蓝。 */
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--secai-alias-border-l2-darkmode-thin);
+  background: var(--secai-specific-input-major);
+  color: var(--secai-alias-label-primary);
+  outline: none;
+  transition: border-color var(--secai-transition-duration-fast) ease;
+}
+
+.input::placeholder {
+  color: var(--secai-alias-label-caption);
+}
+
+.input:focus {
+  border-color: var(--secai-alias-state-business-primary);
+}
+
+.input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.md {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.sm {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 18px;
+}

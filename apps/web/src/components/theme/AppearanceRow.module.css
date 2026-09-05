@@ -1,0 +1,51 @@
+/* 外观三态选择行：纵向 radio 组；选中项用 ghost-active 底 + 描边 + 右侧对勾
+ * 表达（dsh pill.active 语言，仅消费 --secai-* token）。 */
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--secai-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.item:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-primary);
+}
+
+.item[aria-checked='true'] {
+  background: var(--secai-alias-button-ghost-active-fill);
+  color: var(--secai-alias-label-primary);
+  box-shadow: inset 0 0 0 1px var(--secai-alias-button-ghost-active-border);
+}
+
+.icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.check {
+  margin-left: auto;
+  width: 6px;
+  height: 10px;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg) translateY(-1px);
+}

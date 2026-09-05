@@ -1,0 +1,79 @@
+/* 胶囊几何沿用 dsh figma Button：md h36 r18 pad 14/7；sm h28 r14。
+ * info 变体 = 品牌蓝底 + 恒定白 glyph（static neutral-00 两主题恒白，
+ * 等价 dsh 中 send 圆钮的 static white —— 蓝底不反转，见组件注释）。 */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: none;
+  border-radius: 18px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--secai-alias-label-primary);
+  background: transparent;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.md {
+  height: 36px;
+}
+
+.sm {
+  height: 28px;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0 10px;
+  border-radius: 14px;
+}
+
+.primary {
+  background: var(--secai-alias-button-primary-fill);
+  color: var(--secai-alias-label-primary-foreground);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--secai-alias-button-primary-hover);
+}
+
+.info {
+  background: var(--secai-alias-button-info-fill);
+  color: var(--secai-static-neutral-00);
+}
+
+.info:hover:not(:disabled) {
+  background: var(--secai-alias-button-info-hover);
+}
+
+.ghost:hover:not(:disabled) {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.ghost:active:not(:disabled) {
+  background: var(--secai-alias-interactive-bg-active);
+}
+
+.outline {
+  border: 1px solid var(--secai-alias-border-l2);
+  background: transparent;
+}
+
+.outline:hover:not(:disabled) {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}

@@ -1,0 +1,82 @@
+/* 目标栏组合：品牌 → 列表头 → 滚动列表（flex:1）→ 底部外观设置。 */
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 12px 14px 6px;
+  flex: none;
+}
+
+.word {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+  letter-spacing: 0.01em;
+  color: var(--secai-alias-label-primary);
+}
+
+.caption {
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--secai-alias-label-caption);
+}
+
+.listHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px 6px;
+  flex: none;
+}
+
+.listTitle {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--secai-alias-label-caption);
+}
+
+.pendingBadge {
+  height: 17px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.count {
+  margin-left: auto;
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--secai-alias-bg-layer-2);
+  color: var(--secai-alias-label-caption);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+.foot {
+  margin-top: auto;
+  flex: none;
+  padding: 8px 8px 10px 10px;
+  border-top: 1px solid var(--secai-alias-border-l1);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.footLabel {
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--secai-alias-label-caption);
+}

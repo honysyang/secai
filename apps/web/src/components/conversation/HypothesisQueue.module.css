@@ -1,0 +1,114 @@
+/* 假设队列（按 priority 降序的排序条）。 */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--secai-alias-border-l1);
+  background: var(--secai-alias-bg-layer-1);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--secai-alias-label-caption);
+}
+
+.count {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--secai-alias-bg-layer-2);
+  color: var(--secai-alias-label-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 84px;
+  overflow-y: auto;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  height: 26px;
+  padding: 0 6px 0 4px;
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 8px;
+  background: var(--secai-alias-bg-layer-1);
+  color: var(--secai-alias-label-secondary);
+}
+
+.pri {
+  flex: none;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 6px;
+  background: var(--secai-alias-bg-layer-2);
+  color: var(--secai-alias-label-caption);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+.stmt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.tag {
+  flex: none;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--secai-alias-label-caption);
+}
+
+/* 高优先级假设：priority 徽章转 amber */
+.chip[data-hot='true'] .pri {
+  color: var(--secai-alias-state-warn-label);
+  background: var(--secai-alias-state-warn-tertiary);
+}
+
+.chip[data-status='testing'] {
+  border-color: var(--secai-alias-state-business-primary);
+  background: var(--secai-alias-state-business-tertiary);
+  color: var(--secai-alias-label-primary);
+}
+
+.chip[data-status='testing'] .tag {
+  color: var(--secai-alias-state-business-primary);
+}
+
+.chip[data-status='validated'] {
+  border-color: var(--secai-alias-state-success-primary);
+  background: var(--secai-alias-state-success-tertiary);
+}
+
+.chip[data-status='validated'] .tag {
+  color: var(--secai-alias-state-success-primary);
+}
+
+.chip[data-status='falsified'] {
+  opacity: 0.62;
+}
+
+.chip[data-status='falsified'] .stmt {
+  text-decoration: line-through;
+}

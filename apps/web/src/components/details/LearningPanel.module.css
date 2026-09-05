@@ -1,0 +1,136 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.empty {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--secai-alias-label-caption);
+  background: var(--secai-alias-bg-layer-1);
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--secai-alias-border-l1);
+  background: var(--secai-alias-bg-layer-1);
+}
+
+.value {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+  color: var(--secai-alias-label-primary);
+}
+
+.unit {
+  margin-left: 1px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--secai-alias-label-caption);
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--secai-alias-label-caption);
+}
+
+.track {
+  height: 3px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: var(--secai-alias-bg-layer-2);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+}
+
+.fill[data-key='hitRate'] {
+  background: var(--secai-alias-state-success-primary);
+}
+
+.fill[data-key='tokenEfficiency'] {
+  background: var(--secai-alias-state-business-primary);
+}
+
+.fill[data-key='playbookReuse'] {
+  background: var(--secai-alias-state-warn-primary);
+}
+
+.trend {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.trendHead {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--secai-alias-label-caption);
+}
+
+.tRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tLabel {
+  flex: none;
+  width: 30px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--secai-alias-label-caption);
+}
+
+.tBar {
+  flex: 1;
+  height: 5px;
+  min-width: 0;
+  border-radius: 3px;
+  background: var(--secai-alias-bg-layer-2);
+  overflow: hidden;
+}
+
+.tFill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--secai-alias-state-success-primary);
+  opacity: 0.85;
+}
+
+.tVal {
+  flex: none;
+  width: 30px;
+  text-align: right;
+  font-size: 10px;
+  color: var(--secai-alias-label-caption);
+}

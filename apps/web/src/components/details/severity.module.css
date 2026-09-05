@@ -1,0 +1,33 @@
+/* severity 徽章（EvidenceChain / ReportPreview 共用；底色按严重度分级）。 */
+.sev {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.sev[data-sev='critical'] {
+  color: var(--secai-alias-state-error-primary);
+  background: var(--secai-alias-interactive-bg-hover-danger);
+}
+
+.sev[data-sev='high'] {
+  color: var(--secai-alias-state-warn-label);
+  background: var(--secai-alias-state-warn-tertiary);
+}
+
+.sev[data-sev='medium'] {
+  color: var(--secai-alias-state-business-primary);
+  background: var(--secai-alias-state-business-tertiary);
+}
+
+.sev[data-sev='low'],
+.sev[data-sev='info'] {
+  color: var(--secai-alias-label-secondary);
+  background: var(--secai-alias-bg-layer-2);
+}

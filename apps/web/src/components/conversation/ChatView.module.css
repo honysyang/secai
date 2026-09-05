@@ -1,0 +1,177 @@
+/* 消息流滚动容器：唯一滚动区（情报条/输入条在外固定）。
+ * 气泡 = specific-bubble（assistant）/ business 蓝反白（user），
+ * 工具卡 = <details> 折叠（结果 pre 代码面）。全部 --secai-* token。 */
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 14px 16px 18px;
+}
+
+.empty {
+  padding: 42px 24px;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 19px;
+  color: var(--secai-alias-label-caption);
+}
+
+.rowLeft,
+.rowRight {
+  display: flex;
+  min-width: 0;
+}
+
+.rowRight {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 80%;
+  padding: 8px 12px;
+  border-radius: 14px;
+  font-size: 13.5px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant {
+  background: var(--secai-specific-bubble);
+  color: var(--secai-alias-label-primary);
+  border-top-left-radius: 5px;
+}
+
+.user {
+  background: var(--secai-alias-state-business-primary);
+  color: var(--secai-alias-label-primary-foreground);
+  border-bottom-right-radius: 5px;
+}
+
+.tool {
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 10px;
+  background: var(--secai-alias-bg-layer-1);
+  overflow: hidden;
+}
+
+.toolHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.toolHead::-webkit-details-marker {
+  display: none;
+}
+
+.toolHead:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.chev {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--secai-alias-label-caption);
+  border-bottom: 1.5px solid var(--secai-alias-label-caption);
+  transform: rotate(-45deg);
+  transition: transform var(--secai-transition-duration-fast) ease;
+}
+
+.tool[open] .chev {
+  transform: rotate(45deg) translateY(-1px);
+}
+
+.toolDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.toolDot[data-state='done'] {
+  background: var(--secai-alias-state-success-primary);
+}
+
+.toolDot[data-state='failed'] {
+  background: var(--secai-alias-state-error-primary);
+}
+
+.toolDot[data-state='running'] {
+  background: var(--secai-alias-state-business-primary);
+  animation: secai-tool-pulse 1.4s ease-in-out infinite alternate;
+}
+
+@keyframes secai-tool-pulse {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}
+
+.toolName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--secai-font-family-code);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--secai-alias-label-primary);
+}
+
+.toolFail {
+  flex: none;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--secai-alias-state-error-primary);
+}
+
+.toolTime {
+  flex: none;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--secai-alias-label-caption);
+}
+
+.toolBody {
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid var(--secai-alias-border-l1);
+  background: var(--secai-alias-bg-layer-2);
+  color: var(--secai-alias-label-secondary);
+  font-family: var(--secai-font-family-code);
+  font-size: 11.5px;
+  line-height: 17px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.sys {
+  align-self: center;
+  max-width: 82%;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--secai-alias-interactive-bg-hover);
+  font-size: 11px;
+  line-height: 17px;
+  color: var(--secai-alias-label-caption);
+  text-align: center;
+}

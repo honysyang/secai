@@ -1,0 +1,97 @@
+/* 输入条：卡片式（dsh composer 的扁平版）+ 圆形发送。 */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 16px 12px;
+  flex: none;
+}
+
+.notice {
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--secai-alias-state-warn-tertiary);
+  color: var(--secai-alias-state-warn-label);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--secai-alias-border-l2-darkmode-thin);
+  border-radius: 14px;
+  background: var(--secai-specific-input-major);
+  box-shadow: var(--secai-alias-shadow-lv1);
+}
+
+.card[data-disabled] {
+  box-shadow: none;
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 46px;
+  max-height: 120px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 21px;
+  color: var(--secai-alias-label-primary);
+  caret-color: var(--secai-alias-state-business-primary);
+}
+
+.input::placeholder {
+  color: var(--secai-alias-label-caption);
+}
+
+.input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.hint {
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--secai-alias-label-caption);
+}
+
+.send {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  background: var(--secai-alias-button-info-fill);
+  color: var(--secai-static-neutral-00);
+  cursor: pointer;
+  transition: background-color var(--secai-transition-duration-fast) ease;
+}
+
+.send:hover:not(:disabled) {
+  background: var(--secai-alias-button-info-hover);
+}
+
+.send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

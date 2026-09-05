@@ -1,0 +1,98 @@
+/* 死路假设折叠面板：折叠态一行标题 + chevron；展开态每项含翻盘条件块。 */
+.root {
+  border-top: 1px solid var(--secai-alias-border-l1);
+  background: var(--secai-alias-bg-layer-1);
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--secai-alias-label-caption);
+}
+
+.count {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--secai-alias-bg-layer-2);
+  color: var(--secai-alias-label-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+.chev {
+  flex: none;
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--secai-alias-label-caption);
+  border-bottom: 1.5px solid var(--secai-alias-label-caption);
+  transform: rotate(45deg) translateY(-1px);
+  transition: transform var(--secai-transition-duration-fast) ease;
+}
+
+.chevOpen {
+  transform: rotate(225deg);
+}
+
+.body {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 2px 0 8px;
+}
+
+.item {
+  padding: 8px 12px 6px 18px;
+  border-top: 1px solid var(--secai-alias-border-l1);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.stmt {
+  color: var(--secai-alias-label-primary);
+  text-decoration: line-through;
+  opacity: 0.75;
+}
+
+.reason {
+  margin-top: 2px;
+  color: var(--secai-alias-label-caption);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.over {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--secai-alias-state-warn-tertiary);
+  color: var(--secai-alias-state-warn-label);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.overLabel {
+  flex: none;
+  font-weight: 600;
+}

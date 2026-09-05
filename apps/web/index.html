@@ -9,12 +9,20 @@
   </head>
   <body>
     <script>
-      // 主题预引导：首帧渲染前按系统偏好写 data-secai-dark，避免亮暗闪跳
-      // （与 src/main.tsx 的 matchMedia 监听同源，运行期持续跟随系统）。
+      // 主题预引导：首帧渲染前按持久化模式（light/dark/system）写
+      // data-secai-dark，避免亮暗闪跳（key 与 theme/theme.ts 同源）。
       ;(() => {
+        let stored = null
+        try {
+          stored = localStorage.getItem('secai-theme-mode')
+        } catch (e) { /* 隐私模式等场景忽略 */ }
         const dark =
-          typeof matchMedia !== 'undefined' &&
-          matchMedia('(prefers-color-scheme: dark)').matches
+          stored === 'dark'
+            ? true
+            : stored === 'light'
+              ? false
+              : typeof matchMedia !== 'undefined' &&
+                matchMedia('(prefers-color-scheme: dark)').matches
         document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
         document.body.toggleAttribute('data-secai-dark', dark)
       })()

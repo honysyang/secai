@@ -1,0 +1,42 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--secai-alias-label-secondary);
+  background: var(--secai-alias-bg-layer-2);
+}
+
+.dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.amber {
+  color: var(--secai-alias-state-warn-primary);
+  background: var(--secai-alias-state-warn-tertiary);
+}
+
+.green {
+  color: var(--secai-alias-state-success-primary);
+  background: var(--secai-alias-state-success-tertiary);
+}
+
+.blue {
+  color: var(--secai-alias-state-business-primary);
+  background: var(--secai-alias-state-business-tertiary);
+}
+
+.red {
+  color: var(--secai-alias-state-error-primary);
+  background: var(--secai-alias-interactive-bg-hover-danger);
+}

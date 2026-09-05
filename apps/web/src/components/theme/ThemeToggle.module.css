@@ -1,0 +1,23 @@
+/* 紧凑圆形外观开关：hover 浮现交互底色，active 加深（dsh toolbar 按钮语言）。 */
+.root {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--secai-alias-label-secondary);
+  cursor: pointer;
+  transition: background-color var(--secai-transition-duration-fast) ease;
+}
+
+.root:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-primary);
+}
+
+.root:active {
+  background: var(--secai-alias-interactive-bg-active);
+}
