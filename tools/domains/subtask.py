@@ -19,22 +19,25 @@ from core.tool_pipeline import DEFAULT_PIPELINE, with_pipeline
 @with_pipeline(DEFAULT_PIPELINE)
 def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str,
                   objective: str = "", branch_type: str = "",
-                  max_tokens: int = 0, max_turns: int = 8) -> str:
+                  depends_on: str = "", max_tokens: int = 0,
+                  max_turns: int = 8) -> str:
     """声明一个独立子任务（互不依赖的探测点/线），主循环会后台并发调度执行。
 
     当任务同时出现多个独立的探测分支（如 2 个端口、2 个独立漏洞点）时，
     用本工具分别声明子任务；每个子任务用独立会话后台执行，结果写回黑板（subtask:<id>）。
     建议每题最多声明 2 个并行分支，desc 必须包含具体目标（URL/IP/路径）。
 
-    三道闸门：
+    三闸门：
     - 明确目标：objective 必填，空则拒绝创建
     - 独立预算：max_tokens / max_turns 限制子任务资源
-    - 回收机制：完成/超时/预算耗尽/父任务停止时强制回收
+    - 前提证伪级联回收：depends_on 声明的黑板前提被证伪（status=failed / 被
+      supersedes）时，系统自动回收该子任务，避免在已判死方向上空耗预算
 
     Args:
         desc: 子任务描述，必须包含具体目标、范围边界、成功标准。
         objective: 子任务明确目标（必填），如"验证 /api/login 是否存在 SQLi"。
         branch_type: 分支类型（如 web/pwn/crypto/reverse/web3），子任务会按此派任角色。
+        depends_on: 本子任务依赖的前提（黑板 key，逗号分隔）；任一前提被证伪即级联回收。
         max_tokens: 子任务 token 预算上限（0=继承父任务剩余预算）。
         max_turns: 子任务回合预算上限（默认 8）。
     """
@@ -48,6 +51,7 @@ def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str,
         "desc": desc,
         "objective": objective,
         "branch_type": branch_type,
+        "depends_on": (depends_on or "").strip(),
         "status": "pending",
         "result": "",
         "budget": SubtaskBudget(

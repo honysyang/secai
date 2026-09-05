@@ -204,6 +204,62 @@ def _reap_subtasks(ctx) -> str:
     return "\n".join(notes)
 
 
+def _cancel_subtask(ctx, sid: str, reason: str = "premise_falsified") -> bool:
+    """取消单个后台子任务（H7 前提证伪级联回收用）。
+
+    仅处理 pending/running 子任务：running 的先 cancel 其 asyncio.Task
+    （_run_one 的 CancelledError 分支负责 close 句柄与收尾），随后把状态置
+    done 并写结构化取消结果；已结束/已回收的不重复处理。
+    """
+    sub = next((s for s in ctx.subtasks if s.get("id") == sid), None)
+    if sub is None or sub.get("status") not in ("pending", "running"):
+        return False
+    job = ctx.subtask_jobs.get(sid)
+    if job is not None and not job.done():
+        job.cancel()
+    if not sub.get("result"):
+        sub["status"] = "done"
+        sub["result"] = {"summary": f"[子任务级联回收] {reason}（探索前提已证伪，停止空耗）",
+                         "findings": [], "flag": None}
+    b = sub.get("budget")
+    if b is not None:
+        b.cancelled = True
+        b.reason = reason
+    return True
+
+
+def _cascade_cancel_falsified(ctx) -> int:
+    """H7 三闸门「前提证伪即级联回收」：黑板判死方向 → 级联回收依赖子任务。
+
+    黑板某 key 被证伪（status=failed 或带 supersedes 取代标记）时，回收所有
+    depends_on 声明依赖该 key 的 pending/running 子任务——其探索前提已死，
+    继续跑只会重复已失败方向并空耗 token/时间预算。
+
+    返回本轮回收的子任务数（0 = 无依赖命中或黑板无证伪）。
+    """
+    falsified = set()
+    for k, v in ctx.blackboard.items():
+        if isinstance(v, dict) and (v.get("status") == "failed" or v.get("supersedes")):
+            falsified.add(k)
+    if not falsified:
+        return 0
+    cancelled = 0
+    for sub in ctx.subtasks:
+        if sub.get("status") not in ("pending", "running"):
+            continue
+        deps = [d.strip() for d in str(sub.get("depends_on") or "").split(",")
+                if d.strip()]
+        if not deps:
+            continue
+        if any(d in falsified for d in deps):
+            if _cancel_subtask(ctx, sub["id"], reason="premise_falsified"):
+                cancelled += 1
+    if cancelled:
+        log_warn(f"[cascade] 前提证伪级联回收 {cancelled} 个后台子任务"
+                 f"（依赖方向已判死：{sorted(falsified)[:5]}）")
+    return cancelled
+
+
 async def _cancel_all_subtasks(ctx, reason: str = "parent_stop") -> None:
     """取消并等待所有后台子任务，防止主任务退出后子任务继续消耗资源。"""
     if not ctx.subtask_jobs:

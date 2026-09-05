@@ -33,6 +33,7 @@ from bench_platform.platform_client import PlatformClient
 from bench_platform.scheduler import SINGLE_EMPTY_TURNS, decide_stuck_action
 from core.agents_def import EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context, _prompt_hash, build_executor
 from core.context_manager import compact_if_needed
+from core.events import BUS
 from core.hooks import EventStreamHooks, _flush_emit_buffer, _ledger_failed_summary
 from core.task_context import TaskContext
 from demo_tools import build_default_tools
@@ -47,7 +48,12 @@ from harness.runner.context import (
     load_notes_for,
 )
 from harness.runner.state import RunnerState
-from harness.runner.subtasks import _cancel_all_subtasks, _reap_subtasks, _run_subtasks
+from harness.runner.subtasks import (
+    _cancel_all_subtasks,
+    _cascade_cancel_falsified,
+    _reap_subtasks,
+    _run_subtasks,
+)
 from runtime.budget import (
     COST_LIMITS,
     HINT_BUDGET_RATIO,
@@ -59,7 +65,7 @@ from runtime.budget import (
 )
 from runtime.log import log_error, log_info, log_warn
 from runtime.model_pool import ModelPool, is_model_failure, is_permanent_model_failure
-from runtime.reporting import export_trajectory, first_strike, write_cost_report
+from runtime.reporting import export_trajectory, first_strike, write_cost_report, write_stuck_replay
 from runtime.stuck import StuckActionType, StuckDetector, compact_session
 from solvecraft.solution_templates import append_solution_template, load_solution_hint
 
@@ -356,6 +362,15 @@ class ExecutorLoop:
             if self.ctx.zero_gain_turns > self.ctx.peak_zero_gain_streak:
                 self.ctx.peak_zero_gain_streak = self.ctx.zero_gain_turns
 
+        # H7 三闸门：前提证伪即级联回收（黑板新 failed/supersedes → 回收依赖子任务）
+        try:
+            _cascade_cancel_falsified(self.ctx)
+        except Exception:
+            pass
+        # H7 破局链：零增益达破局阈值 → 登记惰性点并自动导出 ±5 步回放（每轮至多一次）
+        if self.ctx.zero_gain_turns >= ZERO_GAIN_REPLAN_TURNS:
+            self._mark_stuck_anchor("zero_gain_stall")
+
         if self.ctx.turn_net_fail:
             self.ctx.net_fail_turns += 1
         else:
@@ -534,6 +549,35 @@ class ExecutorLoop:
         return False, "继续攻击本题：调用工具产出新证据增量，或调用 finalize 提交本题结论。", ""
 
     # ------------------------------------------------------------------
+    # _mark_stuck_anchor：登记惰性点（H7），触发时立即导出 ±5 步回放
+    # ------------------------------------------------------------------
+    def _mark_stuck_anchor(self, reason: str) -> None:
+        """零增益达破局阈值的轮次登记为惰性点，并立即导出一份窗口回放。
+
+        同一轮只登记一次；_finish 收尾会基于登记的 anchor_seq 覆盖导出，
+        把惰性点后实际发生的后 5 步纳入窗口，形成完整 ±5 步回放文件。
+        """
+        turn = self.state.turn_count
+        if any(a.get("turn") == turn for a in self.ctx.stuck_anchors):
+            return
+        try:
+            anchor_seq = len(BUS.history(self.code))
+        except Exception:
+            anchor_seq = 0
+        self.ctx.stuck_anchors.append({
+            "turn": turn, "reason": reason, "seq": anchor_seq,
+            "ts": self.clock.time(),
+        })
+        try:
+            write_stuck_replay(self.challenge_workdir, self.code,
+                               self.ctx.stuck_anchors[-1])
+            log_warn(f"[stuck-replay] 单题 {self.code} 惰性点 turn{turn} "
+                     f"（{reason}，seq≈{anchor_seq}）已导出 ±5 步回放")
+        except Exception as e:
+            self.ctx.silent_failures += 1
+            log_warn(f"[degraded] 单题 {self.code} 导出惰性点回放失败：{str(e)[:120]}")
+
+    # ------------------------------------------------------------------
     # _cleanup：第三道闸门统一回收（原 finally 段）
     # ------------------------------------------------------------------
     async def _cleanup(self) -> None:
@@ -617,6 +661,12 @@ class ExecutorLoop:
             export_trajectory(self.challenge_workdir, self.code, self.state.outcome, self.ctx)
         except Exception:
             pass
+        # H7 破局链：惰性点 ±5 步回放收尾补全（覆盖触发时窗口，纳入后 5 步实际事件）
+        for a in list(getattr(self.ctx, "stuck_anchors", []) or []):
+            try:
+                write_stuck_replay(self.challenge_workdir, self.code, a)
+            except Exception:
+                pass
         return self.state.outcome
 
 

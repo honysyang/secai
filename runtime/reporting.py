@@ -9,7 +9,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -111,6 +111,52 @@ def export_trajectory(workdir: Path, code: str, outcome: str, ctx) -> None:
     }, ensure_ascii=False))
     with (workdir / f"trajectory_{code}.jsonl").open("w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
+
+
+# ---------------------------------------------------------------------------
+# H7：惰性点 ±5 步回放窗口导出（破局链补齐）
+# ---------------------------------------------------------------------------
+STUCK_REPLAY_HALF_WINDOW = 5
+
+
+def write_stuck_replay(workdir: Path, code: str, anchor: dict,
+                       events: Optional[List[dict]] = None,
+                       half_window: int = STUCK_REPLAY_HALF_WINDOW) -> Optional[Path]:
+    """惰性点自动导出 ±half_window 步回放（H7，破局链第一段）。
+
+    事件窗口以锚点（连续零增益达阈值那一轮）时刻的事件序号为圆心：
+      events[anchor_seq - half_window : anchor_seq + half_window]
+    触发时先导一次（崩溃现场保护：当时后 5 步尚未发生，窗口为「前 5 步+
+    惰性点」）；_finish 收尾再覆盖导出一次，把惰性点后实际发生的后 5 步
+    纳入，形成完整 ±5 步观测窗口，供复盘「惰性点前后发生了什么」。
+
+    首行写 meta（锚点轮次/触发原因/窗口区间/时间），其后为窗口事件 JSONL。
+    无任何历史事件时返回 None 不落盘；落盘路径
+    <workdir>/replay_stuck_<code>_turn<turn>_<reason>.jsonl。
+    """
+    evs = list(events) if events is not None else BUS.history(code)
+    if not evs:
+        return None
+    anchor_seq = int(anchor.get("seq", len(evs)))
+    start = max(0, anchor_seq - half_window)
+    window = evs[start:anchor_seq + half_window]
+    meta = {
+        "kind": "stuck_replay", "code": code,
+        "anchor_turn": anchor.get("turn", "?"),
+        "reason": anchor.get("reason", "unknown"),
+        "half_window": half_window,
+        "anchor_seq": anchor_seq,
+        "window_start": start,
+        "window_events": len(window),
+        "ts": round(time.time(), 3),
+    }
+    path = workdir / (f"replay_stuck_{code}_turn{meta['anchor_turn']}_"
+                      f"{meta['reason']}.jsonl")
+    lines = [json.dumps(meta, ensure_ascii=False)]
+    lines += [json.dumps(ev, ensure_ascii=False) for ev in window]
+    with path.open("w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
 
 
 # ---------------------------------------------------------------------------
