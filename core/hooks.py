@@ -662,16 +662,29 @@ class EventStreamHooks(RunHooks):
             self._emit("token", agent=agent.name, usage=cur,
                        total=dict(task_ctx.token_usage))
 
+    @staticmethod
+    def _tool_args(context) -> str:
+        """从 ToolContext 提取本次工具调用的参数 JSON 字符串（供工作流视图展示「调用了什么」）。
+
+        function_tool 的 context 是 ToolContext（含 tool_arguments）；其他工具族无此属性时返回空串。
+        """
+        try:
+            return str(getattr(context, "tool_arguments", "") or "")
+        except Exception:
+            return ""
+
     async def on_tool_start(self, context, agent, tool):
-        self._emit("tool", agent=agent.name, tool=tool.name, status="executing")
+        self._emit("tool", agent=agent.name, tool=tool.name, status="executing",
+                   args=self._tool_args(context))
         task_ctx = getattr(context, "context", None)
         if task_ctx is not None and tool.name not in _NO_PROGRESS_TOOLS:
             task_ctx.turn_tool_count += 1
 
     async def on_tool_end(self, context, agent, tool, result):
-        # 完整结果进事件流（不截断），供 UI 展示「执行了什么」
+        # 完整结果进事件流（不截断），供 UI 展示「执行了什么」+ 调用参数
         self._emit("tool_result", agent=agent.name, tool=tool.name,
-                   text=str(result), status="done")
+                   text=str(result), status="done",
+                   args=self._tool_args(context))
 
         # ---- 渐进披露：按证据追加技能 ----
         task_ctx = getattr(context, "context", None)

@@ -27,6 +27,7 @@ from adapters.config import MODEL
 import adapters.db as db_mod
 from demo_tools import ALL_TOOLS, TOOL_GROUPS, CORE_TOOL_NAMES
 from core.hooks import EventStreamHooks
+from core.events import BUS
 from runtime.status import PHASE_DEFS
 from core.task_context import TaskContext
 
@@ -44,6 +45,8 @@ EVENT_FILES = {
 
 # 初始化 SQLite（data/agent.db），与 main.py 跑分任务共用同一文件，跨进程读事件
 _db = db_mod.init_default()
+# 事件总线 → SQLite 落库订阅（web 对话流事件也要进库，供 /api/events 与 /api/stream-db 读取）
+BUS.subscribe(db_mod.db_subscriber(_db))
 
 # 智能体元数据（供 /agents 页展示）
 AGENTS = [
@@ -151,7 +154,7 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         query = parse_qs(parsed.query)
         if path in ("/", "/index.html"):
-            self._send_file("index.html")
+            self._send_file("harness.html")
         elif path == "/monitor":
             self._send_file("monitor.html")
         elif path == "/agents":
@@ -182,6 +185,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, "application/json; charset=utf-8",
                            json.dumps({"error": "message 为空"}, ensure_ascii=False))
                 return
+            # 用户消息进事件流（对话历史可回放，前端据此渲染用户气泡）
+            BUS.emit("web", "user_message", text=message)
             try:
                 reply = asyncio.run(run_chat(message))
             except Exception as e:
