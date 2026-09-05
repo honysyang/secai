@@ -249,9 +249,8 @@ def _cascade_cancel_falsified(ctx) -> int:
             continue
         deps = [d.strip() for d in str(sub.get("depends_on") or "").split(",")
                 if d.strip()]
-        if deps and any(d in falsified for d in deps):
-            if _cancel_subtask(ctx, sub["id"], reason="premise_falsified"):
-                cancelled += 1
+        if deps and any(d in falsified for d in deps) and _cancel_subtask(ctx, sub["id"], reason="premise_falsified"):
+            cancelled += 1
     if cancelled:
         log_warn(f"[cascade] 前提证伪级联回收 {cancelled} 个后台子任务"
                  f"（依赖方向已判死：{sorted(falsified)[:5]}）")
