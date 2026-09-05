@@ -14,6 +14,7 @@ from agents import RunContextWrapper, function_tool
 
 from bench_platform import platform_tools
 from core.task_context import TaskContext
+from profiles.ctf_legacy.platform import finalize
 from tools.domains.artifacts import read_artifact, write_file
 from tools.domains.blackboard import blackboard
 from tools.domains.exec import checkpoint, http_request, parallel_shell, run_batch, set_phase, shell, think
@@ -27,7 +28,6 @@ from tools.domains.knowledge import (
     web_search,
 )
 from tools.domains.payload import detect_vuln, get_payload, list_vulns
-from tools.domains.platform import finalize
 from tools.domains.seccli import get_tool_spec, list_tools, run_tool
 from tools.domains.subtask import spawn_subtask
 from tools.domains.todo import todo_add, todo_list, todo_mark

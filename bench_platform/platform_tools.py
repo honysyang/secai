@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import json
 
-from agents import function_tool, RunContextWrapper
+from agents import RunContextWrapper, function_tool
 
-from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
-from bench_platform.platform_client import PlatformClient, TaskNotFound, TaskEnded
+from bench_platform.platform_client import (
+    PlatformClient,
+    TaskEnded,
+    TaskNotFound,
+    get_platform_client,
+)
 from core.task_context import TaskContext
 
 # 单次工具返回的字符上限，避免塞爆上下文
@@ -18,8 +22,12 @@ _PREVIEW = 6000
 
 
 def _client() -> PlatformClient:
-    """用 .env 里的凭证构造平台客户端（无状态，按需 new）。"""
-    return PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
+    """模块级平台客户端单例（R4 H12 收口：消除按需 new 的重复构造）。
+
+    凭证由 adapters.config（.env）读取，唯一构造点在
+    bench_platform.platform_client.get_platform_client()。
+    """
+    return get_platform_client()
 
 
 def _ok(data) -> str:

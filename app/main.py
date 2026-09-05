@@ -1,17 +1,18 @@
 """TSec Benchmark 跑分主程序（多智能体安全攻防编排）。
 
 调度循环选题 → 单题状态机（pre/step/post）→ 三闸门子任务 → 终局重扫 → 报告收尾。
-依赖：平台客户端（BENCHMARK_TOKEN/BENCHMARK_BASE_URL）、flag 机械提交铁律、
-多模型灾备池（ModelPool）、事件总线落库（SQLite + events.jsonl 双写）。
+依赖：平台客户端（凭证由 bench_platform 单例统一收敛）、flag 机械提交铁律
+（profiles/ctf_legacy，R4 H12）、多模型灾备池（ModelPool）、事件总线落库。
 
 R1 可测试性重构后本文件只保留「调度器编排」：run_task 主循环 + _endgame_sweep
 （结构被 tests/test_core.py AST 锁定）+ 入口。单题执行闭环移入
 harness/runner/executor.py（ExecutorLoop）、子任务移入 harness/runner/subtasks.py、
 上下文辅助移入 harness/runner/context.py、立法/战报段移入
-harness/runner/orchestrator.py。
+harness/runner/orchestrator.py。跑分任务模板与平台凭证占位符替换收敛到
+profiles/ctf_legacy（task.py）。
 
 用法：
-    python -m app.main                              # 跑分模式（配置了 BENCHMARK_TOKEN 自动进调度器）
+    python -m app.main                              # 跑分模式（配置了平台凭证自动进调度器）
     python -m app.main "<任务描述>" [角色提示]       # 通用渗透任务
     python -m app.main --resume                     # 从上次 checkpoint 续跑
 """
@@ -26,14 +27,15 @@ from pathlib import Path
 from typing import Dict, List
 
 import adapters.db as db_mod
-from adapters.config import (API_KEY, BASE_URL, BENCHMARK_BASE_URL,
-                             BENCHMARK_TOKEN, FAST_MODEL_NAME, MODEL_NAME,
+from adapters.config import (API_KEY, BASE_URL, FAST_MODEL_NAME, MODEL_NAME,
                              VPN_CONFIG)
 from arsenal.registries import sec_tools
 from arsenal.registries.role_registry import assign_role
 from arsenal.registries.skill_registry import load_skills
 from bench_platform.platform_client import (ContainerBusy, PlatformClient,
-                                            TaskEnded, TaskNotFound)
+                                            TaskEnded, TaskNotFound,
+                                            get_platform_client,
+                                            platform_configured)
 from bench_platform.scheduler import is_endgame, select_challenge
 from core.events import BUS
 from core.hooks import EventStreamHooks
@@ -41,6 +43,7 @@ from harness.runner.executor import run_single_challenge
 from harness.runner.orchestrator import (StrategistFailed, finalize_report,
                                          legislate_charter)
 from harness.runner.pool import get_global_model_pool, set_global_model_pool
+from profiles.ctf_legacy import build_default_task
 from runtime.deadline import DEADLINE_SAFE_MARGIN, TASK_DEADLINE_TS
 from runtime.log import log_error, log_info, log_warn
 from runtime.model_pool import ModelPool
@@ -52,18 +55,6 @@ DATA_DIR.mkdir(exist_ok=True)
 WORKDIR = DATA_DIR / "worker_generic"
 WORKDIR.mkdir(parents=True, exist_ok=True)
 _db_initialized = False
-
-# 目标任务
-TSEC_TASK_FILE = Path(__file__).parent.parent / "prompts" / "tsec_task.txt"
-
-
-def build_default_task() -> str:
-    """读跑分任务模板并替换占位符（模板独立在 prompts/tsec_task.txt）。"""
-    token = BENCHMARK_TOKEN or "（未配置 BENCHMARK_TOKEN）"
-    base_url = BENCHMARK_BASE_URL or "（未配置 BENCHMARK_BASE_URL）"
-    return (TSEC_TASK_FILE.read_text(encoding="utf-8")
-            .replace("{BENCHMARK_TOKEN}", token)
-            .replace("{BENCHMARK_BASE_URL}", base_url))
 
 
 def _init_observability() -> None:
@@ -91,7 +82,7 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
     log_info(
         f"启动配置：模型 {MODEL_NAME}，网关 {BASE_URL}，"
         f"API_KEY {'已配置' if API_KEY else '未配置'}，"
-        f"平台 {'已配置' if BENCHMARK_BASE_URL and BENCHMARK_TOKEN else '未配置'}，"
+        f"平台 {'已配置' if platform_configured() else '未配置'}，"
         f"VPN {'已配置' if VPN_CONFIG else '未配置'}，resume={resume}"
     )
     log_info(f"任务摘要：{task.strip()[:200]}")
@@ -127,7 +118,8 @@ async def run_task(task: str, role_hint: str = "", resume: bool = False) -> dict
         return {"status": "error", "reason": e.reason, "results": [], "report": ""}
 
     # ③ 调度器主循环：自适应并发（持续 start 直到 container_busy，天然适配平台容器上限）
-    client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
+    # 平台客户端单例（R4 H12 收口：全进程唯一构造点，凭证收敛在 bench_platform）
+    client = get_platform_client()
     # 执行者共享模型池：FAST_MODEL（deepseek-v4-flash）优先，glm 兜底；
     # 全局共享一份，避免每题新建池导致灾备状态丢失。
     fast_pool = ModelPool(preferred_name=FAST_MODEL_NAME)

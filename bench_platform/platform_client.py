@@ -1,4 +1,9 @@
-"""平台客户端：对齐 TSec SDK 语义的零依赖实现。全系统只有这里懂平台协议。"""
+"""平台客户端：对齐 TSec SDK 语义的零依赖实现。全系统只有这里懂平台协议。
+
+R4 H12 平台客户端收口：模块级 get_platform_client() 是本进程唯一的
+PlatformClient 构造点（demo_tools._platform / platform_tools._client /
+app.main 的重复构造全部消除），凭证来源统一收敛到 adapters.config（.env）。
+"""
 from __future__ import annotations
 
 import os
@@ -6,6 +11,8 @@ import time
 from typing import Any, Dict, List
 
 import requests
+
+from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
 
 VPN_CHECK_URL = os.getenv("TSEC_VPN_CHECK_URL", "http://10.0.100.58")
 
@@ -127,3 +134,23 @@ class PlatformClient:
             return bool(r.json().get("closed"))
         except (TaskNotFound, TaskEnded): raise
         except Exception: return False
+
+
+# ---------------------------------------------------------------------------
+# 模块级平台客户端单例（R4 H12：消除各处的重复构造）
+# 全进程唯一构造点；app.main / platform_tools / profiles.ctf_legacy 一律经此获取。
+# ---------------------------------------------------------------------------
+_platform_client: "PlatformClient | None" = None
+
+
+def get_platform_client() -> "PlatformClient":
+    """按 .env 平台凭证构造模块级单例；重复调用返回同一实例。"""
+    global _platform_client
+    if _platform_client is None:
+        _platform_client = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
+    return _platform_client
+
+
+def platform_configured() -> bool:
+    """平台凭证是否已配置（BENCHMARK_BASE_URL 与 BENCHMARK_TOKEN 均非空）。"""
+    return bool(BENCHMARK_BASE_URL and BENCHMARK_TOKEN)

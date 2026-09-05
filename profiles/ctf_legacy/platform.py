@@ -1,10 +1,15 @@
-"""平台域：跑分平台交互（flag 提交铁律 / 通关复核 / finalize）。
+"""CTF Legacy 平台域：跑分平台的 flag 提交铁律 / 通关复核 / finalize。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
-- _platform / _is_completed：平台客户端单例 + 通关状态机械复核
+R4 H12 收敛：原 demo_tools → tools/domains/platform.py 的 CTF 专属代码整包移入
+profiles/ctf_legacy/，主循环（app/ harness/ core/ tools/）不再触碰平台凭证常量：
 - _submit_flags_if_any：提交铁律——扫描 flag、机械提交 + 机械通关判决
+- _is_completed：平台通关状态机械复核（记分牌是唯一权威）
 - _late_bind_submit：把提交函数绑定到默认管线的 auto_submit_flag middleware
 - finalize：任务收尾（机械复核未通关则拒绝）
+
+平台协议实现与客户端实例统一收敛在 bench_platform/（模块级单例
+get_platform_client 为唯一构造点），本模块不直接读 BENCHMARK_BASE_URL/BENCHMARK_TOKEN，
+「凭证是否配置」经 platform_configured() 判定。
 """
 from __future__ import annotations
 
@@ -12,21 +17,17 @@ import json
 
 from agents import RunContextWrapper, function_tool
 
-from adapters.config import BENCHMARK_BASE_URL, BENCHMARK_TOKEN
-from bench_platform.platform_client import PlatformClient, TaskEnded, TaskNotFound
+from bench_platform.platform_client import (
+    PlatformClient,
+    TaskEnded,
+    TaskNotFound,
+    get_platform_client,
+    platform_configured,
+)
 from core.task_context import TaskContext
 from core.tool_pipeline import DEFAULT_PIPELINE, with_pipeline
 from runtime.log import log_warn
 from tools.domains._base import _scan_flags
-
-_PLATFORM = None  # 模块级单例（避免每次提交都新建 PlatformClient）
-
-
-def _platform() -> PlatformClient:
-    global _PLATFORM
-    if _PLATFORM is None:
-        _PLATFORM = PlatformClient(BENCHMARK_BASE_URL, BENCHMARK_TOKEN)
-    return _PLATFORM
 
 
 def _is_completed(client: PlatformClient, code: str) -> bool:
@@ -46,7 +47,7 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     """提交铁律：扫描完整输出中的 flag，机械提交 + 机械通关判决。
 
     被 core.tool_pipeline.AutoSubmitFlagMiddleware / ArtifactSpillMiddleware 调用，
-    作为统一工具管线的后置动作。
+    作为统一工具管线的后置动作。客户端经 get_platform_client() 单例获取。
     """
     flags = _scan_flags(text)
     if not flags:
@@ -58,11 +59,11 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     if not code:
         notes.append("[系统] 当前题 unique_code 未知，请调用 submit_flag 手动提交")
         return "\n".join(notes)
-    if not (BENCHMARK_BASE_URL and BENCHMARK_TOKEN):
+    if not platform_configured():
         notes.append("[系统] 未配置平台凭证（BENCHMARK_BASE_URL/BENCHMARK_TOKEN），无法机械提交")
         return "\n".join(notes)
 
-    client = _platform()
+    client = get_platform_client()
     for f in flags:
         if f in c.submitted:
             continue
@@ -108,7 +109,6 @@ def _submit_flags_if_any(ctx: RunContextWrapper[TaskContext], text: str) -> str:
 
 
 # 把实际提交函数绑定到默认管线的 flag 扫描 middleware，保持铁律提交不丢失。
-# 使用 _late_bind_submit 在 _submit_flags_if_any 定义后再设置。
 def _late_bind_submit() -> None:
     for _mw in DEFAULT_PIPELINE.middlewares:
         if getattr(_mw, "name", "") == "auto_submit_flag":
@@ -129,9 +129,9 @@ def finalize(ctx: RunContextWrapper[TaskContext], findings: str = "") -> str:
     """
     c = ctx.context
     # 机械复核：有题码且有平台凭证时，以平台 is_completed 为唯一通关依据
-    if c.current_code and BENCHMARK_BASE_URL and BENCHMARK_TOKEN:
+    if c.current_code and platform_configured():
         try:
-            done = _is_completed(_platform(), c.current_code)
+            done = _is_completed(get_platform_client(), c.current_code)
         except (TaskEnded, TaskNotFound):
             c.fatal = "task_ended"
             raise

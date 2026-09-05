@@ -17,5 +17,5 @@
 | H9 | 执行无沙箱 | ⬜ | R3 |
 | H10 | 无 HITL 审批 | ⬜ | R3 |
 | H11 | 文档-代码漂移无核对机制 | ✅ | R0 建表 |
-| H12 | CTF 假设硬编码散落 | ⬜ | R4 |
+| H12 | CTF 假设硬编码散落 | ✅ | R4（提交/终局逻辑收敛 profiles/ctf_legacy，get_platform_client 单例收口，主循环 grep 无 BENCHMARK_TOKEN） |
 | H13 | 仓库卫生（gitignore/data） | ✅ | M0 已做 |

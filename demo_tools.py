@@ -14,14 +14,14 @@ R1 可测试性重构：原 1311 行巨石已按功能域拆分到 tools/domains
 - 待办 → tools/domains/todo.py
 - 子任务 → tools/domains/subtask.py
 - Artifacts → tools/domains/artifacts.py
-- 平台提交铁律 → tools/domains/platform.py
+- 平台提交铁律 → profiles/ctf_legacy/platform.py（R4 H12：CTF 专属提交/终局代码收敛）
 - VPN → tools/domains/vpn.py
 - 共享安全纯函数 → tools/domains/_base.py
 - 清单/分组/加载控制 → tools/domains/registry.py
 
 （提交铁律：shell/http_request 等工具返回前机械扫描 flag 并自动提交，已由
   core.tool_pipeline 的 AutoSubmitFlagMiddleware / ArtifactSpillMiddleware 统一处理，
-  _late_bind_submit 绑定逻辑随 platform.py 加载执行。）
+  _late_bind_submit 绑定逻辑随 profiles/ctf_legacy/platform.py 加载执行。）
 """
 from __future__ import annotations
 
@@ -114,10 +114,8 @@ from tools.domains.artifacts import (
     ARTIFACT_SPILL_THRESHOLD,      # noqa: F401
 )
 
-# 平台域（flag 提交铁律 / 通关复核 / finalize）
-from tools.domains.platform import (
-    _PLATFORM,                     # noqa: F401
-    _platform,                     # noqa: F401
+# 平台域（flag 提交铁律 / 通关复核 / finalize；R4 H12 收敛到 profiles/ctf_legacy）
+from profiles.ctf_legacy.platform import (
     _is_completed,                 # noqa: F401
     _submit_flags_if_any,          # noqa: F401
     _late_bind_submit,             # noqa: F401
@@ -169,8 +167,7 @@ __all__ = [
     # artifacts
     "read_artifact", "write_file", "_spill_output", "ARTIFACT_SPILL_THRESHOLD",
     # platform
-    "_PLATFORM", "_platform", "_is_completed", "_submit_flags_if_any",
-    "_late_bind_submit", "finalize",
+    "_is_completed", "_submit_flags_if_any", "_late_bind_submit", "finalize",
     # vpn
     "connect_vpn",
     # registry

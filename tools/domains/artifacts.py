@@ -15,8 +15,8 @@ from agents import RunContextWrapper, function_tool
 
 from core.task_context import TaskContext
 from core.tool_pipeline import DEFAULT_PIPELINE, with_pipeline
+from profiles.ctf_legacy.platform import _submit_flags_if_any
 from tools.domains._base import _guard_output
-from tools.domains.platform import _submit_flags_if_any
 
 ARTIFACT_SPILL_THRESHOLD = 4000  # 工具输出超过此字符数才外置到 artifacts/
 
