@@ -179,6 +179,18 @@ export interface ReportSummary {
   sections: string[]
   totalFindings: number
   generatedAt?: string
+  /** 「生成即存」落盘的产物元信息（md + json 各一份，无产物时为空数组）。 */
+  artifacts?: ArtifactMeta[]
+}
+
+/** 报告产物元信息（server/artifacts.py ArtifactMeta，落盘即返回）。 */
+export interface ArtifactMeta {
+  artifactId: string
+  engagementId: string
+  format: 'md' | 'json'
+  path: string
+  sizeBytes: number
+  createdAt: string
 }
 
 /** 方法 → { request, response } 类型映射；新增后端方法在此登记。 */
@@ -190,6 +202,9 @@ export interface ApiMethodMap {
   steer: { request: SteerRequest; response: Record<string, never> }
   respond: { request: RespondRequest; response: Record<string, never> }
   report: { request: ReportRequest; response: ReportSummary }
+  listArtifacts: { request: { engagementId: string }; response: { artifacts: ArtifactMeta[] } }
+  /** 导出走原始文件流（成功非 JSON 信封），不能用 call()——见 downloadReport helper。 */
+  exportReport: { request: { engagementId: string; format: 'md' | 'json' }; response: Blob }
 }
 
 export type ApiMethodName = keyof ApiMethodMap
@@ -203,4 +218,59 @@ export const API_METHODS: readonly ApiMethodName[] = [
   'steer',
   'respond',
   'report',
+  'listArtifacts',
+  'exportReport',
 ]
+
+// ───────────────────────── 报告文件导出（绕过 JSON 信封） ─────────────────────────
+
+/**
+ * 下载报告产物：POST /api/exportReport 直接取原始文件流（成功非 200 JSON 信封，
+ * 不能走 ApiClient.call）。res.ok → blob + 临时 ObjectURL 触发浏览器下载，
+ * 文件名从 Content-Disposition 解析（兜底 report-<engagementId>.<fmt>）；
+ * 非 ok（业务错误恒 HTTP 200 {ok:false,error}）→ 解析错误消息并抛
+ * ApiBusinessError，由调用方提示。
+ */
+export async function downloadReport(
+  engagementId: string,
+  format: 'md' | 'json',
+  baseUrl?: string,
+): Promise<void> {
+  const origin = baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')
+  const res = await fetch(`${origin}/api/exportReport`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ rpcId: 'rpc-export', method: 'exportReport', payload: { engagementId, format } }),
+  })
+  if (!res.ok) {
+    throw new Error(`POST /api/exportReport 载体层错误 HTTP ${res.status}`)
+  }
+  // 业务错误恒 HTTP 200 + {ok:false,error}：先看 content-type 再决定按信封还是文件流解析
+  const contentType = res.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    const envelope = (await res.json()) as RpcResult<never>
+    if (!envelope.ok) {
+      throw new Error(`导出失败 ${envelope.error.code}：${envelope.error.message}`)
+    }
+  }
+  const blob = await res.blob()
+  const filename = _filenameFromDisposition(res.headers.get('content-disposition'))
+    ?? `report-${engagementId}.${format}`
+  const url = URL.createObjectURL(blob)
+  try {
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+  } finally {
+    // 下载交给浏览器后即可回收（Chrome 会持有 blob 至落盘完成）
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
+}
+
+/** 从 Content-Disposition 头解析 filename（attachment; filename="..." 形态）。 */
+function _filenameFromDisposition(disposition: string | null): string | null {
+  if (disposition === null) return null
+  const match = /filename\*?=(?:UTF-8''|"|\s)?([^";\s]+)/i.exec(disposition)
+  return match !== null ? decodeURIComponent(match[1] ?? '') : null
+}

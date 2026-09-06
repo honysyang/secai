@@ -29,6 +29,10 @@ from typing import Any
 
 from core.events import BUS
 from harness.session_manager import SessionContext, SessionManager
+from server.artifacts import ArtifactsStore
+
+# 产物落盘根目录（data/ 已被 .gitignore 忽略；可用 SECAI_ARTIFACTS_DIR 覆盖）
+DEFAULT_ARTIFACTS_DIR = "data/artifacts"
 
 TERMINAL_STATUSES = frozenset({"completed", "failed", "stopped"})
 # 会话状态词表（对齐前端 SessionStatus 子集）
@@ -138,6 +142,9 @@ class AppState:
         self.sessions: dict[str, SessionRec] = {}
         # 报告桥接：completed 会话 → 纯函数报告引擎输入（fixture 注册，真实引擎接入后同源）
         self.report_profiles: dict[str, Any] = {}
+        # 报告产物落盘：api_report「生成即存」hook 的目标存储（目录惰性创建）
+        artifacts_root = os.getenv("SECAI_ARTIFACTS_DIR", DEFAULT_ARTIFACTS_DIR)
+        self.artifacts = ArtifactsStore(artifacts_root)
         # SessionManager 以共享 BUS 桥接（事件按 session_id 键隔离，seq 各自计数）
         self.manager = SessionManager(shared_bus=BUS)
         self._unsubscribe = BUS.subscribe(self._on_bus_event)
@@ -491,6 +498,7 @@ async def _hold_runner(ctx: SessionContext) -> None:
 __all__ = [
     "ACTIVE_STATUSES",
     "AppState",
+    "DEFAULT_ARTIFACTS_DIR",
     "DEMO_TICK_SECONDS",
     "EngagementRec",
     "Hub",

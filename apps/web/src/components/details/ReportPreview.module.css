@@ -68,6 +68,13 @@
   gap: 8px;
 }
 
+.actionButtons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
 .meta {
   font-size: 10.5px;
   line-height: 16px;

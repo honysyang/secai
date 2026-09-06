@@ -21,6 +21,8 @@ from starlette.routing import Route, WebSocketRoute
 from server.api import (
     api_describe,
     api_engagements,
+    api_export_report,
+    api_list_artifacts,
     api_report,
     api_respond,
     api_run,
@@ -41,6 +43,8 @@ ROUTES = [
     Route("/api/steer", api_steer, methods=["POST"]),
     Route("/api/respond", api_respond, methods=["POST"]),
     Route("/api/report", api_report, methods=["POST"]),
+    Route("/api/listArtifacts", api_list_artifacts, methods=["POST"]),
+    Route("/api/exportReport", api_export_report, methods=["POST"]),
     WebSocketRoute("/api/events.mux", events_mux),
     WebSocketRoute("/api/events.host", events_host),
     Route("/{path:path}", spa, methods=["GET"]),

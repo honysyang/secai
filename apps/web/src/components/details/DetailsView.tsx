@@ -65,7 +65,7 @@ export function DetailsView({ session }: DetailsViewProps) {
             <PortScanResult surface={surface} />
           </Section>
           <Section title="报告预览" hint={report !== null ? `发现 ${report.findings?.length ?? 0}` : 'projection.report'}>
-            <ReportPreview report={report} />
+            <ReportPreview report={report} engagementId={session.header?.engagementId} />
           </Section>
           <Section title="学习与成长" hint={deadEndCount > 0 ? `死路 ${deadEndCount}` : 'projection.growth'}>
             <LearningPanel growth={growth} />

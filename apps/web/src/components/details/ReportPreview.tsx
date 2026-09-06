@@ -1,12 +1,14 @@
 /**
  * ReportPreview：报告实时投影预览（F3 details）。数据 = projection.report
  * （parseReport）。状态行（撰写中/就绪）+ 摘要 + 发现列表（severity 徽章）；
- * 「完整报告」按钮弹 Modal 全屏排版（章节 + 全部发现 + 负面结论占位提示）。
+ * 「完整报告」按钮弹 Modal 全屏排版（章节 + 全部发现 + 负面结论占位提示）；
+ * 「导出报告」下拉（Markdown / JSON）走 downloadReport 直接取文件流落盘。
  */
 
 import { useState } from 'react'
 import type { ReportProjection } from '../../runtime/projections.ts'
 import { formatDateTime } from '../../runtime/format.ts'
+import { downloadReport } from '../../connection/api.ts'
 import { Button } from '../primitives/Button.tsx'
 import { Modal } from '../primitives/Modal.tsx'
 import { SEVERITY_LABEL } from './severity.ts'
@@ -15,9 +17,22 @@ import css from './ReportPreview.module.css'
 
 export interface ReportPreviewProps {
   report: ReportProjection | null
+  /** 当前任务书 id（导出产物按 engagement 落盘；缺省隐藏导出入口）。 */
+  engagementId?: string
 }
 
-export function ReportPreview({ report }: ReportPreviewProps) {
+type ReportFormat = 'md' | 'json'
+
+/** 触发一次报告生成落盘后按格式下载（下载失败 alert 行内提示）。 */
+async function exportReport(engagementId: string, format: ReportFormat): Promise<void> {
+  try {
+    await downloadReport(engagementId, format)
+  } catch (cause) {
+    window.alert(`导出报告失败：${cause instanceof Error ? cause.message : String(cause)}`)
+  }
+}
+
+export function ReportPreview({ report, engagementId }: ReportPreviewProps) {
   const [open, setOpen] = useState(false)
   if (report === null) {
     return (
@@ -43,9 +58,17 @@ export function ReportPreview({ report }: ReportPreviewProps) {
       )}
       <div className={css.actions}>
         <span className={css.meta}>章节 {sections.length} · 发现 {findings.length}</span>
-        <Button size="sm" onClick={() => setOpen(true)} disabled={sections.length === 0 && findings.length === 0}>
-          完整报告
-        </Button>
+        <span className={css.actionButtons}>
+          {engagementId !== undefined && (
+            <>
+              <Button size="sm" onClick={() => void exportReport(engagementId, 'md')}>导出 Markdown</Button>
+              <Button size="sm" onClick={() => void exportReport(engagementId, 'json')}>导出 JSON</Button>
+            </>
+          )}
+          <Button size="sm" onClick={() => setOpen(true)} disabled={sections.length === 0 && findings.length === 0}>
+            完整报告
+          </Button>
+        </span>
       </div>
       {findings.length > 0 && (
         <ol className={css.findings}>

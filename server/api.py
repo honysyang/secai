@@ -22,13 +22,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from profiles.practical_pentest.report import generate_engagement_report
 from server import SERVER_NAME, SERVER_VERSION
+from server.artifacts import FORMAT_MEDIA_TYPES
 from server.fixture import APPROVAL_RPC, build_report_snapshot, respond_aftermath, steer_reply
 from server.run_spec import RunSpecError, normalize_run_payload
 from server.state import TERMINAL_STATUSES, now_iso
@@ -211,9 +213,13 @@ async def api_report(request: Request) -> JSONResponse:
                 "status": "ready" if ready else "drafting",
                 "sections": [],
                 "totalFindings": 0,
+                "artifacts": [],
             }
         )
     report = generate_engagement_report([snapshot], generated_at=now_iso())
+    # 「生成即存」：报告引擎输出后立刻落盘 md + json 两份产物（幂等留档，不覆盖旧产物）
+    metas = [state.artifacts.save_report(engagement_id, report, fmt="md"),
+             state.artifacts.save_report(engagement_id, report, fmt="json")]
     return _ok(
         {
             "engagementId": engagement_id,
@@ -221,7 +227,48 @@ async def api_report(request: Request) -> JSONResponse:
             "sections": REPORT_SECTION_TITLES,
             "totalFindings": len(report.findings),
             "generatedAt": report.cover.get("generated_at"),
+            "artifacts": [m.to_dict() for m in metas],
         }
+    )
+
+
+# ---------------------------------------------------------------------------
+# artifacts：报告产物检索与导出（一键导出闭环）
+# ---------------------------------------------------------------------------
+async def api_list_artifacts(request: Request) -> JSONResponse:
+    """listArtifacts：列出任务书全部产物元信息（导出前先触发 /api/report 落盘）。"""
+    payload = await _rpc_payload(request)
+    engagement_id = str(payload.get("engagementId") or "")
+    state = _state(request)
+    if engagement_id not in state.engagements:
+        return _error("unknown_engagement", f"未知任务书: {engagement_id}")
+    metas = state.artifacts.list(engagement_id)
+    return _ok({"artifacts": [m.to_dict() for m in metas]})
+
+
+async def api_export_report(request: Request) -> Response:
+    """exportReport：产物文件下载（HTTP 200 + Content-Disposition attachment）。
+
+    业务约定例外：本端点成功路径返回原始文件流（非 _ok 信封），失败仍走
+    恒 HTTP 200 的 _error JSON（not_found / bad_request）。
+    """
+    payload = await _rpc_payload(request)
+    engagement_id = str(payload.get("engagementId") or "")
+    fmt = str(payload.get("format") or "")
+    if fmt not in FORMAT_MEDIA_TYPES:
+        return _error("bad_request", f"format 必须是 {' / '.join(FORMAT_MEDIA_TYPES)}")
+    state = _state(request)
+    if engagement_id not in state.engagements:
+        return _error("unknown_engagement", f"未知任务书: {engagement_id}")
+    meta = state.artifacts.resolve(engagement_id, fmt)
+    if meta is None or not Path(meta.path).is_file():
+        return _error("not_found", f"该任务书尚无 {fmt} 格式产物——请先调用 /api/report 触发生成")
+    data = Path(meta.path).read_bytes()
+    filename = f"report-{engagement_id}.{fmt}"
+    return Response(
+        content=data,
+        media_type=FORMAT_MEDIA_TYPES[fmt],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -229,6 +276,8 @@ __all__ = [
     "REPORT_SECTION_TITLES",
     "api_describe",
     "api_engagements",
+    "api_export_report",
+    "api_list_artifacts",
     "api_report",
     "api_respond",
     "api_run",
