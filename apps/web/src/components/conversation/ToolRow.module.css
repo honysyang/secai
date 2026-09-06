@@ -1,0 +1,151 @@
+/* ToolRow 皮肤（复刻 dsh ui-tool ToolRow.module.css，裁剪卡片族）。
+   单行 24px；running 扫光带 = 300px 固定宽 theme 背景 60% 光泽从左外滑到
+   右外（ease-out + 10% 收尾 hold）；IN/OUT 卡片 12px 圆角、各段独立
+   150px 内滚、gutter label 吸顶。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  position: relative; /* 扫光带锚点 */
+  overflow: hidden;
+}
+
+/* running 扫光（deepsuite ShimmerText 模式）：固定宽光泽带滑过行内容。 */
+.root[data-state='running'] .row::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 300px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--secai-alias-bg-base) 60%, transparent) 55%,
+    transparent 100%
+  );
+  animation: secai-tool-row-sweep 2.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes secai-tool-row-sweep {
+  0% { left: -300px; }
+  90%, 100% { left: 100%; }
+}
+
+.leading {
+  flex-shrink: 0;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.title {
+  font-weight: 400;
+}
+
+/* 2x2 分隔圆点（caption 灰）。 */
+.sep {
+  flex: none;
+  width: 2px;
+  height: 2px;
+  border-radius: 1px;
+  margin: 0 8px;
+  background: var(--secai-alias-label-caption);
+}
+
+.summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+/* error 行的折叠摘要 = 失败首行，error 色。 */
+.errorSummary {
+  color: var(--secai-alias-state-error-primary);
+}
+
+/* 展开体容器（行兄弟节点，点击不冒泡切换）。 */
+.bodyWrap {
+  display: flex;
+  flex-direction: column;
+}
+
+/* IN/OUT 卡片：code-block 面 + 12px 圆角；段网格自带 padding，
+   分隔线贯满卡片全宽。 */
+.ioCard {
+  display: flex;
+  flex-direction: column;
+  margin: 4px 0 4px 4px;
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 12px;
+  background: var(--secai-alias-markdown-code-block);
+  font-family: var(--secai-font-family-code);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* 单段（IN 或 OUT）：gutter-label 网格；max-height 150px 独立滚动，
+   长输入不会埋没短输出。 */
+.ioSection {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 14px;
+  align-items: baseline;
+  padding: 12px 16px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+/* 卡片内滚动条：2px 透明边把 thumb 裁进圆角内侧。 */
+.ioSection::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 6px;
+}
+
+.ioSection::-webkit-scrollbar-track {
+  margin: 6px 0;
+}
+
+/* gutter label：caption 色，吸顶于段滚动口。 */
+.ioLabel {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  color: var(--secai-alias-label-caption);
+}
+
+/* IN/OUT 之间的 l2 发丝线，贯满卡片全宽。 */
+.ioDivider {
+  flex: none;
+  height: 1px;
+  background: var(--secai-alias-border-l2);
+}
+
+.ioText {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--secai-alias-label-secondary);
+}
+
+.ioText[data-error] {
+  color: var(--secai-alias-state-error-primary);
+}
+
+/* 无障碍运行/失败状态文案（visually hidden）。 */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

@@ -1,30 +1,20 @@
-/**
- * ConversationView：会话中栏的组合视图（F3 编排）。从当前 SessionSnapshot
- * 取数分发给子组件：ApprovalCard（approval/requested 帧 → respond）、
- * ChatView（events → 气泡流）、HypothesisQueue（queue 按 priority 排序）、
- * DeadEndList（projection.dead_ends 折叠）、InputBar（禁用态/审批提示）。
- * 顶栏放连接徽章（DEMO/已连接）与 ThemeToggle。
- */
+// ConversationView：会话中栏的组合视图（复刻 dsh ConversationRoot 语义）。
+// 根上定义共享宽轴变量：消息列宽轴（748px）与输入卡上限（列宽 + 32px），
+// 供 ChatView / InputBar / ApprovalCard 引用同一居中轴。
+// 结构 = scrollBody（ChatView，滚动带底部渐隐遮罩）+ composerSeat（sticky 底部
+// 座位：有 pendingApprovals 时渲染 ApprovalCard takeover 替代 InputBar）。
+// 无顶栏——连接徽章与主题切换已迁至 sidebar footer（任务书）；假设队列/死路
+// 折叠不搬，改由 DetailsView 右侧分节呈现。
 
+import { useState } from 'react'
 import type { SessionSnapshot } from '../../runtime/session.ts'
-import { parseDeadEnds } from '../../runtime/projections.ts'
-import type { ThemeControl } from '../theme/theme.ts'
-import { ThemeToggle } from '../theme/ThemeToggle.tsx'
 import type { RespondDecision } from './ApprovalCard.tsx'
 import { ApprovalCard } from './ApprovalCard.tsx'
 import { ChatView } from './ChatView.tsx'
-import { DeadEndList } from './DeadEndList.tsx'
-import { HypothesisQueue } from './HypothesisQueue.tsx'
 import { InputBar } from './InputBar.tsx'
 import css from './ConversationView.module.css'
 
-export type LinkTone = 'demo' | 'live' | 'offline'
-
 export interface ConversationViewProps {
-  theme: ThemeControl
-  /** 连接徽章文案（DEMO / 已连接 / 重连中…）。 */
-  linkLabel: string
-  linkTone: LinkTone
   session: SessionSnapshot | null
   onSend: (text: string) => void
   onRespond: (rpcId: string, decision: RespondDecision, comment?: string) => void
@@ -36,7 +26,7 @@ function inputGate(session: SessionSnapshot | null): { disabled: boolean; reason
   if (session.removed) return { disabled: true, reason: '该目标会话已结束' }
   switch (session.status) {
     case 'awaiting_approval':
-      return { disabled: true, reason: '等待人工审批放行（先处理上方审批卡）' }
+      return { disabled: true, reason: '等待人工审批放行（先处理下方审批卡）' }
     case 'completed':
       return { disabled: true, reason: '该目标已完成——报告见右侧详情' }
     case 'failed':
@@ -48,54 +38,51 @@ function inputGate(session: SessionSnapshot | null): { disabled: boolean; reason
   }
 }
 
-export function ConversationView({
-  theme, linkLabel, linkTone, session, onSend, onRespond,
-}: ConversationViewProps) {
+export function ConversationView({ session, onSend, onRespond }: ConversationViewProps) {
+  const [approvalsOpen, setApprovalsOpen] = useState(false)
   const gate = inputGate(session)
-  const deadEnds = session !== null ? parseDeadEnds(session.projections.dead_ends) : null
-  const queue = session?.queue ?? []
   const approvals = session?.pendingApprovals ?? []
+  const hasApprovals = approvals.length > 0
 
   return (
     <div className={css.root}>
-      <div className={css.header}>
-        <span className={css.dot} data-status={session === null ? undefined : (session.removed ? 'stopped' : session.status)} aria-hidden="true" />
-        <div className={css.titles}>
-          <div className={css.title}>{session?.header?.target ?? 'SECAI-PT · 破阵'}</div>
-          <div className={css.sub}>
-            {session === null ? '未选择目标' : `${session.sessionId} · ${session.counts.events} 事件`}
-          </div>
-        </div>
-        <div className={css.tools}>
-          <span className={css.linkBadge} data-tone={linkTone} title={linkLabel}>{linkLabel}</span>
-          <ThemeToggle control={theme} />
-        </div>
+      <div className={css.scrollBody}>
+        <ChatView
+          events={session?.events ?? []}
+          running={session?.status === 'running'}
+          emptyText={
+            session === null
+              ? '从左侧选择一个目标会话。'
+              : '会话尚未开始——提交任务书后 agent 的消息与工具调用会出现在这里。'
+          }
+        />
       </div>
 
-      {approvals.length > 0 && (
-        <div className={css.approvals} role="region" aria-label="待审批操作">
-          {approvals.map((approval) => (
-            <ApprovalCard
-              key={approval.rpcId}
-              rpcId={approval.rpcId}
-              payload={approval.payload}
-              onRespond={(rpcId, decision, comment) => onRespond(rpcId, decision, comment)}
-            />
-          ))}
-        </div>
-      )}
-
-      <ChatView events={session?.events ?? []} />
-
-      {queue.length > 0 && <HypothesisQueue items={queue} />}
-      {deadEnds !== null && <DeadEndList items={deadEnds} />}
-
-      <InputBar
-        disabled={gate.disabled}
-        disabledReason={gate.reason}
-        pendingApprovals={session?.pendingApprovals.length ?? 0}
-        onSend={onSend}
-      />
+      <div className={css.composerSeat}>
+        {hasApprovals ? (
+          <>
+            {approvals.length > 1 && !approvalsOpen && (
+              <button
+                type="button"
+                className={css.moreApprovals}
+                onClick={() => setApprovalsOpen(true)}
+              >
+                还有 {approvals.length - 1} 项待审批——展开全部
+              </button>
+            )}
+            {(approvalsOpen ? approvals : approvals.slice(0, 1)).map((approval) => (
+              <ApprovalCard
+                key={approval.rpcId}
+                rpcId={approval.rpcId}
+                payload={approval.payload}
+                onRespond={(rpcId, decision, comment) => onRespond(rpcId, decision, comment)}
+              />
+            ))}
+          </>
+        ) : (
+          <InputBar disabled={gate.disabled} disabledReason={gate.reason} onSend={onSend} />
+        )}
+      </div>
     </div>
   )
 }

@@ -1,119 +1,153 @@
-/* 审批卡：amber 强调（T3 人审，approval/requested 帧驱动）。
- * 拒绝 = outline + 红字覆盖；允许 = info 蓝。备注输入行常显。 */
-.card {
+/* ApprovalCard 皮肤（对齐 dsh ui-conversation ApprovalPanel.module.css）：
+   与 InputBar 同款的浮动胶囊足迹（takeover 而非并列卡片），琥珀 warn 条 +
+   input-major 底 + shadow lv2；body 滚动上限与草稿区同高（14 行），
+   操作行在滚动区外（按钮永远可达）。 */
+
+.root {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  margin: 8px 12px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--secai-alias-state-warn-primary);
-  border-radius: 12px;
-  background: var(--secai-alias-state-warn-tertiary);
+  align-items: center;
+  padding: 8px 32px 0;
 }
 
-.head {
+.card {
+  overflow: hidden;
+  width: 100%;
+  max-width: var(--secai-chat-content-width);
+  border: 1px solid var(--secai-alias-state-warn-secondary);
+  border-radius: 20px;
+  background: var(--secai-specific-input-major);
+  box-shadow: var(--secai-alias-shadow-lv2);
+  --secai-scrollbar-thumb: var(--secai-alias-scrollbar-bg-l2);
+  --secai-scrollbar-thumb-hover: var(--secai-alias-scrollbar-hover-l2);
+}
+
+/* 琥珀全宽头带。 */
+.strip {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
+  padding: 10px 16px;
+  background: var(--secai-alias-state-warn-tertiary);
+  color: var(--secai-alias-state-warn-primary);
+  font-size: 13px;
+  line-height: 18px;
 }
 
-.pulse {
-  position: relative;
-  flex: none;
-  width: 9px;
-  height: 9px;
+.dot {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--secai-alias-state-warn-primary);
 }
 
-.pulse::after {
-  content: '';
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1px solid var(--secai-alias-state-warn-primary);
-  animation: approval-ping 1.4s ease-out infinite;
-}
-
-@keyframes approval-ping {
-  0% { opacity: 0.85; transform: scale(0.7); }
-  80%, 100% { opacity: 0; transform: scale(1.25); }
-}
-
-.title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 20px;
-  color: var(--secai-alias-label-primary);
-}
-
 .time {
-  flex: none;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--secai-alias-label-caption);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--secai-alias-state-warn-label);
 }
 
-.desc {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 19px;
-  color: var(--secai-alias-label-secondary);
+/* 滚动区：理由与命令是无界文本，封顶同草稿区高（14 行）。 */
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  max-height: 336px;
+  overflow-y: auto;
+  padding: 12px 16px 0;
+}
+
+.headline {
+  color: var(--secai-alias-label-primary);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.command {
+  color: var(--secai-alias-label-tertiary);
+  font-family: var(--secai-font-family-code);
+  font-size: 13px;
+  line-height: 20px;
+  word-break: break-all;
 }
 
 .details {
-  font-size: 11px;
+  margin: 0;
 }
 
 .detailsSummary {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--secai-alias-label-tertiary);
   cursor: pointer;
-  color: var(--secai-alias-label-caption);
   user-select: none;
-}
-
-.detailsSummary:hover {
-  color: var(--secai-alias-label-secondary);
 }
 
 .detail {
   margin: 4px 0 0;
-  padding: 6px 8px;
-  overflow: auto;
-  max-height: 120px;
+  padding: 8px 12px;
   border-radius: 8px;
-  background: var(--secai-alias-bg-layer-1);
-  color: var(--secai-alias-label-tertiary);
+  background: var(--secai-alias-markdown-code-block);
   font-family: var(--secai-font-family-code);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 12px;
+  line-height: 18px;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
+  color: var(--secai-alias-label-secondary);
 }
 
-.actions {
+/* 操作行（卡片级，body 之外）。 */
+.actionRow {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  padding: 14px 16px;
 }
 
 .note {
   flex: 1;
-  min-width: 0;
-  background: var(--secai-alias-bg-layer-1);
+  margin-right: auto;
 }
 
-.deny {
+.actionButton {
   flex: none;
-  border-color: var(--secai-alias-state-error-primary);
-  color: var(--secai-alias-state-error-primary);
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 100ms ease;
 }
 
-.deny:hover:not(:disabled) {
+.actionButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 拒绝：描边胶囊，hover 转 danger。 */
+.reject {
+  border: 1px solid var(--secai-alias-border-l2);
+  background: transparent;
+  color: var(--secai-alias-label-primary);
+}
+
+.reject:hover:not(:disabled) {
   background: var(--secai-alias-interactive-bg-hover-danger);
+  color: var(--secai-alias-state-error-primary);
+  border-color: transparent;
+}
+
+/* 允许：info 蓝实底白字。 */
+.allow {
+  border: none;
+  background: var(--secai-alias-button-info-fill);
+  color: #fff;
+}
+
+.allow:hover:not(:disabled) {
+  background: var(--secai-alias-button-info-hover);
 }

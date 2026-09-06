@@ -1,65 +1,79 @@
-/**
- * TargetItem：目标会话行（F3 sidebar）。数据 = host/session-* 帧驱动的
- * SessionSnapshot：
- * - 名称取 header.target，状态圆点 running=蓝(呼吸) / awaiting_approval=
- *   amber / completed=绿 / failed=红 / idle·stopped=灰（dsh 圆点语言）。
- * - 待审批数 > 0 时行末挂 ApprovalBadge（approval/requested 帧计数）。
- * - 子 agent 活动（subagent 事件，runtime/eventTurns.deriveSubagents）
- *   在行下缩进渲染为小状态行。
- */
+// TargetItem：侧边栏目标行（复刻 dsh ui-workspace sessionRow）。
+// 32px 高、radius 8、padding 0 8px；16x20 前导槽放 StateDot；
+// title 14/20 省略；time 12/20 tertiary，hover 时 time 隐藏、rowActions 显形
+// （纯 CSS）。状态映射：running→ongoing(蓝)、awaiting_approval→warning(琥珀)、
+// failed→error(红)、completed→done(绿)、idle/stopped→灰点。
 
 import type { SessionSnapshot } from '../../runtime/session.ts'
-import type { SubagentView } from '../../runtime/eventTurns.ts'
+import { StateDot } from '../primitives/StateDot.tsx'
+import type { StateDotState } from '../primitives/StateDot.tsx'
 import { formatClock } from '../../runtime/format.ts'
-import { ApprovalBadge } from './ApprovalBadge.tsx'
 import css from './TargetItem.module.css'
 
-/** 状态 → 中文行内小字（与圆点色同源）。 */
-export const STATUS_LABEL: Record<string, string> = {
-  idle: '就绪',
-  running: '运行中',
-  awaiting_approval: '等待审批',
-  completed: '已完成',
-  failed: '已失败',
-  stopped: '已停止',
+/** SECAI 会话状态 → dsh StateDot 四态（idle/stopped 无对应色，用灰 caption 点）。 */
+function dotState(status: SessionSnapshot['status'], removed: boolean): StateDotState | 'idle' {
+  if (removed) return 'idle'
+  switch (status) {
+    case 'running':
+      return 'ongoing'
+    case 'awaiting_approval':
+      return 'warning'
+    case 'failed':
+      return 'error'
+    case 'completed':
+      return 'done'
+    default:
+      return 'idle'
+  }
 }
 
 export interface TargetItemProps {
   session: SessionSnapshot
-  active: boolean
-  subagents?: readonly SubagentView[]
-  onSelect: () => void
+  selected: boolean
+  onSelect: (sessionId: string) => void
 }
 
-export function TargetItem({ session, active, subagents = [], onSelect }: TargetItemProps) {
-  const status = session.removed ? 'stopped' : session.status
-  const pending = session.pendingApprovals.length
+export function TargetItem({ session, selected, onSelect }: TargetItemProps) {
+  const target = session.header?.target ?? session.sessionId
+  const state = dotState(session.removed ? 'stopped' : session.status, session.removed)
+  const time = formatClock(session.lastEventAt ?? session.header?.updatedAt)
   return (
-    <div>
-      <button
-        type="button"
-        className={css.item}
-        data-active={active || undefined}
-        onClick={onSelect}
-        title={session.header?.target ?? session.sessionId}
-      >
-        <span className={css.dot} data-status={status} aria-hidden="true" />
-        <span className={css.body}>
-          <span className={css.name}>{session.header?.target ?? session.sessionId}</span>
-          <span className={css.meta}>
-            {STATUS_LABEL[status] ?? status}
-            {session.lastEventAt !== null ? ` · ${formatClock(session.lastEventAt)}` : ''}
-          </span>
-        </span>
-        {pending > 0 && <ApprovalBadge count={pending} />}
-      </button>
-      {subagents.map((agent) => (
-        <div key={agent.key} className={css.sub} title={agent.role}>
-          <span className={css.subDot} aria-hidden="true" />
-          <span className={css.subName}>{agent.name}</span>
-          <span className={css.subState}>{agent.state}</span>
-        </div>
-      ))}
+    <div
+      className={css.sessionRow}
+      data-selected={selected || undefined}
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(session.sessionId)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelect(session.sessionId)
+        }
+      }}
+    >
+      <span className={css.slot}>
+        {state === 'idle' ? (
+          <span className={css.idleDot} aria-hidden="true" />
+        ) : (
+          <StateDot state={state} size={10} />
+        )}
+      </span>
+      <span className={css.title} title={target}>{target}</span>
+      <span className={css.time} data-time="">{time}</span>
+      {/* 行尾操作占位（dsh 为 ellipsis 菜单钮；SECAI 暂无可挂动作，纯视觉位） */}
+      <span className={css.rowActions} data-actions="">
+        <EllipsisIcon />
+      </span>
     </div>
+  )
+}
+
+function EllipsisIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+      <circle cx="3" cy="7" r="1.2" />
+      <circle cx="7" cy="7" r="1.2" />
+      <circle cx="11" cy="7" r="1.2" />
+    </svg>
   )
 }

@@ -1,177 +1,181 @@
-/* 消息流滚动容器：唯一滚动区（情报条/输入条在外固定）。
- * 气泡 = specific-bubble（assistant）/ business 蓝反白（user），
- * 工具卡 = <details> 折叠（结果 pre 代码面）。全部 --secai-* token。 */
+/* ChatView 皮肤（复刻 dsh ui-conversation ChatView/MessageItem）：
+   全宽滚动区 + 居中 column（共享 --secai-chat-content-width 宽轴，gap 16px）；
+   user 气泡右对齐（stack max-width min(525px,82%)，bubble r22 10x16 16/24
+   bubble 底色）；assistant 全宽纯文本；运行扫光字 background-clip:text
+   1.8s 线性循环；回到底部 sticky 圆形钮 34px（floating-fill + shadow lv2）。 */
+
+.root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .scroll {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  /* 左右 = 输入卡净空 16px + 16px：窄视口下消息列恰比输入卡窄 32px（共享宽轴规则） */
+  padding: 16px 32px;
 }
 
-.inner {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+/* 消息列：与输入卡同一居中轴（输入卡上限 = 列宽 + 32px）。 */
+.column {
+  max-width: var(--secai-chat-content-width);
   width: 100%;
   margin: 0 auto;
-  padding: 14px 16px 18px;
-}
-
-.empty {
-  padding: 42px 24px;
-  text-align: center;
-  font-size: 12.5px;
-  line-height: 19px;
-  color: var(--secai-alias-label-caption);
-}
-
-.rowLeft,
-.rowRight {
   display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 行身份边界（虚拟化前的自然测量/挂载单位，今为中性盒）。 */
+.flowItem {
   min-width: 0;
 }
 
-.rowRight {
-  justify-content: flex-end;
+.flowItem:empty {
+  display: none;
+}
+
+/* 空态。 */
+.empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--secai-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/* user 气泡行：右对齐列（figma User_Bubble/message_container）。 */
+.userRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.userStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(525px, 82%);
 }
 
 .bubble {
-  max-width: 80%;
-  padding: 8px 12px;
-  border-radius: 14px;
-  font-size: 13.5px;
-  line-height: 20px;
+  max-width: 100%;
+  background: var(--secai-specific-bubble);
+  border-radius: 22px;
+  /* 单行气泡 44px 高：24 行高 + 上下各 10px padding */
+  padding: 10px 16px;
+  font-size: 16px;
+  line-height: 24px;
+  color: var(--secai-alias-label-primary);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+/* assistant 全宽文本列（无气泡，markdown 语义列）。 */
 .assistant {
-  background: var(--secai-specific-bubble);
+  width: 100%;
+  font-size: 15px;
+  line-height: 24px;
   color: var(--secai-alias-label-primary);
-  border-top-left-radius: 5px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.user {
-  background: var(--secai-alias-state-business-primary);
-  color: var(--secai-alias-label-primary-foreground);
-  border-bottom-right-radius: 5px;
+/* 系统小字行（子 agent / 假设推进）。 */
+.system {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--secai-alias-label-tertiary);
 }
 
-.tool {
-  border: 1px solid var(--secai-alias-border-l1);
-  border-radius: 10px;
-  background: var(--secai-alias-bg-layer-1);
-  overflow: hidden;
+/* 运行状态行：淡 brand 蓝扫光带自左向右（background-clip:text），
+   1.8s 线性循环；reduced-motion 保持静态。 */
+.turnStatus {
+  align-self: flex-start;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+  background: linear-gradient(
+    90deg,
+    var(--secai-static-deepseek-500) 0%,
+    var(--secai-static-deepseek-500) 40%,
+    var(--secai-static-deepseek-200) 50%,
+    var(--secai-static-deepseek-500) 60%,
+    var(--secai-static-deepseek-500) 100%
+  );
+  background-position: 100% 0;
+  background-size: 250% 100%;
+  background-clip: text;
+  color: transparent;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: secai-turn-status-shimmer 1.8s linear infinite;
 }
 
-.toolHead {
+.turnStatusClock {
+  margin-left: 8px;
+  font-size: 13px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--secai-alias-label-caption);
+  -webkit-text-fill-color: var(--secai-alias-label-caption);
+}
+
+@keyframes secai-turn-status-shimmer {
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .turnStatus {
+    background-position: 0 0;
+    background-size: 100% 100%;
+    animation: none;
+  }
+}
+
+/* 回到底部：零高 sticky 槽，按钮 translate 上进入视口；右端对齐消息列轴。 */
+.toBottomSlot {
+  position: sticky;
+  bottom: 16px;
+  z-index: 8;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding-right: max(0px, calc((100% - var(--secai-chat-content-width)) / 2));
+  pointer-events: none;
+}
+
+.toBottom {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
-}
-
-.toolHead::-webkit-details-marker {
-  display: none;
-}
-
-.toolHead:hover {
-  background: var(--secai-alias-interactive-bg-hover);
-}
-
-.chev {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  margin-left: auto;
-  border-right: 1.5px solid var(--secai-alias-label-caption);
-  border-bottom: 1.5px solid var(--secai-alias-label-caption);
-  transform: rotate(-45deg);
-  transition: transform var(--secai-transition-duration-fast) ease;
-}
-
-.tool[open] .chev {
-  transform: rotate(45deg) translateY(-1px);
-}
-
-.toolDot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-}
-
-.toolDot[data-state='done'] {
-  background: var(--secai-alias-state-success-primary);
-}
-
-.toolDot[data-state='failed'] {
-  background: var(--secai-alias-state-error-primary);
-}
-
-.toolDot[data-state='running'] {
-  background: var(--secai-alias-state-business-primary);
-  animation: secai-tool-pulse 1.4s ease-in-out infinite alternate;
-}
-
-@keyframes secai-tool-pulse {
-  from { opacity: 0.35; }
-  to { opacity: 1; }
-}
-
-.toolName {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--secai-font-family-code);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 18px;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  margin-top: -34px;
+  padding: 0;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 100px;
   color: var(--secai-alias-label-primary);
+  background: var(--secai-alias-button-floating-fill);
+  box-shadow: var(--secai-alias-shadow-lv2);
+  cursor: pointer;
+  pointer-events: auto;
 }
 
-.toolFail {
-  flex: none;
-  font-size: 10px;
-  line-height: 16px;
-  color: var(--secai-alias-state-error-primary);
-}
-
-.toolTime {
-  flex: none;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--secai-alias-label-caption);
-}
-
-.toolBody {
-  margin: 0;
-  padding: 8px 10px;
-  border-top: 1px solid var(--secai-alias-border-l1);
-  background: var(--secai-alias-bg-layer-2);
-  color: var(--secai-alias-label-secondary);
-  font-family: var(--secai-font-family-code);
-  font-size: 11.5px;
-  line-height: 17px;
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 260px;
-  overflow: auto;
-}
-
-.sys {
-  align-self: center;
-  max-width: 82%;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: var(--secai-alias-interactive-bg-hover);
-  font-size: 11px;
-  line-height: 17px;
-  color: var(--secai-alias-label-caption);
-  text-align: center;
+.toBottom:hover {
+  background: var(--secai-alias-button-floating-hover);
 }

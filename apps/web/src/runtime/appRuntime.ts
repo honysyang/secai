@@ -14,7 +14,7 @@
  *   在 sessionManager 合流前以空态呈现。
  */
 
-import type { HostFrame, MuxFrame } from '../connection/api.ts'
+import type { HostFrame, MuxFrame, TaskBrief } from '../connection/api.ts'
 import type { ConnectionState } from '../connection/connection.ts'
 import { ApiClient, createConnection } from '../connection/connection.ts'
 import { Engagement } from './engagement.ts'
@@ -110,6 +110,30 @@ export class AppRuntime {
     if (this.selectedId === sessionId) return
     this.selectedId = sessionId
     this.touch()
+  }
+
+  /**
+   * 下发任务书（NewEngagementModal）：真实 = POST /api/run 并把应答登记的
+   * 目标会话并入本 engagement（选中首个）；demo 模式无后端可下发，抛错由
+   * 弹窗行内呈现。会话事件仍走 WS 下行流（run 不应答事件）。
+   */
+  async run(brief: TaskBrief): Promise<void> {
+    if (this.demo !== null) {
+      throw new Error('演示模式下不可下发任务书——联调时把 DEMO_MODE 置 false')
+    }
+    const response = await this.api.call('run', brief)
+    response.sessionIds.forEach((sessionId, index) => {
+      this.engagement.upsertSession({
+        sessionId,
+        target: brief.allowedTargets[index] ?? sessionId,
+        status: 'idle',
+        engagementId: response.engagementId,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+    })
+    const first = response.sessionIds[0]
+    if (first !== undefined) this.select(first)
   }
 
   /** 指令（InputBar）：demo = 本地模拟应答；真实 = steer RPC。 */

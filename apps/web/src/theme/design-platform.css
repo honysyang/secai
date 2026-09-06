@@ -338,4 +338,7 @@ body[data-secai-dark] {
   --secai-specific-sidebar-nav-item-active: var(--secai-static-neutral-bluish-750);
   --secai-specific-sidebar-nav-item-hover: var(--secai-static-neutral-bluish-850);
   --secai-specific-tip: var(--secai-static-neutral-bluish-800);
+  /* F2 增补：暗色浮层/卡片阴影（黑 40-60% 微投影，等价 dsh 亮暗双套） */
+  --secai-alias-shadow-lv1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.5);
+  --secai-alias-shadow-lv2: 0 4px 14px rgba(0, 0, 0, 0.5), 0 2px 4px rgba(0, 0, 0, 0.6);
 }

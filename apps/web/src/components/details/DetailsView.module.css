@@ -1,11 +1,17 @@
-/* 详情栏：header + 滚动内容分节。节头 11px 大写感 caption（dsh 面板语言）。 */
+/* DetailsView 皮肤（对齐 dsh details 面板语言）：bg-base 底、节头 caption
+   分隔（11px 大写感 + l1 分隔线）、内容区滚动。滚动条 l2 对（面板级常滚）。 */
+
 .root {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  background: var(--secai-alias-bg-base);
+  --secai-scrollbar-thumb: var(--secai-alias-scrollbar-bg-l2);
+  --secai-scrollbar-thumb-hover: var(--secai-alias-scrollbar-hover-l2);
 }
 
+/* 面板头：标题 + 目标标识（11px 大写感 caption）。 */
 .header {
   display: flex;
   align-items: baseline;
@@ -39,6 +45,7 @@
   padding: 4px 0 24px;
 }
 
+/* 节：caption 头 + l1 分隔。 */
 .section {
   display: flex;
   flex-direction: column;

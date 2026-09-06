@@ -1,10 +1,9 @@
-/* F2 三栏壳：grid 轨道 + 分隔条。轨道宽度由组件内联 grid-template-columns
- * 写入，颜色只消费 --secai-* token。分隔条 8px 命中条居中跨列边界：
- * sidebar 分隔 = hover 浮现 accent 细线；details 分隔 = hover 浮现中部
- * 悬浮 pill（dsh 同款语言）。拖拽全程暂停过渡（data-dragging 见组件）。 */
+/* 三栏壳（复刻 dsh ui-layout AppFrame.module.css）：
+   grid 轨道 + 分隔条。收起/展开在轨道上做过渡（--secai-transition-duration-slow），
+   拖拽时 data-dragging 挂起过渡，避免列边脱离指针。 */
 
 .frame {
-  position: relative; /* 拖拽条定位锚 */
+  position: relative; /* 锚定跨栏界的分隔条 */
   display: grid;
   grid-template-rows: 100%;
   height: 100%;
@@ -13,7 +12,7 @@
   transition: grid-template-columns var(--secai-transition-duration-slow) var(--secai-ease-in-out);
 }
 
-/* 拖拽以指针节奏写宽：缓动会使列边脱离分隔条 */
+/* 拖拽按指针节奏写宽度；缓动会让列脱离手柄。 */
 .frame[data-dragging] {
   transition: none;
 }
@@ -26,8 +25,6 @@
 
 .sidebarCol {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
   background: var(--secai-specific-sidebar-fill);
   border-right: 1px solid var(--secai-alias-border-l1);
@@ -42,17 +39,19 @@
 
 .detailsCol {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
   overflow: hidden;
   border-left: 1px solid var(--secai-alias-border-l2);
 }
 
-/* 让步链收拢（宽为 0）时 details 子树仍挂载，边框不得画 1px 缝隙 */
+/* details 归零时子树保持挂载在 0 宽，边框不得画出 1px 接缝；
+   收起的 sidebar 保留带边框的 56px rail，规则不适用。 */
 .frame[data-details-collapsed] .detailsCol {
   border-left: none;
 }
 
+/* 分隔条是帧的子元素（列裁剪 overflow）：8px 命中条跨栏界居中，
+   内联 left 定位，浮于列内容之上。details 侧中部多一个可见
+   12x32 pill（--secai-alias-button-floating-fill），hover 显形。 */
 .handle {
   position: absolute;
   top: 0;
@@ -60,8 +59,9 @@
   width: 8px;
   margin-left: -4px;
   cursor: col-resize;
-  z-index: 5;
+  z-index: 2;
   touch-action: none;
+  /* 与轨道同曲线，收起/展开时 pill 贴着移动的边框；拖拽时暂停。 */
   transition: left var(--secai-transition-duration-slow) var(--secai-ease-in-out);
 }
 
@@ -75,27 +75,6 @@
   }
 }
 
-/* sidebar 分隔：hover/拖动浮现 2px accent 细线 */
-.handle[data-side='sidebar']::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 2px;
-  border-radius: 1px;
-  background: var(--secai-alias-state-business-primary);
-  opacity: 0;
-  transition: opacity var(--secai-transition-duration-fast) ease;
-}
-
-.handle[data-side='sidebar']:hover::after,
-.handle[data-side='sidebar'][data-dragging='true']::after {
-  opacity: 0.9;
-}
-
-/* details 分隔：中部悬浮 pill（dsh 同款），悬停于本列/命中条/拖动时显现 */
 .handle[data-side='details']::after {
   content: '';
   position: absolute;
@@ -108,11 +87,11 @@
   box-sizing: border-box;
   background: var(--secai-alias-button-floating-fill);
   border: 1px solid var(--secai-alias-border-l2-darkmode-thin);
+  /* hover  affordance：指针越过 details 列、命中条本身或拖拽时才显形。 */
   opacity: 0;
   transition:
     opacity var(--secai-transition-duration-slow) var(--secai-ease-in-out),
-    background var(--secai-transition-duration-slow) var(--secai-ease-in-out),
-    border-color var(--secai-transition-duration-slow) var(--secai-ease-in-out);
+    background var(--secai-transition-duration-slow) var(--secai-ease-in-out);
 }
 
 .detailsCol:hover ~ .handle[data-side='details']::after,

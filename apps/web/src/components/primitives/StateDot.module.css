@@ -1,0 +1,62 @@
+/* StateDot 皮肤（复刻 dsh）：实心态 = 同色 0.10 光晕层 + 0.6 比例实心核；
+   ongoing 蓝色无 alias token，组件级 var 钉到 static-450 档。 */
+
+.dot,
+.matrix {
+  --secai-state-ongoing: var(--secai-static-deepseek-450);
+}
+
+.dot {
+  position: relative;
+  display: inline-block;
+  flex: none;
+}
+
+.dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.1;
+}
+
+.dot::after {
+  content: '';
+  position: absolute;
+  inset: 20%;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dot[data-state='done'] {
+  color: var(--secai-alias-state-success-primary);
+}
+
+.dot[data-state='warning'] {
+  color: var(--secai-alias-state-warn-primary);
+}
+
+.dot[data-state='error'] {
+  color: var(--secai-alias-state-error-primary);
+}
+
+/* 像素追逐：每格外圈格持离散亮度阶梯（flat keyframe，无补间），
+   追逐经过时峰值，随后三格衰减。相位由组件内联 animation-delay 给出。 */
+.matrix {
+  flex: none;
+  color: var(--secai-state-ongoing);
+}
+
+.cell {
+  fill: currentColor;
+  opacity: 0.15;
+  animation: secai-state-dot-chase 1s infinite;
+}
+
+@keyframes secai-state-dot-chase {
+  0%, 12.4% { opacity: 1; }
+  12.5%, 24.9% { opacity: 0.6; }
+  25%, 37.4% { opacity: 0.35; }
+  37.5%, 100% { opacity: 0.15; }
+}

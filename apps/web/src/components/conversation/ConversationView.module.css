@@ -1,121 +1,71 @@
-/* 会话中栏编排：header（目标 + 连接徽章 + ThemeToggle）→ 审批卡区 →
- * 消息流（flex:1）→ 假设队列 → 死路折叠 → 输入条。 */
+/* ConversationView 皮肤（复刻 dsh ConversationRoot.module.css 语义）：
+   根上定义共享宽轴变量——消息列宽轴 748px、输入卡上限 = 列宽 + 32px；
+   scrollBody 占满余量并承载 ChatView（滚动带底部渐隐遮罩，让消息滑入
+   composer 下时淡出）；composerSeat sticky 底部座位（bg-base 底，审批
+   takeover 与 InputBar 同一占位，切换无跳动）。 */
+
 .root {
+  /* dsh --dsh-chat-content-width: 748px —— 消息列与审批卡的共享宽轴 */
+  --secai-chat-content-width: 748px;
+  /* dsh --dsh-composer-card-max-width = 宽轴 + 32px —— 输入卡上限 */
+  --secai-composer-card-max-width: calc(var(--secai-chat-content-width) + 32px);
+
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
 }
 
-.header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 48px;
-  flex: none;
-  padding: 0 12px 0 16px;
-  border-bottom: 1px solid var(--secai-alias-border-l1);
-}
-
-.dot {
-  flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-}
-
-.dot[data-status='running'] {
-  background: var(--secai-alias-state-business-primary);
-  animation: secai-head-pulse 1.8s ease-in-out infinite alternate;
-}
-
-.dot[data-status='awaiting_approval'] {
-  background: var(--secai-alias-state-warn-primary);
-}
-
-.dot[data-status='completed'] {
-  background: var(--secai-alias-state-success-primary);
-}
-
-.dot[data-status='failed'] {
-  background: var(--secai-alias-state-error-primary);
-}
-
-.dot[data-status='idle'],
-.dot[data-status='stopped'],
-.dot:not([data-status]) {
-  background: var(--secai-alias-label-tertiary);
-}
-
-@keyframes secai-head-pulse {
-  from { opacity: 0.4; }
-  to { opacity: 1; }
-}
-
-.titles {
+/* 滚动区：占满 composer 之外的余量；底部渐隐遮罩与 composerSeat 上缘衔接。 */
+.scrollBody {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  flex: 1;
-}
-
-.title {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13.5px;
-  font-weight: 600;
-  line-height: 19px;
-  color: var(--secai-alias-label-primary);
 }
 
-.sub {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--secai-alias-label-caption);
+/* 渐隐遮罩：消息滑入输入卡下方时淡出（高 36px，透明 → bg-base）。 */
+.scrollBody::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36px;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--secai-alias-bg-base));
+  pointer-events: none;
+  z-index: 4;
 }
 
-.tools {
+/* composer 座位：sticky 底部；审批 takeover 与输入栏同足迹切换。 */
+.composerSeat {
+  position: relative;
+  z-index: 5;
+  flex: none;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-}
-
-.linkBadge {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
-}
-
-.linkBadge[data-tone='demo'] {
-  color: var(--secai-alias-state-warn-label);
-  background: var(--secai-alias-state-warn-tertiary);
-  border: 1px solid var(--secai-alias-state-warn-primary);
-}
-
-.linkBadge[data-tone='live'] {
-  color: var(--secai-alias-state-success-primary);
-  background: var(--secai-alias-state-success-tertiary);
-}
-
-.linkBadge[data-tone='offline'] {
-  color: var(--secai-alias-label-caption);
-  background: var(--secai-alias-bg-layer-2);
-}
-
-.approvals {
-  flex: none;
-  max-height: 240px;
-  overflow-y: auto;
+  flex-direction: column;
   background: var(--secai-alias-bg-base);
+  padding-bottom: 8px;
+}
+
+/* 多审批折叠态的展开钮。 */
+.moreApprovals {
+  align-self: center;
+  margin: 0 16px 6px;
+  padding: 2px 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-state-warn-label);
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.moreApprovals:hover {
+  background: var(--secai-alias-interactive-bg-hover-accent);
 }

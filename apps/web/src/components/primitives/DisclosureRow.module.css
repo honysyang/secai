@@ -1,0 +1,121 @@
+/* DisclosureRow 皮肤（复刻 dsh figma 122:9479）：单行 24px——
+   [16px 前导槽] gap6 [title 14/24] [FILL 尾部] [chevron]。
+   前导槽图标↔chevron 的悬停/展开切换为纯 CSS（网格叠放，opacity 互换）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  min-width: 0;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 24px;
+  color: var(--secai-alias-label-primary);
+  user-select: none;
+}
+
+.row[data-expandable] {
+  cursor: pointer;
+}
+
+.row[data-expandable]:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.row:focus-visible {
+  outline: 1.5px solid var(--secai-alias-button-info-fill);
+  outline-offset: 2px;
+}
+
+/* 前导槽：16x16 网格叠放图标与 chevron（chevron 默认隐藏，hover/展开显形）。 */
+.leading {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.leading > [data-slot] {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.leadingChevron {
+  opacity: 0;
+  color: var(--secai-alias-label-secondary);
+  transition: opacity 100ms ease;
+}
+
+/* 展开体打开时 chevron 常显并翻转；hover 时图标让位给 chevron。 */
+.row[data-open] .leadingChevron {
+  opacity: 1;
+}
+
+.row[data-open] .leadingChevron .chevronIcon {
+  transform: rotate(180deg);
+}
+
+.row:hover .leadingIcon,
+.row[data-open] .leadingIcon {
+  opacity: 0;
+}
+
+.row:hover .leadingChevron {
+  opacity: 1;
+}
+
+.leadingIcon {
+  transition: opacity 100ms ease;
+}
+
+.chevronIcon {
+  transition: transform 150ms var(--secai-ease-in-out);
+}
+
+.title {
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 非整行开关模式的尾部独立按钮（备用形态）。 */
+.trailingButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--secai-alias-label-secondary);
+  cursor: pointer;
+}
+
+.trailingButton:hover {
+  background: var(--secai-alias-interactive-bg-hover-solid);
+}
+
+/* 展开体：行下方普通流内盒子（高度动画由调用方 wrapper 负责）。 */
+.body {
+  display: flex;
+  flex-direction: column;
+}
+
+.body[data-open='false'] {
+  display: none;
+}

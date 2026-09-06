@@ -1,82 +1,207 @@
-/* 目标栏组合：品牌 → 列表头 → 滚动列表（flex:1）→ 底部外观设置。 */
+/* SidebarPane 壳（复刻 dsh ui-sidebar SidebarRoot.module.css）：
+   纵向 stack，padding 12/6，sidebar 填充色；rail 态（data-collapsed）收窄为
+   56px 图标列：36x36 圆钮、12px 纵向节奏。滚动条随指针显隐（quietBars 思路
+   简化为 sidebar 一律 l2 滚动条对）。 */
+
 .root {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: 0;
+  padding: 6px 12px;
+  box-sizing: border-box;
+  background: var(--secai-specific-sidebar-fill);
+  color: var(--secai-alias-label-primary);
+  font-size: 14px;
+  /* 侧栏高于对话面，滚动条用 l2 对 */
+  --secai-scrollbar-thumb: var(--secai-alias-scrollbar-bg-l2);
+  --secai-scrollbar-thumb-hover: var(--secai-alias-scrollbar-hover-l2);
+}
+
+/* rail 几何：56px 列内 36x36 控件居中（10px 侧 padding）。 */
+.root[data-collapsed] {
+  padding: 18px 10px 6px;
+  align-items: flex-start;
+}
+
+/* Logo 行：展开态字标居左 + 收起钮居右；rail 态只留展开钮。 */
+.logoRow {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 44px;
+  padding: 4px 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.root[data-collapsed] .logoRow {
+  height: 36px;
+  padding: 0;
+  margin-bottom: 12px;
+  justify-content: flex-start;
+}
+
+/* 品牌组：字标骑墨色（行为上兼作新建任务快捷键，无 hover chrome）。 */
+.brandButton {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
 }
 
 .brand {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 12px 14px 6px;
-  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
 }
 
 .word {
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 20px;
-  letter-spacing: 0.01em;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--secai-alias-label-primary);
 }
 
 .caption {
-  font-size: 10.5px;
-  line-height: 15px;
-  color: var(--secai-alias-label-caption);
+  font-size: 12px;
+  color: var(--secai-alias-label-tertiary);
 }
 
-.listHead {
+.iconButton {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--secai-alias-label-secondary);
+}
+
+.iconButton:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.root[data-collapsed] .iconButton {
+  width: 36px;
+  height: 36px;
+  color: var(--secai-alias-label-primary);
+}
+
+/* 新建任务钮：38px 条、12px 圆角、elevated 填充（dsh New Session 规格）；rail 态变 36px 图标钮。 */
+.newSession {
+  flex: none;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 4px 14px 6px;
+  height: 38px;
+  padding: 8px 16px;
+  margin: 0 2px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 12px;
+  background: var(--secai-alias-button-elevated-fill);
+  color: var(--secai-alias-label-primary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.newSession:hover {
+  background: var(--secai-alias-button-floating-hover);
+}
+
+.root[data-collapsed] .newSession {
+  align-self: flex-start;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0 0 12px;
+  gap: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.root[data-collapsed] .newSession:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.newSessionLabel {
+  max-width: 200px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* 目标列表区：填满控制区与 footer 之间，负边距让滚动条贴侧栏边。 */
+.regionArea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-right: -12px;
+  padding-right: 12px;
+  overflow-y: auto;
+}
+
+.emptyList {
+  padding: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+/* footer：连接徽章 + 外观设置区。 */
+.footArea {
   flex: none;
-}
-
-.listTitle {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--secai-alias-label-caption);
-}
-
-.pendingBadge {
-  height: 17px;
-  padding: 0 6px;
-  font-size: 10px;
-}
-
-.count {
-  margin-left: auto;
-  flex: none;
-  min-width: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--secai-alias-bg-layer-2);
-  color: var(--secai-alias-label-caption);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-}
-
-.foot {
-  margin-top: auto;
-  flex: none;
-  padding: 8px 8px 10px 10px;
-  border-top: 1px solid var(--secai-alias-border-l1);
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding-top: 8px;
 }
 
-.footLabel {
-  padding: 0 8px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--secai-alias-label-caption);
+/* 连接状态徽章：圆点 + 文字。tone：demo=蓝 / live=绿 / offline=琥珀。 */
+.linkBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.linkDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.linkBadge[data-tone='demo'] .linkDot {
+  background: var(--secai-alias-state-business-primary);
+}
+
+.linkBadge[data-tone='live'] .linkDot {
+  background: var(--secai-alias-state-success-primary);
+}
+
+.linkBadge[data-tone='offline'] .linkDot {
+  background: var(--secai-alias-state-warn-primary);
 }
