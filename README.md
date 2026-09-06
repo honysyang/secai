@@ -21,6 +21,7 @@
 6. [性能与缓存](#6-性能与缓存)
 7. [目录结构](#7-目录结构)
 8. [文档索引](#8-文档索引)
+9. [开放 API 集成指南](#9-开放-api-集成指南)
 
 ---
 
@@ -350,7 +351,8 @@ npm run build      # 产物 apps/web/dist（server 以 SPA fallback 托管）
 
 - 无 LLM key 也能打开页面：`server/fixture.py` 内置三会话 demo engagement（running /
   awaiting_approval / completed），与前端 `demo.ts` 同一叙事；
-- 真实联调：前端 `apps/web/src/runtime/appRuntime.ts` 的 `DEMO_MODE` 翻 `false`，
+- 真实联调：前端 `apps/web/src/runtime/appRuntime.ts` 的 `DEMO_MODE` 翻 `false`
+  （改代码常量后重新 `npm run build`；这是编译期开关，当前无运行时/env 切换），
   配好 `LLM_API_KEY` 后 `POST /api/run` 走真实执行 runner（ScopeCheck→审批→只读工具→黑板）。
 
 ### 3.5 启动方式（面向实战）
@@ -549,6 +551,86 @@ SECAI/
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | 用户手册（配置参考、运行模式、故障排查） |
 | [docs/DEBT_LEDGER.md](docs/DEBT_LEDGER.md) | H1–H13 债务「承诺-现状」核对表（R0–R6 已全结清） |
 | docs/SecAI 系列手册 | 历史工程化/诊断/修复手册（随版本演进归档，与 v4 现状存在差异时以代码为准） |
+
+---
+
+## 9. 开放 API 集成指南
+
+SECAI-PT 将 Web 控制面的完整能力以 **HTTP JSON-RPC + 双 WebSocket 下行流** 开放，
+第三方系统（CI/CD、SoC 平台、自动化编排）可编程接入授权渗透侦察全流程。
+契约类型权威定义见 `apps/web/src/connection/api.ts`（`API_METHODS` /
+`MuxFrame` / `HostFrame`），本文是集成视角的调用说明。
+
+### 9.1 上行面：POST /api/{method}
+
+统一载体：`POST /api/{method}`，请求体 `{ rpcId, method, payload }`。
+**业务错误恒 HTTP 200**，错误细节在 `{ ok:false, error:{code,message,details?} }`；
+HTTP 状态码只表达载体层。七方法：
+
+> 本节各字段名以 `apps/web/src/connection/api.ts` 的 TS 类型为准（camelCase 为主，
+> 如 `taskBrief` / `allowedTargets` / `maxIntensity` / `wallclockSeconds`）；
+> server 侧 `run_spec.py` 会做 camelCase→snake_case 归一，本文表格为可读性用
+> snake_case 描述语义。
+
+| 方法 | payload 关键字段 | 返回 result | 用途 |
+|---|---|---|---|
+| `describe` | 空 | `{product,version,serverTime}` | 严格握手身份 |
+| `targets` | `engagementId?` | `[SessionHeader]` | 列目标会话行头（id/target/status/engagementId） |
+| `engagements` | 空 | `[EngagementSummary+status]` | 列任务书 |
+| `run` | `title?`、`allowedTargets[]`、`taskBrief?`（文本或对象）、`maxIntensity? ∈ {passive, active, aggressive}`、`excludedTargets?[]`、`forbiddenActions?[]`、`timeWindow? [startIso, endIso]`、`settings?{maxRounds, wallclockSeconds, approvalTimeoutSeconds}`（后三项 camelCase 归一为 snake_case 护栏） | `{engagementId,sessionIds}` | 提交授权任务书，逐目标起真实执行（ScopeCheck→审批门→只读工具→黑板）；**护栏**：maxRounds≤10 默认 3、墙钟≤300s 默认 60、审批等待≤45s 超时自动拒、token 顶 100k |
+| `steer` | `sessionId`、`instruction` | `{}` | 会话级人工干预（running/awaiting_approval 态可投） |
+| `respond` | `rpcId`（approval/requested 帧原样回响）、`decision∈{allow,deny}`、`comment?` | `{}` | 审批裁决，唤醒等待中的执行 runner |
+| `report` | `engagementId` | `{engagementId,status,sections,totalFindings,generatedAt?}` | 报告投影（全终局=ready） |
+
+`run` 兼容旧式 `allowedTargets[]/maxIntensity`（行为与 v4 一致），新式字段存在时优先。
+**前置条件**：须配置 `LLM_API_KEY`（否则 `{ok:false,error.code=llm_key_missing}`）。
+幂等语义：run 每次调用新建 engagement；steer/respond 按 id 寻址可重试。
+
+### 9.2 下行面：双 WS 纯下行（客户端上行 → 1008 拒绝）
+
+事件驱动集成的订阅入口（`ws://<host>/api/events.mux` 与 `.../events.host`），
+连接即回放快照（首帧 = 回放基线），随后持续推送 live 帧；断线重连按 `lastSeq`
+续传。帧 schema 见 `api.ts`。
+
+| 流 | 帧族 | 说明 |
+|---|---|---|
+| `events.mux` | `session/subscribed` → `session/event` / `session/projection` / `session/queue` / `approval/requested` / `approval/resolved` / `session/jobs` | 按 sessionId 路由的目标会话内事件（工具输出/黑板/假设队列/审批请求） |
+| `events.host` | `host/session-added` / `host/session-removed` / `host/session-status` / `host/engagement-changed` | 跨目标会话集群视图（新增/状态迁移/任务书变更） |
+
+### 9.3 最小集成示例
+
+```bash
+# 1) 提交授权任务书（真实执行）
+curl -s -X POST http://127.0.0.1:8700/api/run \
+  -H 'content-type: application/json' \
+  -d '{"rpcId":"r1","method":"run","payload":{
+        "title":"例:授权侦察 10.0.0.5",
+        "allowedTargets":["10.0.0.5"],
+        "maxIntensity":"passive",
+        "forbiddenActions":["exploit","dos"],
+        "settings":{"maxRounds":3,"wallclockSeconds":90}}}'
+
+# 2) 订阅 mux 流拿工具轨迹/审批请求（Node 伪代码；Python 用 websockets 同理）
+# const ws = new WebSocket("ws://127.0.0.1:8700/api/events.mux")
+# ws.onmessage = (e) => { const f = JSON.parse(e.data)
+#   if (f.type === "approval/requested") {
+#     fetch("/api/respond", {method:"POST", body: JSON.stringify(
+#       {rpcId: f.rpcId, method:"respond",
+#        payload:{rpcId: f.rpcId, decision:"allow"}})})
+#   } }
+
+# 3) 取报告
+curl -s -X POST http://127.0.0.1:8700/api/report \
+  -H 'content-type: application/json' \
+  -d '{"rpcId":"r2","method":"report","payload":{"engagementId":"<上一步返回>"}}'
+```
+
+### 9.4 边界说明
+
+- 两条 WS 流**纯下行**：订阅用 HTTP RPC，下行用 WS，上行与下行物理分离；
+- `run` 触发真实 LLM 消耗与真实工具调用（只读白名单），务必在授权范围内使用；
+- 审批门（T2）默认拦截高风险动作，外部集成须实现 `respond` 裁决回路，否则
+  执行在审批等待超时（默认 ≤45s）后自动拒绝继续。
 
 ---
 
