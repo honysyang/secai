@@ -1,0 +1,43 @@
+name: "curl"
+command: "curl"
+# 只读 HTTP 侦察：强制 GET + 短超时 + 跟随跳转 + 返回状态码/响应头/体。
+# pentest_target 的守卫链会在执行前再强制 method=GET（见 run_recon_tool）。
+args: ["-sS", "-G", "-L", "-m", "20", "-i"]
+enabled: true
+short_description: "HTTP 只读侦察：抓取响应体/状态码/头（仅 GET）"
+description: |
+  用 curl 做只读 HTTP 内容/路由侦察，是发现 Web 漏洞面（SQL 注入、文件上传点、
+  管理接口、错误回显）的关键手段。
+
+  **强制只读**：本定义固定使用 `-G`（GET），并在 server 执行链中二次强制
+  method=GET，杜绝 POST/PUT 等写副作用。
+
+  **默认行为（只传 url 即可）：**
+  - `-sS` 静默但保留错误信息
+  - `-G` 强制 GET
+  - `-L` 跟随 30x 跳转
+  - `-m 20` 单请求 20s 超时
+  - `-i` 同时输出响应头（含状态码）与响应体
+
+  **示例目标：** `http://host/chal/TestServlet?action=login`
+parameters:
+  - name: "url"
+    type: "string"
+    description: |
+      要抓取的完整 URL（含路径与查询串），如
+      `http://example.com/chal/TestServlet?action=login`。
+    required: true
+    position: 1
+    format: "positional"
+  - name: "method"
+    type: "string"
+    description: "HTTP 方法。固定为 GET（只读守卫会强制覆盖），仅供占位对齐。"
+    required: false
+    flag: "-X"
+    format: "flag"
+    default: "GET"
+  - name: "additional_args"
+    type: "string"
+    description: "额外参数，按空格追加到命令末尾。示例：`-A 'Mozilla/5.0'`"
+    required: false
+    format: "positional"

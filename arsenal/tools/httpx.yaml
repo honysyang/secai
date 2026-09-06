@@ -1,0 +1,43 @@
+name: "httpx"
+command: "httpx"
+# 默认：JSONL 输出 + 静默模式 + 15s 超时 + 跟随跳转（默认调用即可输出 jsonl）
+args: ["-json", "-silent", "-timeout", "15", "-follow-redirects"]
+enabled: true
+short_description: "HTTP 服务探测与指纹识别：状态码/标题/技术栈/WAF 等，默认输出 jsonl"
+description: |
+  ProjectDiscovery 的 HTTP 服务探测与指纹识别工具。
+
+  **默认行为（只传 target 即可）：**
+  - `-json` 以 JSONL 输出结果，便于后续解析
+  - `-silent` 静默模式，只输出结果行
+  - `-timeout 15` 单请求超时 15 秒
+  - `-follow-redirects` 跟随 HTTP 跳转
+
+  **可选增强（通过 additional_args 追加）：**
+  - `-title` 提取页面标题（-json 中已含）
+  - `-tech-detect` 技术栈检测（-json 中已含）
+  - `-status-code`、`-content-length` 等可显式指定
+  - `-rate-limit N` 限制每秒请求数
+  - `-ports 80,443,8080` 探测多个端口
+
+  **注意事项：**
+  - 支持 `-u http://example.com`、`https://10.0.0.1:8080/path` 等 URL 形式
+  - 请确保有权限探测目标
+parameters:
+  - name: "target"
+    type: "string"
+    description: |
+      目标 URL 或主机，通过 `-u` 传入。
+
+      **示例：** `http://example.com`、`https://10.0.0.1:8080/path`、`example.com`
+    required: true
+    flag: "-u"
+    format: "flag"
+  - name: "additional_args"
+    type: "string"
+    description: |
+      额外参数，按空格追加到命令末尾。
+      默认已含 `-json -silent -timeout 15 -follow-redirects`（在 args 中），一般无需重复填写。
+      示例：`-title -tech-detect`、`--rate-limit 50`
+    required: false
+    format: "positional"

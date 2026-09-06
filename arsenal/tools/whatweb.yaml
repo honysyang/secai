@@ -1,0 +1,39 @@
+name: "whatweb"
+command: "whatweb"
+# 默认：aggression level 1（gentle 模式，只做一次请求，不触发额外请求）
+args: ["-a", "1"]
+enabled: true
+short_description: "Web 技术栈/指纹识别：CMS、框架、服务器、JS 库等"
+description: |
+  Web 技术栈指纹识别工具。
+
+  **默认行为（只传 target 即可）：**
+  - `-a 1` aggression level 1（gentle 模式）：只发起一次请求，对目标最温和
+
+  **可选增强（通过 additional_args 追加）：**
+  - `-a 3` 更激进的检测（会触发额外请求，慎用）
+  - `-v` 详细输出插件结果
+  - `--colour=never` 关闭 ANSI 颜色码，便于解析
+  - `--log-json=FILE` 将结果写入 JSON 文件
+
+  **注意事项：**
+  - aggression level 越高，对目标产生的请求越多；生产环境建议保持 `-a 1`
+  - 请确保有权限扫描目标
+parameters:
+  - name: "target"
+    type: "string"
+    description: |
+      目标 URL，作为位置参数传入。
+
+      **示例：** `http://example.com`、`http://example.com/chal/`
+    required: true
+    position: 1
+    format: "positional"
+  - name: "additional_args"
+    type: "string"
+    description: |
+      额外参数，按空格追加到命令末尾。
+      默认已含 `-a 1`（gentle 模式，在 args 中），一般无需重复填写。
+      示例：`--colour=never`、`-v`
+    required: false
+    format: "positional"
