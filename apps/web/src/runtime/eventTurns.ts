@@ -40,6 +40,8 @@ export interface TurnSystem {
   key: string
   kind: 'system'
   text: string
+  /** 展示语气（steer 回执等本地事件用 error 红字提示；缺省中性）。 */
+  tone?: 'ok' | 'error'
   at: string
 }
 
@@ -135,7 +137,8 @@ export function deriveTurns(events: readonly SessionEvent[]): TimelineTurn[] {
           })
         } else {
           const label = str(data.label, event.type)
-          turns.push({ key: event.eventId, kind: 'system', text: label, at: event.createdAt })
+          const tone = data.tone === 'error' ? 'error' as const : undefined
+          turns.push({ key: event.eventId, kind: 'system', text: label, tone, at: event.createdAt })
         }
       }
     }

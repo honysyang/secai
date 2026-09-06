@@ -115,6 +115,8 @@ export interface HostDescription {
   product: string
   version: string
   serverTime: string
+  /** LLM API Key 是否已配置（布尔可见性；key 本身永不下发）。 */
+  llmConfigured?: boolean
 }
 
 // ───────────────────────── 下行帧（F1 类型表，与 ws.py 对齐） ─────────────────────────
@@ -233,7 +235,7 @@ export const API_METHODS: readonly ApiMethodName[] = [
  */
 export async function downloadReport(
   engagementId: string,
-  format: 'md' | 'json',
+  format: 'md' | 'json' | 'pdf',
   baseUrl?: string,
 ): Promise<void> {
   const origin = baseUrl ?? (typeof window !== 'undefined' ? window.location.origin : '')

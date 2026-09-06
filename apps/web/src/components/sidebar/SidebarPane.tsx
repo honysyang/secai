@@ -17,6 +17,11 @@ export interface SidebarPaneProps {
   selectedId: string | null
   /** 连接状态徽章（demo/connecting/connected/reconnecting）。 */
   link: LinkState
+  /**
+   * LLM API Key 配置状态（describe 握手结果）：null = 未知（握手未完成），
+   * true/false = 服务端明示。sidebar footer 渲染 LLM 状态徽章。
+   */
+  llmConfigured: boolean | null
   collapsed: boolean
   onToggle: () => void
   onSelect: (sessionId: string) => void

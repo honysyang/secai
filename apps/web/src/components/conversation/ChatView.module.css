@@ -88,11 +88,16 @@
   word-break: break-word;
 }
 
-/* 系统小字行（子 agent / 假设推进）。 */
+/* 系统小字行（子 agent / 假设推进 / steer 回执）。 */
 .system {
   font-size: 13px;
   line-height: 20px;
   color: var(--secai-alias-label-tertiary);
+}
+
+/* steer 回执失败：红字提示（不静默失败闭环）。 */
+.system[data-tone='error'] {
+  color: var(--secai-alias-state-error-primary);
 }
 
 /* 运行状态行：淡 brand 蓝扫光带自左向右（background-clip:text），

@@ -16,6 +16,9 @@ starlette>=1.0.0
 uvicorn>=0.30.0
 websockets>=13.0
 
+# —— 报告 PDF 导出（server/artifacts.py _render_pdf，纯 Python 无系统依赖）——
+reportlab>=4.0
+
 # —— 开发 / 质量门（ruff + pytest，见 scripts/gate.sh）——
 pytest>=8.0
 ruff>=0.5

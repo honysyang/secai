@@ -44,7 +44,14 @@ export class AppRuntime {
   readonly engagement: Engagement
   selectedId: string | null = null
   private linkValue: LinkState
+  /** LLM key 配置状态（describe 握手后落账；demo 模式保持 null = 未知）。 */
+  private llmValue: boolean | null = null
   private readonly listeners = new Set<AppListener>()
+
+  /** LLM 配置状态探针（NewEngagementModal 提交前校验用；响应式经快照订阅）。 */
+  get llmConfigured(): boolean | null {
+    return this.llmValue
+  }
   private snapshotCache: AppSnapshot | null = null
   private started = false
   private demo: DemoController | null = null
@@ -82,7 +89,11 @@ export class AppRuntime {
         {
           onMuxFrame: (frame) => this.applyMuxFrame(frame),
           onHostFrame: (frame) => this.applyHostFrame(frame),
-          onConnected: () => this.setLink('connected'),
+          onConnected: (description) => {
+            // describe 握手成功：把 LLM 配置状态落账（响应式，UI 徽章随动）
+            this.setLlmConfigured(description.llmConfigured === true)
+            this.setLink('connected')
+          },
           onStateChange: (state: ConnectionState) => this.setLink(state),
         },
         {},
@@ -148,8 +159,36 @@ export class AppRuntime {
       this.demo.send(sessionId, text)
       return
     }
-    void this.api.call('steer', { sessionId, instruction: text }).catch((cause) => {
-      console.warn('[secai-app] steer 失败（隔离）', cause)
+    void this.api
+      .call('steer', { sessionId, instruction: text })
+      .then(() => {
+        // 回执闭环：服务端确认收到 → 本地落一条 system 回执气泡（✓ 指令已下发）
+        this.appendLocalSystemEvent(sessionId, `✓ 指令已下发（${sessionId}）`)
+      })
+      .catch((cause) => {
+        // 失败不静默：会话内红字提示（session_inactive / unknown_session 等）
+        const message = cause instanceof Error ? cause.message : String(cause)
+        console.warn('[secai-app] steer 失败（隔离）', cause)
+        this.appendLocalSystemEvent(sessionId, `✗ 指令下发失败：${message}`, 'error')
+      })
+  }
+
+  /**
+   * 本地追加一条 system 事件（不入服务端，仅前端视图层回执展示）。
+   * 借道 session/event 帧进对象层事件窗口，ChatView 的 SystemRow 原样呈现。
+   */
+  private appendLocalSystemEvent(sessionId: string, text: string, tone: 'ok' | 'error' = 'ok'): void {
+    this.applyMuxFrame({
+      type: 'session/event',
+      sessionId,
+      data: {
+          eventId: `local-steer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          // 时间戳作 seq：保持事件窗口内单调（真实帧 seq 远小于毫秒时间戳）
+          seq: Date.now(),
+          type: 'system',
+          data: { text, tone },
+          createdAt: new Date().toISOString(),
+        },
     })
   }
 
@@ -186,7 +225,14 @@ export class AppRuntime {
       engagement: this.engagement.snapshot(),
       selectedId: this.selectedId,
       link: this.linkValue,
+      llmConfigured: this.llmValue,
     }
+  }
+
+  private setLlmConfigured(configured: boolean): void {
+    if (this.llmValue === configured) return
+    this.llmValue = configured
+    this.touch()
   }
 
   private setLink(link: LinkState): void {

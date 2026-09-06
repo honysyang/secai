@@ -1,10 +1,13 @@
 // NewEngagementModal：「新建任务」任务书表单弹窗（Modal 原语 + dsh 表单语言）。
 // 字段 = title（可空）+ allowedTargets（逗号/空格分隔的 CIDR/域名清单）+
-// maxIntensity（passive/active/aggressive）。提交调 props.onSubmit（App 层走
-// runtime.run → api.call('run')）；busy 防重，error 行内呈现，成功后由父级关窗。
+// maxIntensity（passive/active/aggressive）。提交前检查 appRuntime 的
+// llmConfigured——未配置则行内明确提示且不发起无意义的 run 请求（功能闭环：
+// 用户点「下发任务书」前就得到清晰反馈）；已配置则正常提交。busy 防重，
+// error 行内呈现，成功后由父级关窗。
 
 import { useState } from 'react'
 import type { TaskBrief } from '../../connection/api.ts'
+import type { AppRuntime } from '../../runtime/appRuntime.ts'
 import { Button } from '../primitives/Button.tsx'
 import { Modal } from '../primitives/Modal.tsx'
 import css from './NewEngagementModal.module.css'
@@ -13,6 +16,8 @@ export interface NewEngagementModalProps {
   open: boolean
   onClose: () => void
   onSubmit: (brief: TaskBrief) => Promise<void>
+  /** 运行时探针：提交前读 LLM 配置状态（describe 握手落账）。 */
+  runtime: Pick<AppRuntime, 'llmConfigured'>
 }
 
 const INTENSITY_OPTIONS: ReadonlyArray<{ value: NonNullable<TaskBrief['maxIntensity']>; label: string; hint: string }> = [
@@ -31,7 +36,7 @@ function parseTargets(raw: string): string[] {
   return [...seen]
 }
 
-export function NewEngagementModal({ open, onClose, onSubmit }: NewEngagementModalProps) {
+export function NewEngagementModal({ open, onClose, onSubmit, runtime }: NewEngagementModalProps) {
   const [title, setTitle] = useState('')
   const [targets, setTargets] = useState('')
   const [intensity, setIntensity] = useState<NonNullable<TaskBrief['maxIntensity']>>('active')

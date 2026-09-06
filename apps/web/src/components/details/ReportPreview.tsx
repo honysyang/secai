@@ -63,6 +63,7 @@ export function ReportPreview({ report, engagementId }: ReportPreviewProps) {
             <>
               <Button size="sm" onClick={() => void exportReport(engagementId, 'md')}>导出 Markdown</Button>
               <Button size="sm" onClick={() => void exportReport(engagementId, 'json')}>导出 JSON</Button>
+              <Button size="sm" onClick={() => void exportReport(engagementId, 'pdf')}>导出 PDF</Button>
             </>
           )}
           <Button size="sm" onClick={() => setOpen(true)} disabled={sections.length === 0 && findings.length === 0}>

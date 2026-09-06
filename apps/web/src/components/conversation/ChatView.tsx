@@ -39,9 +39,9 @@ function AssistantRow({ text }: { text: string }) {
   return <div className={css.assistant}>{text}</div>
 }
 
-/** 系统小字行（子 agent 活动 / 假设推进等）。 */
-function SystemRow({ text }: { text: string }) {
-  return <div className={css.system}>{text}</div>
+/** 系统小字行（子 agent 活动 / 假设推进 / steer 回执）；tone=error 红字提示。 */
+function SystemRow({ text, tone }: { text: string; tone?: 'ok' | 'error' }) {
+  return <div className={css.system} data-tone={tone}>{text}</div>
 }
 
 /** 工具轨迹行 → ToolRow（IN/OUT 可展开）。 */
@@ -114,7 +114,7 @@ function TurnRow({ turn }: { turn: TimelineTurn }) {
     case 'tool':
       return <ToolTurnRow turn={turn} />
     default:
-      return <SystemRow text={turn.text} />
+      return <SystemRow text={turn.text} tone={turn.tone} />
   }
 }
 

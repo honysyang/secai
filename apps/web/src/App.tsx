@@ -43,6 +43,7 @@ export default function App() {
           engagement={snapshot.engagement}
           selectedId={snapshot.selectedId}
           link={snapshot.link}
+          llmConfigured={snapshot.llmConfigured}
           collapsed={!sidebarOpen}
           onToggle={() => setSidebarOpen((open) => !open)}
           onSelect={(sessionId) => runtime.select(sessionId)}
@@ -62,6 +63,7 @@ export default function App() {
         open={newEngagementOpen}
         onClose={() => setNewEngagementOpen(false)}
         onSubmit={async (brief: TaskBrief) => runtime.run(brief)}
+        runtime={runtime}
       />
     </AppFrame>
   )

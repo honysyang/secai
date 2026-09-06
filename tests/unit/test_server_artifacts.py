@@ -51,13 +51,13 @@ def _trigger_report(client: TestClient) -> dict:
 
 
 def test_api_report_persists_artifacts_on_generate(app_client) -> None:
-    """api_report「生成即存」：返回含 md + json 两份产物元信息。"""
+    """api_report「生成即存」：返回含 md + json + pdf 三份产物元信息。"""
     state, client = app_client
     result = _trigger_report(client)
     artifacts = result["artifacts"]
-    assert len(artifacts) == 2
+    assert len(artifacts) == 3
     by_format = {a["format"]: a for a in artifacts}
-    assert set(by_format) == {"md", "json"}
+    assert set(by_format) == {"md", "json", "pdf"}
     for meta in artifacts:
         assert meta["engagementId"] == DEMO_ENGAGEMENT_ID
         assert meta["artifactId"].startswith("art-")
@@ -66,7 +66,7 @@ def test_api_report_persists_artifacts_on_generate(app_client) -> None:
         assert os.path.isfile(meta["path"])  # 文件真实落盘
     # 编排面存储同源（ArtifactsStore 视角再核一遍）
     stored = state.artifacts.list(DEMO_ENGAGEMENT_ID)
-    assert len(stored) == 2
+    assert len(stored) == 3
 
 
 def test_export_report_markdown_download(app_client) -> None:
@@ -116,18 +116,18 @@ def test_export_report_json_download_is_valid_json(app_client) -> None:
 
 
 def test_list_artifacts_returns_persisted_metas(app_client) -> None:
-    """listArtifacts → 返回刚落盘的 2 个产物（md + json）。"""
+    """listArtifacts → 返回刚落盘的 3 个产物（md + json + pdf）。"""
     _state, client = app_client
     _trigger_report(client)
     body = _post(client, "listArtifacts", {"engagementId": DEMO_ENGAGEMENT_ID}).json()
     assert body["ok"] is True
     artifacts = body["result"]["artifacts"]
-    assert len(artifacts) == 2
-    assert {a["format"] for a in artifacts} == {"md", "json"}
+    assert len(artifacts) == 3
+    assert {a["format"] for a in artifacts} == {"md", "json", "pdf"}
     # 幂等性：再次触发 report 会留档新产物（不覆盖）
     _trigger_report(client)
     body = _post(client, "listArtifacts", {"engagementId": DEMO_ENGAGEMENT_ID}).json()
-    assert len(body["result"]["artifacts"]) == 4
+    assert len(body["result"]["artifacts"]) == 6
 
 
 def test_export_and_list_unknown_engagement_error(app_client) -> None:
@@ -157,11 +157,26 @@ def test_export_report_not_found_before_generate(app_client) -> None:
     assert body["error"]["code"] == "not_found"
 
 
-def test_export_report_bad_format(app_client) -> None:
-    """format 非法 → bad_request。"""
+def test_export_report_pdf_download(app_client) -> None:
+    """exportReport（pdf）→ HTTP 200 + application/pdf，body 以 %PDF 开头。"""
     _state, client = app_client
     _trigger_report(client)
     res = _post(client, "exportReport", {"engagementId": DEMO_ENGAGEMENT_ID, "format": "pdf"})
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/pdf"
+    disposition = res.headers["content-disposition"]
+    assert disposition.startswith("attachment")
+    assert f"report-{DEMO_ENGAGEMENT_ID}.pdf" in disposition
+    body = res.content
+    assert body[:4] == b"%PDF"  # PDF 魔数
+    assert len(body) > 1000  # 非空壳（封面 + 章节实际渲染）
+
+
+def test_export_report_bad_format(app_client) -> None:
+    """format 非法（pdf 已是合法格式）→ bad_request。"""
+    _state, client = app_client
+    _trigger_report(client)
+    res = _post(client, "exportReport", {"engagementId": DEMO_ENGAGEMENT_ID, "format": "xml"})
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is False

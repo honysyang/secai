@@ -78,8 +78,19 @@ def _llm_key_present() -> bool:
 # describe / targets / engagements
 # ---------------------------------------------------------------------------
 async def api_describe(request: Request) -> JSONResponse:
-    """严格握手身份：product=SECAI-PT、version 冻结、serverTime 即时。"""
-    return _ok({"product": SERVER_NAME, "version": SERVER_VERSION, "serverTime": now_iso()})
+    """严格握手身份：product=SECAI-PT、version 冻结、serverTime 即时。
+
+    附加 llmConfigured 布尔（复用 _llm_key_present，只暴露布尔不暴露 key 本身），
+    供前端在「新建任务」前给出 LLM 配置状态可见性（产品化闭环）。
+    """
+    return _ok(
+        {
+            "product": SERVER_NAME,
+            "version": SERVER_VERSION,
+            "serverTime": now_iso(),
+            "llmConfigured": _llm_key_present(),
+        }
+    )
 
 
 async def api_targets(request: Request) -> JSONResponse:
@@ -168,7 +179,8 @@ async def api_steer(request: Request) -> JSONResponse:
     else:
         # demo 会话：沿用 fixture 演示应答
         steer_reply(state, session_id, instruction)
-    return _ok({})
+    # 回执闭环：成功体带 received + sessionId（向后兼容，旧调用方忽略返回体）
+    return _ok({"received": True, "sessionId": session_id})
 
 
 async def api_respond(request: Request) -> JSONResponse:
@@ -217,9 +229,13 @@ async def api_report(request: Request) -> JSONResponse:
             }
         )
     report = generate_engagement_report([snapshot], generated_at=now_iso())
-    # 「生成即存」：报告引擎输出后立刻落盘 md + json 两份产物（幂等留档，不覆盖旧产物）
-    metas = [state.artifacts.save_report(engagement_id, report, fmt="md"),
-             state.artifacts.save_report(engagement_id, report, fmt="json")]
+    # 「生成即存」：报告引擎输出后立刻落盘 md + json + pdf 三份产物
+    # （幂等留档，不覆盖旧产物；pdf 为客户交付标准格式，随报告一并生成）
+    metas = [
+        state.artifacts.save_report(engagement_id, report, fmt="md"),
+        state.artifacts.save_report(engagement_id, report, fmt="json"),
+        state.artifacts.save_report(engagement_id, report, fmt="pdf"),
+    ]
     return _ok(
         {
             "engagementId": engagement_id,
