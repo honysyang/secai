@@ -13,7 +13,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 TEMPLATES_FILE = DATA_DIR / "solution_templates.jsonl"
@@ -47,11 +47,11 @@ _PAYLOAD_RE = re.compile(r"/[A-Za-z0-9_.~%?=&/-]*[?=&][A-Za-z0-9_.~%?=&/-]*")
 _FLAG_RE = re.compile(r"flag\{[^}\s]{1,200}\}", re.IGNORECASE)
 
 
-def _load_templates() -> List[Dict[str, Any]]:
+def _load_templates() -> list[dict[str, Any]]:
     """读全部模板（jsonl 每行一条）。"""
     if not TEMPLATES_FILE.exists():
         return []
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     try:
         for line in TEMPLATES_FILE.read_text(encoding="utf-8").splitlines():
             line = line.strip()
@@ -62,7 +62,7 @@ def _load_templates() -> List[Dict[str, Any]]:
     return out
 
 
-def _save_all(templates: List[Dict[str, Any]]) -> None:
+def _save_all(templates: list[dict[str, Any]]) -> None:
     """整体重写模板文件（去重/合并后统一落盘）。"""
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +73,7 @@ def _save_all(templates: List[Dict[str, Any]]) -> None:
         pass
 
 
-def _extract_fingerprint(desc: str, blackboard: Dict[str, Any]) -> List[str]:
+def _extract_fingerprint(desc: str, blackboard: dict[str, Any]) -> list[str]:
     """从题目描述 + 黑板抽取技术栈指纹（小写关键词命中，去重保序）。"""
     text = (desc or "").lower()
     for k, v in (blackboard or {}).items():
@@ -84,8 +84,8 @@ def _extract_fingerprint(desc: str, blackboard: Dict[str, Any]) -> List[str]:
     return list(dict.fromkeys(hits))[:12]
 
 
-def _extract_vuln_type(disclosed_skills: List[str],
-                       blackboard: Dict[str, Any]) -> str:
+def _extract_vuln_type(disclosed_skills: list[str],
+                       blackboard: dict[str, Any]) -> str:
     """从已披露技能 + 黑板反推漏洞类型标签。"""
     text = " ".join(disclosed_skills or []).lower()
     for k, v in (blackboard or {}).items():
@@ -98,9 +98,9 @@ def _extract_vuln_type(disclosed_skills: List[str],
     return ""
 
 
-def _extract_paths(blackboard: Dict[str, Any]) -> List[str]:
+def _extract_paths(blackboard: dict[str, Any]) -> list[str]:
     """从黑板 value 抽取关键路径（去重保序）。"""
-    paths: List[str] = []
+    paths: list[str] = []
     for v in (blackboard or {}).values():
         val = str(v.get("value", "")) if isinstance(v, dict) else str(v)
         for p in _PATH_RE.findall(val):
@@ -109,9 +109,9 @@ def _extract_paths(blackboard: Dict[str, Any]) -> List[str]:
     return paths[:20]
 
 
-def _extract_payloads(blackboard: Dict[str, Any]) -> List[str]:
+def _extract_payloads(blackboard: dict[str, Any]) -> list[str]:
     """从黑板 value 抽取关键 payload：flag 本身 + 带参数的 URL/payload。"""
-    payloads: List[str] = []
+    payloads: list[str] = []
     for v in (blackboard or {}).values():
         val = str(v.get("value", "")) if isinstance(v, dict) else str(v)
         for f in _FLAG_RE.findall(val):
@@ -121,7 +121,7 @@ def _extract_payloads(blackboard: Dict[str, Any]) -> List[str]:
     return list(dict.fromkeys(payloads))[:20]
 
 
-def _extract_steps(blackboard: Dict[str, Any]) -> List[str]:
+def _extract_steps(blackboard: dict[str, Any]) -> list[str]:
     """从黑板提取已完成的关键步骤（status=done 的 key，作为步骤清单）。"""
     return [str(k) for k, v in (blackboard or {}).items()
             if isinstance(v, dict) and v.get("status") == "done"][:8]

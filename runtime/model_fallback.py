@@ -12,9 +12,8 @@ import asyncio
 
 from agents import Runner
 
-from runtime.model_pool import (ModelExhaustedError, is_model_failure,
-                                is_permanent_model_failure)
-from runtime.log import log_warn, log_error
+from runtime.log import log_error, log_warn
+from runtime.model_pool import ModelExhaustedError, is_model_failure, is_permanent_model_failure
 
 
 async def run_with_model_fallback(agent, input, *, hooks=None, context=None,

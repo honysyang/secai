@@ -21,8 +21,9 @@ import json
 import re
 import uuid
 from abc import ABC
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
+from typing import Any, Union
 from urllib.parse import urlparse
 
 from agents import RunContextWrapper
@@ -30,9 +31,9 @@ from agents import RunContextWrapper
 from core.task_context import TaskContext
 from runtime.budget import brute_gate as _budget_brute_gate
 from runtime.log import log_info, log_warn
-from sandbox import SandboxBlockedError, SandboxUnavailableError, confine as _l5_confine
+from sandbox import SandboxBlockedError, SandboxUnavailableError
+from sandbox import confine as _l5_confine
 from sandbox.policy import Policy as SandboxPolicy
-
 
 # ---------------------------------------------------------------------------
 # Middleware 协议
@@ -44,28 +45,28 @@ class ToolMiddleware(ABC):
     name: str = ""
 
     async def pre(self, ctx: RunContextWrapper[TaskContext], tool: str,
-                  args: Dict[str, Any]) -> Dict[str, Any]:
+                  args: dict[str, Any]) -> dict[str, Any]:
         """参数预处理；返回修改后的 args。"""
         return args
 
     def guard(self, ctx: RunContextWrapper[TaskContext], tool: str,
-              args: Dict[str, Any]) -> Optional[str]:
+              args: dict[str, Any]) -> str | None:
         """执行前拦截；返回非空字符串时直接作为工具结果返回，不执行工具体。"""
         return None
 
     async def around(self, ctx: RunContextWrapper[TaskContext], tool: str,
-                     args: Dict[str, Any], execute: Callable[[], Awaitable[str]]) -> str:
+                     args: dict[str, Any], execute: Callable[[], Awaitable[str]]) -> str:
         """包装工具执行；默认直接执行。"""
         return await execute()
 
     async def post(self, ctx: RunContextWrapper[TaskContext], tool: str,
-                   args: Dict[str, Any], result: str) -> str:
+                   args: dict[str, Any], result: str) -> str:
         """结果后处理；返回修改后的 result。"""
         return result
 
 
 # 默认管线实例化时绑定提交函数；避免循环导入，这里只做占位。
-SubmitFn = Callable[[RunContextWrapper[TaskContext], str], Optional[str]]
+SubmitFn = Callable[[RunContextWrapper[TaskContext], str], str | None]
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ class ArtifactSpillMiddleware(ToolMiddleware):
         text = str(result)
         # 延迟导入 demo_tools 中的提交/注入扫描函数，避免循环导入
         try:
-            from demo_tools import _submit_flags_if_any, _guard_output
+            from demo_tools import _guard_output, _submit_flags_if_any
         except Exception:
             _submit_flags_if_any, _guard_output = None, None
         notes = []
@@ -171,7 +172,7 @@ class AutoSubmitFlagMiddleware(ToolMiddleware):
     """自动扫描工具输出中的 flag 并尝试提交（铁律提交）。"""
     name = "auto_submit_flag"
 
-    def __init__(self, submit_fn: Optional[SubmitFn] = None):
+    def __init__(self, submit_fn: SubmitFn | None = None):
         self.submit_fn = submit_fn
 
     async def post(self, ctx, tool, args, result):
@@ -225,8 +226,8 @@ MiddlewareSpec = Union[ToolMiddleware, str]
 class ToolPipeline:
     """工具管线：按顺序收集 middleware，执行 pre → guard → around → post。"""
 
-    def __init__(self, middlewares: Optional[List[ToolMiddleware]] = None):
-        self.middlewares: List[ToolMiddleware] = list(middlewares or [])
+    def __init__(self, middlewares: list[ToolMiddleware] | None = None):
+        self.middlewares: list[ToolMiddleware] = list(middlewares or [])
 
     def add(self, mw: ToolMiddleware) -> "ToolPipeline":
         self.middlewares.append(mw)
@@ -244,7 +245,7 @@ class ToolPipeline:
         return args
 
     async def execute(self, ctx: RunContextWrapper[TaskContext], tool: str,
-                      args: Dict[str, Any], body: Callable[[], Awaitable[str]]) -> str:
+                      args: dict[str, Any], body: Callable[[], Awaitable[str]]) -> str:
         # pre
         args = await self._run_pre(ctx, tool, args)
 
@@ -551,13 +552,13 @@ def _guard_output_text(text: str) -> str:
     return out
 
 
-def _ledger_signature(tool: str, args: Dict[str, Any]) -> str:
+def _ledger_signature(tool: str, args: dict[str, Any]) -> str:
     """归一化工具调用签名（统一收敛到 core.hooks 的增强实现，避免双份漂移）。"""
     from core.hooks import _ledger_signature as _sig
     return _sig(tool, args)
 
 
-def _record_payload_ledger(task_ctx: TaskContext, tool: str, args: Dict[str, Any], text: str) -> None:
+def _record_payload_ledger(task_ctx: TaskContext, tool: str, args: dict[str, Any], text: str) -> None:
     """exploit 阶段 payload 记账（统一收敛到 core.hooks 的增强实现）。"""
     from core.hooks import _record_payload_ledger as _rec
     _rec(task_ctx, tool, args, text)

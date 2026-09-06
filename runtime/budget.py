@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict
 
 from agents import OpenAIChatCompletionsModel, RunContextWrapper
 from openai import AsyncOpenAI
 
-from adapters.config import BASE_URL, API_KEY
+from adapters.config import API_KEY, BASE_URL
 
 # ================= 爆破预算 =================
 BRUTEFORCE_MAX_CALLS = int(os.getenv("BRUTEFORCE_MAX_CALLS", "20"))  # 每题爆破调用硬上限，0=关闭
@@ -115,7 +114,7 @@ def brute_gate(ctx: RunContextWrapper, name: str, args: str = "") -> str:
 def should_pull_hint_by_budget(total_tokens: int, failed_paths: int,
                                difficulty: str, hint_used: bool,
                                ratio: float,
-                               suspend_tokens: Dict[str, int]) -> bool:
+                               suspend_tokens: dict[str, int]) -> bool:
     """hint 预算规则：卡题（≥2 条独立失败路径）且 token 达挂起档该比例时返回 True。
 
     hint 扣分比继续空烧 token 便宜，不应等整档预算耗尽才拉提示。

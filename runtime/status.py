@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from runtime.log import log_info
 
@@ -61,7 +61,7 @@ PHASE_TRANSITIONS = {
 
 def set_status(workdir: Path, phase: str, status: str, **extra) -> None:
     """写当前阶段/状态到 status.json（覆盖写，供 UI 实时轮询）。"""
-    record: Dict[str, Any] = {
+    record: dict[str, Any] = {
         "phase": phase,
         "status": status,
         "ts": int(time.time()),
@@ -76,7 +76,7 @@ def set_status(workdir: Path, phase: str, status: str, **extra) -> None:
              f"{' ' + detail if detail else ''}")
 
 
-def get_status(workdir: Path) -> Dict[str, Any]:
+def get_status(workdir: Path) -> dict[str, Any]:
     """读当前状态；不存在或损坏返回空 dict。"""
     p = workdir / "status.json"
     if not p.exists():

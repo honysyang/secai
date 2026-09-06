@@ -10,13 +10,13 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
-from agents import Runner, Agent
+from agents import Agent, Runner
 
-from core.task_context import TaskContext
 from core.memory import render_blackboard_snapshot
-from runtime.log import log_info, log_error
+from core.task_context import TaskContext
+from runtime.log import log_error, log_info
 
 # 会话 L2 层 token 量超过此值触发压缩
 COMPACT_TOKEN_THRESHOLD = 20000
@@ -63,8 +63,8 @@ def _item_tokens(item: Any) -> int:
     return int(len(text) / CHARS_PER_TOKEN) + 1
 
 
-def _split_for_compact(items: List[Any], keep_recent_tokens: int,
-                       keep_min_rounds: int) -> tuple[List[Any], List[Any]]:
+def _split_for_compact(items: list[Any], keep_recent_tokens: int,
+                       keep_min_rounds: int) -> tuple[list[Any], list[Any]]:
     """按 token 预算切 old/recent，并把 recent 起点回退到完整回合边界。
 
     从最新往旧逐条累加 token，超过 keep_recent_tokens 预算即停，但至少保留
@@ -108,7 +108,7 @@ def _item_text(item: Any) -> str:
         if isinstance(content, str):
             return f"[{role}] {content}"
         if isinstance(content, list):
-            parts: List[str] = []
+            parts: list[str] = []
             for c in content:
                 if not isinstance(c, dict):
                     continue
@@ -125,7 +125,7 @@ def _item_text(item: Any) -> str:
     return str(item)[:400]
 
 
-def _estimate_tokens(items: List[Any]) -> int:
+def _estimate_tokens(items: list[Any]) -> int:
     """估算会话 item 的 token 量，用于压缩触发判断。
 
     用 JSON 序列化还原 item 的完整内容（含 tool 参数与结果），再除以
@@ -171,7 +171,7 @@ def _emit_token_estimate(ctx: TaskContext, estimate: int,
         pass
 
 
-def _archive_items(ctx: TaskContext, items: List[Any]) -> None:
+def _archive_items(ctx: TaskContext, items: list[Any]) -> None:
     """把被摘要掉的旧 items 追加写归档文件（每行一个 JSON），完整保留原始轨迹。"""
     try:
         with open(ctx.workdir / ARCHIVE_FILE, "a", encoding="utf-8") as f:
@@ -245,7 +245,7 @@ def _truncate_old_tool_outputs(session, keep_recent: int = 12,
     return truncated
 
 
-async def _summarize(agent: Agent, old_items: List[Any], prev_summary: str) -> str:
+async def _summarize(agent: Agent, old_items: list[Any], prev_summary: str) -> str:
     """复用当前 Agent 的 system 与 tools，把压缩指令作为最后一条 user message，
 
     使摘要请求成为上一次对话请求的**前缀扩展**，从而最大化服务端 KV cache 命中。
@@ -372,7 +372,7 @@ def save_state(workdir: Path, ctx: TaskContext, turn_count: int,
         json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_state(workdir: Path) -> Dict[str, Any] | None:
+def load_state(workdir: Path) -> dict[str, Any] | None:
     p = workdir / STATE_FILE
     if not p.exists():
         return None
@@ -387,7 +387,7 @@ def has_checkpoint(workdir: Path) -> bool:
     return (workdir / STATE_FILE).exists() and (workdir / SESSION_FILE).exists()
 
 
-def build_ctx_from_state(workdir: Path, state: Dict[str, Any]) -> TaskContext:
+def build_ctx_from_state(workdir: Path, state: dict[str, Any]) -> TaskContext:
     return TaskContext(
         workdir=workdir,
         disclosed_skills=state.get("disclosed_skills", []),

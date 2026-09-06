@@ -11,18 +11,17 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledge"
 
 
-def load_knowledge() -> List[dict]:
+def load_knowledge() -> list[dict]:
     """递归扫描 knowledge/**，每个文件生成 {id, name, desc, all}。
 
     支持子目录分类（如 get_flag/idor）；id 为相对路径（去掉 .txt 后缀）。
     文件首行作 desc，全文作 all。
     """
-    items: List[dict] = []
+    items: list[dict] = []
     if not KNOWLEDGE_DIR.exists():
         return items
     for p in sorted(KNOWLEDGE_DIR.rglob("*")):
@@ -48,12 +47,12 @@ def load_knowledge() -> List[dict]:
     return items
 
 
-def list_knowledge() -> List[dict]:
+def list_knowledge() -> list[dict]:
     """列出全部知识条目的 id + desc。"""
     return [{"id": i["id"], "desc": i["desc"]} for i in load_knowledge()]
 
 
-def get_knowledge(kid: str) -> Optional[dict]:
+def get_knowledge(kid: str) -> dict | None:
     """按 id 取完整知识内容。"""
     kid = (kid or "").strip()
     for i in load_knowledge():

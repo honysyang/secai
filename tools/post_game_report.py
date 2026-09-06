@@ -17,12 +17,11 @@ import argparse
 import json
 import re
 import sqlite3
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional
 
 
-def load_results(workdir: Path) -> List[dict]:
+def load_results(workdir: Path) -> list[dict]:
     """尝试读取 results.json；没有则从 events.jsonl 里重建。"""
     p = workdir / "results.json"
     if p.exists():
@@ -44,7 +43,7 @@ def load_results(workdir: Path) -> List[dict]:
     return results
 
 
-def load_death_reasons(workdir: Path) -> Dict[str, str]:
+def load_death_reasons(workdir: Path) -> dict[str, str]:
     """从 events.jsonl 里抓取 [death] 日志。"""
     reasons = {}
     events = workdir / "events.jsonl"

@@ -15,11 +15,10 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import List
 
 ROLES_DIR = Path(__file__).parent.parent / "roles"
 
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
+_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 # 所有角色共用的工具使用提示：如何调用本机安全 CLI 工具（追加进每个角色的思维风格）
@@ -71,13 +70,13 @@ def _parse_frontmatter(text: str) -> dict:
 
 
 @lru_cache(maxsize=1)
-def load_roles() -> List[dict]:
+def load_roles() -> list[dict]:
     """扫描 roles/*.md，返回角色定义列表（保持文件顺序）。
 
     lru_cache(maxsize=1)：角色文件运行时不变，避免热路径（每个工具结果事件
     的 _boost_role_by_trigger）反复磁盘 IO + YAML/md 解析（A6 修复）。
     """
-    roles: List[dict] = []
+    roles: list[dict] = []
     for p in sorted(ROLES_DIR.glob("*.md")):
         text = p.read_text(encoding="utf-8")
         meta = _parse_frontmatter(text)
@@ -112,7 +111,7 @@ def assign_role(code: str, description: str = "",
         if not pattern:
             fallback = r
             continue
-        if pattern.startswith("^") and re.search(pattern, target, re.I):
+        if pattern.startswith("^") and re.search(pattern, target, re.IGNORECASE):
             return _build(r, "evidence" if evidence_override else "prefix")
 
     # 第二遍：非锚定 pattern（描述关键词 / 阶段角色 / AI 安全）
@@ -120,7 +119,7 @@ def assign_role(code: str, description: str = "",
         pattern = r["pattern"]
         if not pattern or pattern.startswith("^"):
             continue
-        if re.search(pattern, target, re.I):
+        if re.search(pattern, target, re.IGNORECASE):
             return _build(r, "evidence" if evidence_override else "keyword")
 
     fallback = fallback or {

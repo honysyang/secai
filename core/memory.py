@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 from core.task_context import TaskContext
 
@@ -23,7 +23,7 @@ def render_blackboard_snapshot(ctx: TaskContext, max_value_chars: int = 200) -> 
     只保留 confirmed/verified 的关键条目，剔除大段未验证噪音，保证压缩后
     flag 线索、死路结论、hint 法令、破局指令不丢失。
     """
-    lines: List[str] = []
+    lines: list[str] = []
     board = getattr(ctx, "blackboard", {}) or {}
     for k, v in board.items():
         if not isinstance(v, dict):
@@ -53,7 +53,7 @@ class MemoryManager:
         if text:
             self.ctx.notes.append(text)
 
-    def recent_notes(self, n: int = 5) -> List[str]:
+    def recent_notes(self, n: int = 5) -> list[str]:
         """取最近 n 条短期笔记。"""
         return list(self.ctx.notes[-n:])
 
@@ -77,9 +77,9 @@ class MemoryManager:
             return v.get("value")
         return v
 
-    def confirmed_blackboard(self) -> Dict[str, Any]:
+    def confirmed_blackboard(self) -> dict[str, Any]:
         """只返回 confirmed/done 且 verified 的条目（供压缩/复盘复用）。"""
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for k, v in self.ctx.blackboard.items():
             if isinstance(v, dict) and bool(v.get("verified", True)) \
                     and v.get("status") in ("confirmed", "done"):

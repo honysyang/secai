@@ -10,8 +10,8 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 DB_PATH = Path(__file__).parent.parent / "data" / "agent.db"
 

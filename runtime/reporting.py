@@ -9,7 +9,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import requests
 
@@ -42,7 +42,7 @@ async def first_strike(addrs: list) -> str:
         url = base + path
         try:
             r = requests.get(url, timeout=8, verify=False, allow_redirects=False)
-            title = re.search(r"<title>([^<]*)</title>", r.text, re.I)
+            title = re.search(r"<title>([^<]*)</title>", r.text, re.IGNORECASE)
             return {
                 "path": path, "status": r.status_code, "len": len(r.content),
                 "title": (title.group(1) if title else "")[:80],
@@ -167,7 +167,7 @@ def write_dashboard(workdir: Path) -> None:
 
     扫描 workdir 下 worker_*/cost_report.json 汇总为 dashboard.json。
     """
-    reports: List[Dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
     for rep in sorted(workdir.glob("worker_*/cost_report.json")):
         try:
             data = json.loads(rep.read_text(encoding="utf-8"))

@@ -14,9 +14,9 @@ import json
 import os
 from pathlib import Path
 
+from agents import Model, OpenAIChatCompletionsModel, set_tracing_disabled
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
-from agents import OpenAIChatCompletionsModel, Model, set_tracing_disabled
 
 # 加载项目根目录的 .env（放在最前，保证后续 os.getenv 能读到）
 load_dotenv(Path(__file__).parent.parent / ".env")

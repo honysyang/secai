@@ -18,7 +18,6 @@ import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 
@@ -26,7 +25,7 @@ VULNS_DIR = Path(__file__).parent.parent / "vulns"
 PAYLOADS_DIR = Path(__file__).parent.parent / "payloads"
 
 
-def load_payloads(vuln_type: str) -> List[str]:
+def load_payloads(vuln_type: str) -> list[str]:
     """从 payloads/{type}.txt 读 payload 字典（每行一个，支持 $origin$ 占位符）。
 
     不存在对应文件时返回空列表，调用方可回退到 YAML 内联 payloads。
@@ -44,14 +43,14 @@ class Vuln:
     description: str = ""
     need_detect: str = ""
     prompt: str = ""
-    payloads: List[str] = field(default_factory=list)
-    path: Optional[Path] = None
+    payloads: list[str] = field(default_factory=list)
+    path: Path | None = None
 
 
 @lru_cache(maxsize=1)
-def load_vulns() -> Dict[str, Vuln]:
+def load_vulns() -> dict[str, Vuln]:
     """扫描 vulns/*.yaml，返回 {漏洞类型: Vuln}。"""
-    vulns: Dict[str, Vuln] = {}
+    vulns: dict[str, Vuln] = {}
     if not VULNS_DIR.exists():
         return vulns
     for p in sorted(VULNS_DIR.glob("*.yaml")):
@@ -76,7 +75,7 @@ def load_vulns() -> Dict[str, Vuln]:
     return vulns
 
 
-def list_vulns() -> List[dict]:
+def list_vulns() -> list[dict]:
     """列出全部漏洞类型（type/name/description）。"""
     return [
         {"type": v.type, "name": v.name, "description": v.description}
@@ -84,7 +83,7 @@ def list_vulns() -> List[dict]:
     ]
 
 
-def get_vuln(vuln_type: str) -> Optional[Vuln]:
+def get_vuln(vuln_type: str) -> Vuln | None:
     """按类型缩写取完整检测规范（含 prompt/payloads）。"""
     return load_vulns().get((vuln_type or "").strip().upper())
 

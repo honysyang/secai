@@ -10,7 +10,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from agents.memory import SQLiteSession
 
@@ -18,7 +18,6 @@ from arsenal.registries.skill_registry import load_skills
 from core.agents_def import compactor_agent
 from core.task_context import TaskContext
 from runtime.log import log_warn
-
 
 # 模型惰性检测阈值（可通过环境变量覆盖）
 MODEL_SWITCH_TURNS = int(os.getenv("MODEL_SWITCH_TURNS", "6"))
@@ -35,7 +34,7 @@ class StuckActionType(Enum):
 class StuckAction:
     action: StuckActionType
     reason: str = ""
-    extra_skills: List[str] = field(default_factory=list)
+    extra_skills: list[str] = field(default_factory=list)
     next_input: str = ""
     reset_phase: bool = False
 
@@ -194,7 +193,7 @@ def _fingerprint_text(ctx: TaskContext) -> str:
     return " ".join(parts).lower()
 
 
-def _pick_unseen_skills(ctx: TaskContext, max_skills: int = 3) -> List[str]:
+def _pick_unseen_skills(ctx: TaskContext, max_skills: int = 3) -> list[str]:
     """自救时挑选尚未披露的技能。
 
     策略（聚焦解题，避免旧版只解锁工具用法）：
@@ -205,7 +204,7 @@ def _pick_unseen_skills(ctx: TaskContext, max_skills: int = 3) -> List[str]:
     skills = load_skills()
     text = _fingerprint_text(ctx)
 
-    scores: Dict[str, int] = {}
+    scores: dict[str, int] = {}
     for kw, names in _VULN_HINTS.items():
         if kw in text:
             for n in names:
@@ -231,7 +230,7 @@ def _pick_unseen_skills(ctx: TaskContext, max_skills: int = 3) -> List[str]:
 
 
 def _self_rescue_prompt(ctx: TaskContext, old_phase: str,
-                        extra_skills: List[str], keep_exploit: bool = False) -> str:
+                        extra_skills: list[str], keep_exploit: bool = False) -> str:
     """生成单模型自救时的 next_input。"""
     bb_snapshot = json.dumps(
         {k: v for k, v in ctx.blackboard.items()
@@ -275,7 +274,7 @@ def _self_rescue_prompt(ctx: TaskContext, old_phase: str,
     return "\n".join(parts)
 
 
-def _format_blackboard_summary(board: Dict[str, Any], max_chars: int = 1200) -> str:
+def _format_blackboard_summary(board: dict[str, Any], max_chars: int = 1200) -> str:
     """把黑板内容整理成用于压缩的精简摘要。"""
     if not board:
         return "（空）"
@@ -299,7 +298,7 @@ def _format_blackboard_summary(board: Dict[str, Any], max_chars: int = 1200) -> 
     return text
 
 
-def _format_failed_actions(items: List[Any], max_chars: int = 4000) -> str:
+def _format_failed_actions(items: list[Any], max_chars: int = 4000) -> str:
     """从历史 items 中提取最近若干轮失败/无增量的动作文本。"""
     failed_lines = []
     for item in items[-40:]:
@@ -326,7 +325,7 @@ def _format_failed_actions(items: List[Any], max_chars: int = 4000) -> str:
 
 
 async def compact_session(ctx: TaskContext, session, compactor_model=None,
-                          model_pool=None) -> Optional[str]:
+                          model_pool=None) -> str | None:
     """卡壳路径的压缩请求（修补 1：压缩收敛单一入口）。
 
     压缩实现唯一归属 core/context_manager.compact_if_needed（含定点截断/摘要锚点/

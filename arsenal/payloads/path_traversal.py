@@ -8,9 +8,9 @@
 成功：输出敏感文件内容；失败：输出响应差异摘要。
 """
 import argparse
-import requests
 import sys
 
+import requests
 
 TARGETS = [
     "/etc/passwd",

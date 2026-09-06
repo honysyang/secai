@@ -9,14 +9,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any
 
 from agents import Agent, Runner
 
 from core.agents_def import EXECUTOR_SETTINGS
 from runtime.log import log_info, log_warn
 from runtime.model_fallback import run_with_model_fallback
-
 
 FORK_ANALYZE_MAX = 3
 
@@ -47,7 +46,7 @@ FORK_ANALYST_SYSTEM = """你是一名冷静的 CTF 复盘分析师，只阅读�
 - 只输出 JSON，不要解释。"""
 
 
-def _format_tail(events: List[dict], blackboard: Dict[str, Any], max_events: int = 12) -> str:
+def _format_tail(events: list[dict], blackboard: dict[str, Any], max_events: int = 12) -> str:
     """把最近事件和黑板上关键事实格式化为 fork_analyst 的输入。"""
     lines = ["# 当前黑板（已验证事实/死路/flag/hint）", json.dumps(blackboard, ensure_ascii=False, indent=2)[:2000]]
     if events:
@@ -70,13 +69,13 @@ def _format_tail(events: List[dict], blackboard: Dict[str, Any], max_events: int
 
 
 async def fork_analyze(
-    events: List[dict],
-    blackboard: Dict[str, Any],
+    events: list[dict],
+    blackboard: dict[str, Any],
     role_brief: str = "",
     model=None,
     model_pool=None,
     max_events: int = 12,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """对最近轨迹做一次性强模型分析，返回结构化建议。
 
     Args:
@@ -140,7 +139,7 @@ async def fork_analyze(
         }
 
 
-def update_blackboard_with_fork(blackboard: Dict[str, Any], result: Dict[str, Any]) -> str:
+def update_blackboard_with_fork(blackboard: dict[str, Any], result: dict[str, Any]) -> str:
     """把 fork_analyze 结果写入 blackboard，返回 next_directive 文本。
 
     质量门：directive 过短/无实质动作（不含命令或探测意图）时降级为通用指令，

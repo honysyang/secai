@@ -10,19 +10,15 @@ from __future__ import annotations
 import hashlib
 import os
 import time
-from typing import Any, Dict
+from typing import Any
 
 from agents import Agent, ModelSettings, RunContextWrapper
 
-from adapters.config import MODEL, FAST_MODEL
-
-
-
-from demo_tools import (ALL_TOOLS, finish_subtask, query_skills, list_knowledge,
-                        get_knowledge, list_tools)
+from adapters.config import FAST_MODEL, MODEL
 from arsenal.registries.skill_registry import load_skill_bodies
-from runtime.status import PHASE_DEFS
 from core.task_context import TaskContext
+from demo_tools import ALL_TOOLS, finish_subtask, get_knowledge, list_knowledge, list_tools, query_skills
+from runtime.status import PHASE_DEFS
 
 # 按角色拆分 ModelSettings：输出型 Agent 稳定低 temperature，探索型 Agent 略高；
 # Strategist/Reporter 给更大 max_tokens 以输出完整宪章+计划/总结；
@@ -239,7 +235,7 @@ def _render_executor_instructions(ctx: RunContextWrapper[TaskContext],
 # ---------------------------------------------------------------------------
 # Agent Preset 运行时组合：同一 build_executor 接口按场景动态叠加风格与工具
 # ---------------------------------------------------------------------------
-AGENT_PRESETS: Dict[str, Dict[str, Any]] = {
+AGENT_PRESETS: dict[str, dict[str, Any]] = {
     "default": {
         "instructions_suffix": "",
         "extra_tools": [],
@@ -337,8 +333,8 @@ def build_executor(role: dict, charter: str, brief: str,
                      tools=tools, model=model or FAST_MODEL,
                      model_settings=model_settings or EXECUTOR_SETTINGS)
     # 挂静态 hash，供主循环每轮断言 system prompt 字节级稳定
-    setattr(executor, "static_prompt_hash", static_hash)
-    setattr(executor, "static_prompt_src", static_src)
+    executor.static_prompt_hash = static_hash
+    executor.static_prompt_src = static_src
     return executor
 
 

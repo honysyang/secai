@@ -17,7 +17,6 @@ import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 
@@ -31,16 +30,16 @@ class Poc:
     summary: str = ""
     severity: str = ""
     affected: str = ""        # affected 或 rule（版本范围）
-    references: List[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
     poc_type: str = ""        # 有 poc 段才有的漏洞类型
     principle: str = ""
-    steps: List[str] = field(default_factory=list)
+    steps: list[str] = field(default_factory=list)
     payload: str = ""
     verification: str = ""
-    path: Optional[Path] = None
+    path: Path | None = None
 
 
-def _load_one(path: Path) -> Optional[Poc]:
+def _load_one(path: Path) -> Poc | None:
     try:
         d = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:
@@ -70,9 +69,9 @@ def _load_one(path: Path) -> Optional[Poc]:
 
 
 @lru_cache(maxsize=1)
-def load_pocs() -> Dict[str, Poc]:
+def load_pocs() -> dict[str, Poc]:
     """扫描 pocs/**/*.yaml，返回 {CVE 编号: Poc}。"""
-    pocs: Dict[str, Poc] = {}
+    pocs: dict[str, Poc] = {}
     for p in sorted(POCS_DIR.rglob("*.yaml")):
         poc = _load_one(p)
         if poc is not None:
@@ -80,10 +79,10 @@ def load_pocs() -> Dict[str, Poc]:
     return pocs
 
 
-def find_pocs(query: str, limit: int = 5) -> List[dict]:
+def find_pocs(query: str, limit: int = 5) -> list[dict]:
     """按产品名/CVE 编号/摘要/漏洞类型检索 POC。"""
     q = (query or "").strip().lower()
-    out: List[dict] = []
+    out: list[dict] = []
     for p in load_pocs().values():
         hay = " ".join([p.name, p.cve, p.summary, p.poc_type, p.principle]).lower()
         if q and q not in hay:
@@ -103,15 +102,15 @@ def find_pocs(query: str, limit: int = 5) -> List[dict]:
     return out
 
 
-def get_poc(cve: str) -> Optional[Poc]:
+def get_poc(cve: str) -> Poc | None:
     """按 CVE 编号取完整 POC（含 steps/payload）。"""
     return load_pocs().get(cve.strip().upper())
 
 
 def create_poc(name: str, cve: str = "", summary: str = "", severity: str = "",
                affected: str = "", poc_type: str = "", principle: str = "",
-               steps: Optional[List[str]] = None, payload: str = "",
-               verification: str = "", references: Optional[List[str]] = None) -> Path:
+               steps: list[str] | None = None, payload: str = "",
+               verification: str = "", references: list[str] | None = None) -> Path:
     """创建一个 POC 文件（pocs/{cve或name}.yaml），返回文件路径。
 
     Agent 实战确认漏洞后，把利用过程结构化沉淀为 POC，下次 search_cve/get_poc 直接复用。
