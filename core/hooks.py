@@ -13,13 +13,13 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from agents import RunHooks
 
-from core.events import BUS
 from arsenal.registries.skill_registry import detect_skill_triggers
-from runtime.log import log_info, log_warn, log_debug
+from core.events import BUS
+from runtime.log import log_debug, log_info, log_warn
 
 # 无进展工具：这些工具不产生攻击进展，调用它们不计入「本轮工具调用」，
 # 否则 think/todo/checkpoint 会合法绕过「连续 N 轮空转 → 机械换题」防线。
@@ -72,11 +72,10 @@ def _boost_role_by_trigger(task_ctx) -> None:
         trig = (r.get("trigger") or "").strip()
         if not trig:
             continue
-        if any(t.strip() in bb_keys for t in trig.split(",")):
-            if r["role"] not in task_ctx.boosted_roles:
-                task_ctx.boosted_roles.append(r["role"])
-                task_ctx.role_boost = r.get("style", "")
-                log_warn(f"[role-boost] 证据触发注入增强角色「{r['role']}」")
+        if any(t.strip() in bb_keys for t in trig.split(",")) and r["role"] not in task_ctx.boosted_roles:
+            task_ctx.boosted_roles.append(r["role"])
+            task_ctx.role_boost = r.get("style", "")
+            log_warn(f"[role-boost] 证据触发注入增强角色「{r['role']}」")
 
 
 def _output_text(response) -> str:
@@ -177,16 +176,16 @@ def _auto_advance_phase(task_ctx, text: str) -> bool:
         if phase != "post":
             task_ctx.phase = "post"
             return True
-    elif phase in ("recon", "enumerate", "detect"):
-        if ('"vuln": true' in low or '"vuln":"true"' in low
-                or '"vulnerable": true' in low or '"differentiated": true' in low):
-            task_ctx.phase = "exploit"
-            log_warn("[漏洞] 检测到漏洞确认（vuln/vulnerable/differentiated=true）→ 阶段切到 exploit")
-            return True
+    elif phase in ("recon", "enumerate", "detect") and (
+            '"vuln": true' in low or '"vuln":"true"' in low
+            or '"vulnerable": true' in low or '"differentiated": true' in low):
+        task_ctx.phase = "exploit"
+        log_warn("[漏洞] 检测到漏洞确认（vuln/vulnerable/differentiated=true）→ 阶段切到 exploit")
+        return True
     return False
 
 
-def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
+def _auto_close_loop(task_ctx, tool_name: str, text: str) -> str | None:
     """关键证据自动闭环：拿到漏洞/敏感点后直接给出最小利用指令。
 
     目前覆盖：
@@ -223,7 +222,7 @@ def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
     # LFI 确认：输出包含路径穿越 + 敏感文件内容
     lfi_match = re.search(
         r"([\w./-]*(?:\.\./|\.\.\\|%2e%2e)[\w./%-]*(?:/etc/passwd|/flag|flag\.txt|config\.php|\.env|web\.config))",
-        text, re.I)
+        text, re.IGNORECASE)
     if lfi_match and ("/etc/passwd" in low or "root:" in low):
         ev = lfi_match.group(1)
         if not _already("lfi_confirmed", "true"):
@@ -237,7 +236,7 @@ def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
     # API flag 端点：登录成功且发现 /api/flag
     if ("login success" in low or "logged in" in low or "session=" in low
             or '"authenticated": true' in low or "token" in low):
-        api_flag = re.search(r"(?:^|\s)(/api/[\w/-]*flag[\w/-]*)", text, re.I)
+        api_flag = re.search(r"(?:^|\s)(/api/[\w/-]*flag[\w/-]*)", text, re.IGNORECASE)
         if api_flag:
             endpoint = api_flag.group(1)
             if not _already("api_flag_endpoint", endpoint):
@@ -248,7 +247,7 @@ def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
 
     # SSRF/内网端点确认：输出含内网 IP 或 localhost 且返回业务内容
     ssrf_match = re.search(r"(http://(?:127\.0\.0\.1|localhost|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})[/\w%.-]*)",
-                           text, re.I)
+                           text, re.IGNORECASE)
     if ssrf_match and any(k in low for k in ("200", "201", "flag{", "admin", "secret")):
         url = ssrf_match.group(1)
         if not _already("ssrf_endpoint", url):
@@ -263,35 +262,35 @@ def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
     sqli_match = re.search(
         r"(syntax error|mysql_fetch|sqlite_|pg_query|ORA-|you have an error in your sql|"
         r"union\s+select|information_schema|table_name|column_name|sleep\(|benchmark\(|pg_sleep)",
-        text, re.I)
-    if sqli_match and ("error" in low or "union" in low or "sleep(" in low
-                       or "information_schema" in low or "sqlite_" in low):
-        if not _already("sqli_confirmed", "true"):
-            _set("sqli_confirmed", "true", sqli_match.group(0))
-            log_warn("[闭环] 检测到 SQL 注入，强制注出 flag/凭证")
-            return ("已确认存在 SQL 注入。请立即：\n"
-                    "1. 用 UNION SELECT 注出当前数据库名、表名、列名（information_schema / sqlite_master）；\n"
-                    "2. 找到 flag 列后直接 SELECT 出 flag 值；\n"
-                    "3. 若是报错/时间盲注，用 sqlmap 或手工脚本批量拖取；\n"
-                    "4. 拿到 flag{...} 立即提交。")
+        text, re.IGNORECASE)
+    if (sqli_match and ("error" in low or "union" in low or "sleep(" in low
+                        or "information_schema" in low or "sqlite_" in low)
+            and not _already("sqli_confirmed", "true")):
+        _set("sqli_confirmed", "true", sqli_match.group(0))
+        log_warn("[闭环] 检测到 SQL 注入，强制注出 flag/凭证")
+        return ("已确认存在 SQL 注入。请立即：\n"
+                "1. 用 UNION SELECT 注出当前数据库名、表名、列名（information_schema / sqlite_master）；\n"
+                "2. 找到 flag 列后直接 SELECT 出 flag 值；\n"
+                "3. 若是报错/时间盲注，用 sqlmap 或手工脚本批量拖取；\n"
+                "4. 拿到 flag{...} 立即提交。")
 
     # 命令注入 / RCE 确认：whoami/id 等命令回显
     cmdi_match = re.search(
         r"((?:^|\s)(uid=\d+|gid=\d+|root|www-data|daemon|nt authority|powershell|cmd\.exe))",
-        text, re.I)
-    if cmdi_match and any(k in low for k in ("whoami", "id", "uid=", "root", "www-data")):
-        if not _already("rce_confirmed", "true"):
-            _set("rce_confirmed", "true", cmdi_match.group(0))
-            log_warn("[闭环] 检测到命令执行/RCE，强制读 flag")
-            return ("已确认存在命令执行/RCE。请立即：\n"
-                    "1. 执行 `cat /flag*`、`find / -name 'flag*' -maxdepth 3 -type f`、`ls /`；\n"
-                    "2. 读取 flag 文件内容并直接提交；\n"
-                    "3. 若权限不足，尝试 `sudo -l`、SUID 提权、容器逃逸等拿到 root 后重读。")
+        text, re.IGNORECASE)
+    if (cmdi_match and any(k in low for k in ("whoami", "id", "uid=", "root", "www-data"))
+            and not _already("rce_confirmed", "true")):
+        _set("rce_confirmed", "true", cmdi_match.group(0))
+        log_warn("[闭环] 检测到命令执行/RCE，强制读 flag")
+        return ("已确认存在命令执行/RCE。请立即：\n"
+                "1. 执行 `cat /flag*`、`find / -name 'flag*' -maxdepth 3 -type f`、`ls /`；\n"
+                "2. 读取 flag 文件内容并直接提交；\n"
+                "3. 若权限不足，尝试 `sudo -l`、SUID 提权、容器逃逸等拿到 root 后重读。")
 
     # 文件上传成功：响应含 uploaded / path / filename
     upload_match = re.search(
         r"((?:uploaded|success|file saved|path)[:\s]+([\w./-]+\.(?:php|jsp|asp|aspx|py|sh|php7)))",
-        text, re.I)
+        text, re.IGNORECASE)
     if upload_match:
         up_path = upload_match.group(2)
         if not _already("upload_success", up_path):
@@ -303,20 +302,20 @@ def _auto_close_loop(task_ctx, tool_name: str, text: str) -> Optional[str]:
                     f"3. 若不可执行，尝试二次上传 .php/.asp/双后缀/内容类型绕过。")
 
     # 反序列化 gadget 命中：输出含 __destruct / gadget / phar / Object 等
-    if any(k in low for k in ("__destruct", "__wakeup", "unserialize", "phar://", "gadget chain",
-                              "object injection", "php object")):
-        if not _already("deserialization_confirmed", "true"):
-            _set("deserialization_confirmed", "true", text[:200])
-            log_warn("[闭环] 检测到反序列化 gadget，强制构造利用链")
-            return ("已确认存在反序列化/ gadget 链入口。请立即：\n"
-                    "1. 识别目标类与可利用 magic 方法（__destruct/__wakeup/__toString）；\n"
-                    "2. 构造最小 POP 链，调用 file_get_contents / eval / system / 写文件；\n"
-                    "3. 通过 unserialize / phar:// 触发，读取 flag 并提交。")
+    if (any(k in low for k in ("__destruct", "__wakeup", "unserialize", "phar://", "gadget chain",
+                               "object injection", "php object"))
+            and not _already("deserialization_confirmed", "true")):
+        _set("deserialization_confirmed", "true", text[:200])
+        log_warn("[闭环] 检测到反序列化 gadget，强制构造利用链")
+        return ("已确认存在反序列化/ gadget 链入口。请立即：\n"
+                "1. 识别目标类与可利用 magic 方法（__destruct/__wakeup/__toString）；\n"
+                "2. 构造最小 POP 链，调用 file_get_contents / eval / system / 写文件；\n"
+                "3. 通过 unserialize / phar:// 触发，读取 flag 并提交。")
 
     # 业务逻辑漏洞：优惠券 / 金额 / 积分 / 越权
     logic_match = re.search(
         r"((?:coupon|discount|price|amount|balance|point|score|voucher)[\s:=]+([\w.-]+))",
-        text, re.I)
+        text, re.IGNORECASE)
     if logic_match and any(k in low for k in ("coupon", "优惠", "金额", "price", "discount",
                                               "order", "checkout", "balance", "credit")):
         # R6：业务逻辑闭环限频——含 price 等字段的正常 JSON 响应也会命中此触发器，
@@ -346,7 +345,7 @@ _PORT_OPEN_RE = re.compile(r"\b\d{1,5}/(?:tcp|udp)\s+open\b", re.IGNORECASE)
 _PATH_EXTRACT_RE = re.compile(r"(?:/[A-Za-z0-9_.~%-]{2,}){1,4}")
 _SENSITIVE_RE = re.compile(
     r"(config\.php|\.git/|backup|\.env|phpinfo|/flag|flag\.txt|wp-config|"
-    r"\.bak|\.sql|\.zip|web\.config|id_rsa|shadow)", re.I)
+    r"\.bak|\.sql|\.zip|web\.config|id_rsa|shadow)", re.IGNORECASE)
 _ENUM_TOOLS = {"run_tool", "fuzz", "parallel_shell"}   # 枚举类工具的状态码算增量
 # shell/http_request 等交互类工具的行为差异关键词（SQLi/命令注入/SSRF/反序列化）
 # D2 收紧：强信号命中即算增量；弱词（admin/root 等）必须与错误/异常强信号同现才算
@@ -357,7 +356,7 @@ _STRONG_BEHAVIOR_HINTS = (
     "exec(", "shell_exec", "sleep(", "benchmark(", "flag{",
 )
 _WEAK_BEHAVIOR_HINTS = ("admin", "root", "secret", "internal", "localhost")
-_ERROR_CONTEXT_RE = re.compile(r"error|exception|failed|denied|refused", re.I)
+_ERROR_CONTEXT_RE = re.compile(r"error|exception|failed|denied|refused", re.IGNORECASE)
 
 
 def _extract_hint_keywords(hint: str) -> list:

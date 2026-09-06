@@ -23,7 +23,7 @@ import subprocess
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yaml
 
@@ -69,14 +69,14 @@ class ToolSpec:
     enabled: bool
     short_description: str = ""
     description: str = ""
-    args: List[str] = field(default_factory=list)
-    parameters: List[Dict[str, Any]] = field(default_factory=list)
+    args: list[str] = field(default_factory=list)
+    parameters: list[dict[str, Any]] = field(default_factory=list)
 
 
 @lru_cache(maxsize=1)
-def load_specs(tools_dir: str = TOOLS_DIR) -> Dict[str, ToolSpec]:
+def load_specs(tools_dir: str = TOOLS_DIR) -> dict[str, ToolSpec]:
     """扫描 YAML 目录，返回 {工具名: ToolSpec}（跳过非法/未启用项）。"""
-    specs: Dict[str, ToolSpec] = {}
+    specs: dict[str, ToolSpec] = {}
     root = Path(tools_dir)
     if not root.exists():
         return specs
@@ -110,17 +110,17 @@ def is_installed(spec: ToolSpec) -> bool:
 
 
 @lru_cache(maxsize=1)
-def available_tools(tools_dir: str = TOOLS_DIR) -> Dict[str, ToolSpec]:
+def available_tools(tools_dir: str = TOOLS_DIR) -> dict[str, ToolSpec]:
     """只返回 enabled 且本机已安装的工具。"""
     return {n: s for n, s in load_specs(tools_dir).items() if s.enabled and is_installed(s)}
 
 
-def missing_tools(tools_dir: str = TOOLS_DIR) -> List[str]:
+def missing_tools(tools_dir: str = TOOLS_DIR) -> list[str]:
     specs = load_specs(tools_dir)
     return [n for n, s in specs.items() if s.enabled and not is_installed(s)]
 
 
-def get_spec(name: str) -> Optional[ToolSpec]:
+def get_spec(name: str) -> ToolSpec | None:
     return load_specs().get(name)
 
 
@@ -130,13 +130,13 @@ def _to_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "on"}
 
 
-def build_command(spec: ToolSpec, args: Dict[str, Any]) -> List[str]:
+def build_command(spec: ToolSpec, args: dict[str, Any]) -> list[str]:
     """按 YAML parameters 拼出命令行。"""
-    cmd: List[str] = [spec.command] + list(spec.args or [])
-    pos0: List[str] = []
-    flags: List[str] = []
-    pos_rest: List[tuple[int, str]] = []
-    additional: List[str] = []
+    cmd: list[str] = [spec.command] + list(spec.args or [])
+    pos0: list[str] = []
+    flags: list[str] = []
+    pos_rest: list[tuple[int, str]] = []
+    additional: list[str] = []
 
     for p in spec.parameters:
         name = str(p.get("name") or "")
@@ -183,8 +183,8 @@ def build_command(spec: ToolSpec, args: Dict[str, Any]) -> List[str]:
     return cmd
 
 
-def execute(name: str, args: Dict[str, Any], *, timeout: int = DEFAULT_TIMEOUT,
-            workdir: Optional[str] = None) -> Dict[str, Any]:
+def execute(name: str, args: dict[str, Any], *, timeout: int = DEFAULT_TIMEOUT,
+            workdir: str | None = None) -> dict[str, Any]:
     """执行一个工具，返回 {command, rc, stdout, stderr} 或 {error}。"""
     spec = available_tools().get(name)
     if spec is None:
@@ -194,7 +194,7 @@ def execute(name: str, args: Dict[str, Any], *, timeout: int = DEFAULT_TIMEOUT,
     cmd = build_command(spec, args or {})
     try:
         p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=min(timeout, 600), cwd=workdir)
+                           timeout=min(timeout, 600), cwd=workdir, check=False)
         return {
             "command": " ".join(cmd),
             "rc": p.returncode,
@@ -207,9 +207,9 @@ def execute(name: str, args: Dict[str, Any], *, timeout: int = DEFAULT_TIMEOUT,
         return {"command": " ".join(cmd), "error": str(e)[:300]}
 
 
-def install_missing(dry_run: bool = True) -> Dict[str, Any]:
+def install_missing(dry_run: bool = True) -> dict[str, Any]:
     """尝试安装缺失工具（apt / pip，失败跳过）。dry_run=True 只返回安装命令不执行。"""
-    results: Dict[str, Any] = {}
+    results: dict[str, Any] = {}
     for name in missing_tools():
         manager, pkg = INSTALL_MAP.get(name, ("apt", name))
         if manager == "pip":

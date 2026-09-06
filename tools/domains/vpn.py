@@ -46,14 +46,14 @@ def connect_vpn(ctx: RunContextWrapper[TaskContext]) -> str:
     if shutil.which("sudo"):
         try:
             probe = subprocess.run(["sudo", "-n", "true"], capture_output=True,
-                                   text=True, timeout=5)
+                                   text=True, timeout=5, check=False)
             use_sudo = (probe.returncode == 0)
         except Exception:
             use_sudo = False
 
     cmd = (["sudo", "-n"] if use_sudo else []) + base + ["--daemon"]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
     except Exception as e:
         return json.dumps({"error": f"VPN 启动异常：{str(e)[:200]}"}, ensure_ascii=False)
 
@@ -68,7 +68,7 @@ def connect_vpn(ctx: RunContextWrapper[TaskContext]) -> str:
     tun_ok = False
     try:
         r = subprocess.run(["ip", "addr", "show", "tun0"], capture_output=True,
-                           text=True, timeout=5)
+                           text=True, timeout=5, check=False)
         tun_ok = (r.returncode == 0 and "tun0" in r.stdout)
     except Exception:
         tun_ok = False

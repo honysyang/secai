@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
 
-from openai import APIError, APIStatusError, APITimeoutError, AuthenticationError, RateLimitError
-from openai import AsyncOpenAI
 from agents import OpenAIChatCompletionsModel
+from openai import APIError, APIStatusError, APITimeoutError, AsyncOpenAI, AuthenticationError, RateLimitError
 
-from adapters.config import (API_KEY, BASE_URL, MODEL_NAME, get_model)
+from adapters.config import API_KEY, BASE_URL, MODEL_NAME, get_model
 from runtime.budget import ESCALATION_MODELS
 
 
@@ -63,9 +61,9 @@ def is_model_failure(exc: Exception) -> bool:
                                            or 500 <= status_code < 600):
         return True
     # 维度 2 补充：400 且消息含模型/配额关键词时也视为模型失败
-    if isinstance(status_code, int) and status_code == 400:
-        if any(k in msg for k in ("model", "quota", "额度", "不存在", "not exist", "invalid")):
-            return True
+    if (isinstance(status_code, int) and status_code == 400
+            and any(k in msg for k in ("model", "quota", "额度", "不存在", "not exist", "invalid"))):
+        return True
     # 异常 message 里也可能直接出现 "401" / "429" 等状态码
     if any(f" {code}" in msg or f"{code}:" in msg for code in (401, 403, 404, 429, 500, 502, 503, 504)):
         return True
@@ -127,11 +125,11 @@ class ModelPool:
 
     COOLDOWN_SECONDS = 30  # 暂时性失败后的冷却时间（冷却后可重试同模型）
 
-    def __init__(self, preferred_name: Optional[str] = None) -> None:
-        self._entries: List[ModelEntry] = []
-        self._used: List[str] = []
-        self._failed: Set[str] = set()                 # 永久失败（鉴权/模型名错误）
-        self._transient_failed: Dict[str, float] = {}  # 暂时失败 name -> 失败时间戳
+    def __init__(self, preferred_name: str | None = None) -> None:
+        self._entries: list[ModelEntry] = []
+        self._used: list[str] = []
+        self._failed: set[str] = set()                 # 永久失败（鉴权/模型名错误）
+        self._transient_failed: dict[str, float] = {}  # 暂时失败 name -> 失败时间戳
 
         # 解析 ESCALATION_MODELS 并保留 role 信息（用于按 role 选择）
         self._escalation_specs = []
@@ -175,7 +173,7 @@ class ModelPool:
 
         self._entries = entries
 
-    def _find_entry_index(self, entries: List[ModelEntry], key: str) -> Optional[int]:
+    def _find_entry_index(self, entries: list[ModelEntry], key: str) -> int | None:
         """按 role 或 name 匹配条目索引。优先 role 匹配，再 name 匹配。"""
         key_lower = key.lower()
         # 先按 role 匹配
@@ -190,7 +188,7 @@ class ModelPool:
                 return i
         return None
 
-    def switch_to_role(self, role: str) -> Optional[ModelEntry]:
+    def switch_to_role(self, role: str) -> ModelEntry | None:
         """切换到指定 role 的可用模型。返回新条目，或 None（无可用/已在该角色）。"""
         idx = self._find_entry_index(self._entries, role)
         if idx is None:
@@ -245,7 +243,7 @@ class ModelPool:
             return False
         return True
 
-    def next(self, *, current_name: str = "", reason: str = "") -> Optional[ModelEntry]:
+    def next(self, *, current_name: str = "", reason: str = "") -> ModelEntry | None:
         """选择下一个可用模型。
 
         逻辑：

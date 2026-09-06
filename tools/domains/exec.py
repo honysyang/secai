@@ -46,7 +46,7 @@ def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 1
         env = os.environ.copy()
         env["TARGET_WORKDIR"] = str(c.workdir)
         p = subprocess.run(["python3", path], capture_output=True, text=True,
-                           timeout=min(timeout, 300), cwd=str(c.workdir), env=env)
+                           timeout=min(timeout, 300), cwd=str(c.workdir), env=env, check=False)
         out = f"rc={p.returncode}\nstdout:\n{p.stdout}\nstderr:\n{p.stderr[-2000:]}"
     except subprocess.TimeoutExpired:
         out = "[error] run_batch 超时——拆小脚本或加内部超时"
@@ -81,7 +81,7 @@ def shell(ctx: RunContextWrapper[TaskContext], command: str, timeout: int = 30) 
     """
     try:
         p = subprocess.run(["bash", "-c", command], capture_output=True, text=True,
-                           timeout=min(timeout, 120), cwd=str(ctx.context.workdir))
+                           timeout=min(timeout, 120), cwd=str(ctx.context.workdir), check=False)
         out = f"rc={p.returncode}\nstdout:\n{p.stdout[:PREVIEW]}\nstderr:\n{p.stderr[:1000]}"
         hint = _python_traceback_hint(command, p.stderr, p.returncode)
         if hint:
@@ -124,7 +124,7 @@ async def parallel_shell(ctx: RunContextWrapper[TaskContext], commands: str,
     def _run(cmd):
         try:
             p = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True,
-                               timeout=min(timeout, 120), cwd=str(ctx.context.workdir))
+                               timeout=min(timeout, 120), cwd=str(ctx.context.workdir), check=False)
             out = (p.stdout or p.stderr or "")[:200]
             return {"cmd": cmd[:80], "rc": p.returncode, "out": out}
         except subprocess.TimeoutExpired:

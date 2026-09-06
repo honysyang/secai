@@ -33,7 +33,8 @@ def distinguish(url: str, probes: list[str], method: str = "GET", keyword: str =
                                  data={"payload": p} if method == "POST" else None)
             row: dict[str, Any] = {"probe": str(p)[:60], "status": r.status_code,
                                    "len": len(r.text)}
-            if keyword: row["kw_count"] = r.text.count(keyword)
+            if keyword:
+                row["kw_count"] = r.text.count(keyword)
             rows.append(row)
         except Exception as e:
             rows.append({"probe": str(p)[:60], "error": str(e)[:120]})

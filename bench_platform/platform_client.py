@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 import requests
 
@@ -29,12 +29,17 @@ class ResourceUnavailable(Exception): ... # 503：短暂重试
 
 
 def _err_code(resp) -> str:
-    try: return str(resp.json().get("code", ""))
-    except Exception: return ""
+    try:
+        return str(resp.json().get("code", ""))
+    except Exception:
+        return ""
+
 
 def _err_msg(resp) -> str:
-    try: return str(resp.json().get("message", ""))
-    except Exception: return ""
+    try:
+        return str(resp.json().get("message", ""))
+    except Exception:
+        return ""
 
 
 class PlatformClient:
@@ -44,15 +49,19 @@ class PlatformClient:
         self.timeout = timeout
 
     # ---- VPN 强制预检：开战前的第一道闸门 ----
-    def check_vpn(self) -> Dict[str, Any]:
+    def check_vpn(self) -> dict[str, Any]:
         try:
             r = requests.get(VPN_CHECK_URL, timeout=8)
         except Exception:
             raise VpnCheckError("network_error")
-        if r.status_code != 200: raise VpnCheckError("bad_status")
-        try: data = r.json()
-        except Exception: raise VpnCheckError("bad_body")
-        if data.get("status") != "ok": raise VpnCheckError("status_not_ok")
+        if r.status_code != 200:
+            raise VpnCheckError("bad_status")
+        try:
+            data = r.json()
+        except Exception:
+            raise VpnCheckError("bad_body")
+        if data.get("status") != "ok":
+            raise VpnCheckError("status_not_ok")
         return data
 
     def _check_common(self, resp) -> None:
@@ -61,17 +70,19 @@ class PlatformClient:
             raise TaskNotFound(_err_msg(resp) or "token 无效或缺失")
         if code == "invalid_state":
             msg = _err_msg(resp)
-            if "max active" in msg: raise ContainerBusy(msg)
+            if "max active" in msg:
+                raise ContainerBusy(msg)
             raise TaskEnded(msg or "任务已结束")
 
     # ---- 五个平台接口 ----
-    def list_challenges(self) -> List[Dict[str, Any]]:
+    def list_challenges(self) -> list[dict[str, Any]]:
         r = requests.get(f"{self.base_url}/openapi/v1/challenges",
                          headers=self.headers, timeout=self.timeout)
-        self._check_common(r); r.raise_for_status()
+        self._check_common(r)
+        r.raise_for_status()
         return r.json()
 
-    def start_challenge(self, code: str) -> List[str]:
+    def start_challenge(self, code: str) -> list[str]:
         r = requests.post(f"{self.base_url}/openapi/v1/challenges/start",
                           params={"unique_code": code},
                           headers=self.headers, timeout=self.timeout + 5)
@@ -80,7 +91,8 @@ class PlatformClient:
             raise ResourceUnavailable(_err_msg(r))
         r.raise_for_status()
         addr = r.json().get("container_addr") or []
-        if isinstance(addr, str): addr = [addr]
+        if isinstance(addr, str):
+            addr = [addr]
         return [str(a) for a in addr]
 
     def get_hint(self, code: str) -> str:
@@ -88,15 +100,18 @@ class PlatformClient:
             r = requests.get(f"{self.base_url}/openapi/v1/challenges/hint",
                              params={"unique_code": code},
                              headers=self.headers, timeout=self.timeout)
-            if r.status_code != 200: return ""      # 通关后看 hint 返回 409：跳过
+            if r.status_code != 200:
+                return ""      # 通关后看 hint 返回 409：跳过
             return r.json().get("hint") or ""
-        except (TaskNotFound, TaskEnded): raise
-        except Exception: return ""
+        except (TaskNotFound, TaskEnded):
+            raise
+        except Exception:
+            return ""
 
-    def submit_flag(self, code: str, flag: str) -> Dict[str, Any]:
+    def submit_flag(self, code: str, flag: str) -> dict[str, Any]:
         """大小写变体 + 429 退避 + duplicate 幂等。"""
         variants = [flag] + (["FLAG" + flag[4:]] if flag.startswith("flag") else [])
-        last: Dict[str, Any] = {}
+        last: dict[str, Any] = {}
         for v in variants:
             for attempt in range(3):
                 try:
@@ -108,13 +123,16 @@ class PlatformClient:
                                 "note": "duplicate：已计分，跳过", "flag": v}
                     self._check_common(r)
                     if r.status_code == 429:
-                        time.sleep(2 * (attempt + 1)); continue
+                        time.sleep(2 * (attempt + 1))
+                        continue
                     if "json" in r.headers.get("Content-Type", ""):
                         last = r.json()
                     break
-                except (TaskNotFound, TaskEnded): raise
+                except (TaskNotFound, TaskEnded):
+                    raise
                 except Exception as e:
-                    last = {"error": str(e)[:200]}; time.sleep(1)
+                    last = {"error": str(e)[:200]}
+                    time.sleep(1)
             if last.get("correct"):
                 return {"ok": True, "correct": True, "flag": v,
                         "awarded": last.get("awarded"),
@@ -132,8 +150,10 @@ class PlatformClient:
                               headers=self.headers, timeout=self.timeout)
             self._check_common(r)
             return bool(r.json().get("closed"))
-        except (TaskNotFound, TaskEnded): raise
-        except Exception: return False
+        except (TaskNotFound, TaskEnded):
+            raise
+        except Exception:
+            return False
 
 
 # ---------------------------------------------------------------------------

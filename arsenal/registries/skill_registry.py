@@ -25,11 +25,10 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
 
 SKILLS_DIR = Path(__file__).parent.parent / "skills"
 
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
+_FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
 @dataclass
@@ -38,16 +37,16 @@ class Skill:
     category: str = ""            # 相对子目录（空 = 平铺在 skills/ 根）
     display_name: str = ""        # frontmatter 里的 name 字段（可选，检索用）
     description: str = ""
-    triggers: List[str] = field(default_factory=list)
-    path: Optional[Path] = None
+    triggers: list[str] = field(default_factory=list)
+    path: Path | None = None
     body: str = ""
 
 
-def _parse_frontmatter(text: str) -> Dict[str, str]:
+def _parse_frontmatter(text: str) -> dict[str, str]:
     m = _FRONTMATTER_RE.match(text)
     if not m:
         return {}
-    meta: Dict[str, str] = {}
+    meta: dict[str, str] = {}
     for line in m.group(1).splitlines():
         if ":" in line:
             k, v = line.split(":", 1)
@@ -55,7 +54,7 @@ def _parse_frontmatter(text: str) -> Dict[str, str]:
     return meta
 
 
-def _parse_triggers(raw: Optional[str]) -> List[str]:
+def _parse_triggers(raw: str | None) -> list[str]:
     if not raw:
         return []
     return [t.strip() for t in raw.split(",") if t.strip()]
@@ -69,9 +68,9 @@ def _category_of(p: Path) -> str:
     return "" if str(rel) == "." else str(rel).replace("/", " ")
 
 
-def load_skills() -> Dict[str, Skill]:
+def load_skills() -> dict[str, Skill]:
     """递归扫描 skills/**/*.md，解析 frontmatter 与正文，返回 {技能名: Skill}。"""
-    skills: Dict[str, Skill] = {}
+    skills: dict[str, Skill] = {}
     for p in sorted(SKILLS_DIR.rglob("*.md")):
         text = p.read_text(encoding="utf-8")
         meta = _parse_frontmatter(text)
@@ -88,17 +87,17 @@ def load_skills() -> Dict[str, Skill]:
     return skills
 
 
-def get_skill(name: str) -> Optional[Skill]:
+def get_skill(name: str) -> Skill | None:
     return load_skills().get(name)
 
 
-def skill_triggers() -> Dict[str, List[str]]:
+def skill_triggers() -> dict[str, list[str]]:
     """返回 {技能名: 触发关键词}，供渐进披露使用。"""
     return {s.name: s.triggers for s in load_skills().values() if s.triggers}
 
 
-def detect_skill_triggers(text: str, already_disclosed: List[str],
-                          task_type: str = "") -> List[str]:
+def detect_skill_triggers(text: str, already_disclosed: list[str],
+                          task_type: str = "") -> list[str]:
     """扫描一段事件文本，返回命中但尚未披露的技能名清单（按命中 trigger 数排序）。
 
     加权：至少命中 2 个不同的 triggers 才披露该技能，防止单个通用词（如
@@ -110,7 +109,7 @@ def detect_skill_triggers(text: str, already_disclosed: List[str],
     （Connection: keep-alive、TCP、403、contract 等）误命中。
     """
     low = text.lower()
-    hits: List[str] = []
+    hits: list[str] = []
     skills = load_skills()
     for name, keywords in skill_triggers().items():
         if name in already_disclosed:
@@ -144,10 +143,10 @@ def detect_skill_triggers(text: str, already_disclosed: List[str],
     return hits
 
 
-def find_skills(query: str, limit: int = 5) -> List[Dict[str, object]]:
+def find_skills(query: str, limit: int = 5) -> list[dict[str, object]]:
     """按名称/显示名/描述/触发词/分类检索技能，返回匹配项。"""
     q = (query or "").strip().lower()
-    matches: List[Dict[str, object]] = []
+    matches: list[dict[str, object]] = []
     for s in load_skills().values():
         hay = " ".join([s.name, s.display_name, s.category, s.description, " ".join(s.triggers)]).lower()
         if q and q not in hay:
@@ -179,7 +178,7 @@ CORE_SKILLS = {
 }
 
 
-def load_skill_bodies(names: List[str]) -> str:
+def load_skill_bodies(names: list[str]) -> str:
     """把若干技能名拼成一段注入文本（用于执行者系统提示），带预算。
 
     策略：所有 CORE_SKILLS 无条件开局注入（用户要求“不考虑成本，只需解题”），
@@ -220,18 +219,20 @@ def load_skill_bodies(names: List[str]) -> str:
     return result
 
 
-def create_skill(name: str, description: str, triggers: List[str], body: str = "") -> Path:
+def create_skill(name: str, description: str, triggers: list[str], body: str = "") -> Path:
     """创建一个新技能文件（会覆盖同名文件）。返回文件路径。"""
     name = name.strip().rstrip(".md")
     if not name:
         raise ValueError("技能名不能为空")
     trig_text = ", ".join(triggers)
+    # 兜底正文预拼：f-string 表达式内 \n 转义在 Python 3.11 是语法错误（PEP 701 3.12+ 才放开）
+    fallback_body = "# " + description.strip() + "\n\n（在此编写打法内容）"
     content = (
         f"---\n"
         f"description: {description.strip()}\n"
         f"triggers: {trig_text}\n"
         f"---\n\n"
-        f"{body.strip() or '# ' + description.strip() + '\n\n（在此编写打法内容）'}\n"
+        f"{body.strip() or fallback_body}\n"
     )
     path = SKILLS_DIR / f"{name}.md"
     path.write_text(content, encoding="utf-8")
@@ -252,7 +253,7 @@ if __name__ == "__main__":
     elif args[0] == "create" and len(args) >= 3:
         name = args[1]
         desc = args[2]
-        triggers: List[str] = []
+        triggers: list[str] = []
         if "--triggers" in args:
             i = args.index("--triggers")
             if i + 1 < len(args):

