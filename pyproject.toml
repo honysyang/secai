@@ -15,7 +15,7 @@ dependencies = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-q"
+addopts = "-q -m \"not e2e\""
 markers = [
     "e2e: end-to-end tests requiring network/API keys (skipped automatically without keys)",
 ]

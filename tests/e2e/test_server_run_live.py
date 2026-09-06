@@ -36,7 +36,10 @@ except Exception:
 
 HAS_LLM_KEY = bool((os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip())
 
-pytestmark = pytest.mark.skipif(not HAS_LLM_KEY, reason="无 LLM_API_KEY/OPENAI_API_KEY，跳过真实 LLM 联调")
+pytestmark = [
+    pytest.mark.e2e,  # 真实 LLM 联调：默认 pytest/gate 不执行（烧钱），显式 pytest -m e2e 才跑
+    pytest.mark.skipif(not HAS_LLM_KEY, reason="无 LLM_API_KEY/OPENAI_API_KEY，跳过真实 LLM 联调"),
+]
 
 RUN_PAYLOAD: dict = {
     "title": "live run 只读侦察（127.0.0.1）",
