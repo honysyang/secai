@@ -305,18 +305,11 @@ R4 H12 把 CTF 专属假设全部收敛：
 ```bash
 cd /home/kali/SECAI
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt     # 核心依赖（openai-agents 等 5 项）
+.venv/bin/pip install -r requirements.txt     # 全量依赖：运行 + server 面 + dev（质量门）
 ```
 
-已知清单缺口（文档如实标注，避免全新克隆后踩坑）：`server/` Web 面与 L4 web_fetch 依赖
-`starlette`、`uvicorn`、`httpx`；`scripts/gate.sh` 与测试依赖 `pytest`、`ruff`。
-这些依赖当前**未收录进 requirements.txt / pyproject**，全新环境需补装一次：
-
-```bash
-.venv/bin/pip install starlette uvicorn httpx pytest ruff
-```
-
-（`pyproject.toml` 的 `[project].dependencies` 已含 httpx，可作为备选安装路径。）
+`requirements.txt` 已分节收录全部依赖：LLM 编排核心（openai-agents/requests/ddgs/python-dotenv/pyyaml）、知识层 HTTP（httpx）、server 面（starlette/uvicorn/websockets）、dev 质量门（pytest/ruff）。
+`pyproject.toml` 的 `[project].dependencies` 与 requirements 运行时对齐；`pip install -e ".[dev]"` 亦可作为备选安装路径。
 
 ### 3.3 配置 .env（只入 .env，gitignored）
 

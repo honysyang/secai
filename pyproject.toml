@@ -10,6 +10,16 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
     "httpx>=0.28.0",
+    # server 面（与 requirements.txt 运行时对齐）
+    "starlette>=1.0.0",
+    "uvicorn>=0.30.0",
+    "websockets>=13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
 ]
 
 [tool.pytest.ini_options]

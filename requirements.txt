@@ -1,5 +1,21 @@
+# SECAI-PT 运行时依赖（含 server 面）。安装：.venv/bin/pip install -r requirements.txt
+# 主模型网关经 .env 配置（LLM_API_KEY/LLM_BASE_URL/LLM_MODEL/ESCALATION_MODELS/DEEPSEEK_API_KEY）
+
+# —— LLM 编排核心 ——
 openai-agents>=0.20.0
 requests>=2.31.0
 ddgs>=6.0.0
 python-dotenv>=1.0.0
 pyyaml>=6.0
+
+# —— 知识层 / HTTP ——
+httpx>=0.28.0
+
+# —— server 面（RPC + 双 WS + dist 静态托管）——
+starlette>=1.0.0
+uvicorn>=0.30.0
+websockets>=13.0
+
+# —— 开发 / 质量门（ruff + pytest，见 scripts/gate.sh）——
+pytest>=8.0
+ruff>=0.5
