@@ -18,6 +18,17 @@ apps/web 前端契约（apps/web/src/connection/api.ts）缝合为可离线运�
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+# 服务进程加载项目根 .env（LLM Key/模型/预算等），与 adapters.config 同源；
+# 不依赖外部 shell export，`python -m server.main` 直接可真实调用 LLM。
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except Exception:  # dotenv 缺失时静默（env 由外部注入仍可用）
+    pass
+
 # describe 握手身份（前端 HostDescription.product/version 语义）
 SERVER_NAME = "SECAI-PT"
 SERVER_VERSION = "4.0.0"

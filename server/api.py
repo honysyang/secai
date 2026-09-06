@@ -8,14 +8,20 @@
   respond/report）；
 - describe：严格握手身份（result = HostDescription{product,version,serverTime}）；
 - run：无 LLM Key（LLM_API_KEY / OPENAI_API_KEY）→ 结构化错误 llm_key_missing；
-  有 Key 则新建任务书并逐目标入队 SessionManager（编排面立即返回 RunResponse）；
-- respond：approval 应答——rpcId 原样回响 resolution 帧（ws 层），本层写裁决；
+  有 Key 则把请求体（新式 {task_brief, targets, scope, settings} 或兼容旧式
+  allowedTargets）经 server.run_spec 归一 → 逐目标接入真实执行 runner
+  （harness/runner/pentest_target：ScopeCheck→审批门→只读工具→blackboard），
+  编排面立即返回 RunResponse；
+- steer：会话级指令——managed（真实 run）会话经 steer_queue 注入 runner 待消费，
+  demo 会话沿用 fixture 演示应答；
+- respond：approval 应答——rpcId 原样回响 resolution 帧（ws 层），本层写裁决并
+  唤醒等待中的 run runner（allow/deny 真实裁决链路）；
 - report：桥接 profiles/practical_pentest/report/engine.py 纯函数投影（R5）。
 """
 from __future__ import annotations
 
+import asyncio
 import os
-import uuid
 from typing import Any
 
 from starlette.requests import Request
@@ -23,7 +29,8 @@ from starlette.responses import JSONResponse
 
 from profiles.practical_pentest.report import generate_engagement_report
 from server import SERVER_NAME, SERVER_VERSION
-from server.fixture import build_report_snapshot, respond_aftermath, steer_reply
+from server.fixture import APPROVAL_RPC, build_report_snapshot, respond_aftermath, steer_reply
+from server.run_spec import RunSpecError, normalize_run_payload
 from server.state import TERMINAL_STATUSES, now_iso
 
 # 报告章节标题（/api/report → ReportSummary.sections，R5 章节合同中文标签）
@@ -97,16 +104,14 @@ async def api_engagements(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
-# run：任务书 → SessionManager 入队（无 LLM Key → 结构化错误）
+# run：任务书 → 真实执行接线（无 LLM Key → 结构化错误；有 Key 才允许真实消耗）
 # ---------------------------------------------------------------------------
 async def api_run(request: Request) -> JSONResponse:
     payload = await _rpc_payload(request)
-    targets = payload.get("allowedTargets")
-    if not isinstance(targets, list) or not targets or not all(isinstance(t, str) and t for t in targets):
-        return _error("bad_request", "allowedTargets 必须是非空的目标列表", {"field": "allowedTargets"})
-    intensity = payload.get("maxIntensity")
-    if intensity is not None and intensity not in MAX_INTENSITY_VALUES:
-        return _error("bad_request", f"maxIntensity 非法（可用 {', '.join(MAX_INTENSITY_VALUES)}）", {"field": "maxIntensity"})
+    try:
+        spec = normalize_run_payload(payload)
+    except RunSpecError as exc:
+        return _error(exc.code, exc.message, exc.details)
     if not _llm_key_present():
         return _error(
             "llm_key_missing",
@@ -114,9 +119,24 @@ async def api_run(request: Request) -> JSONResponse:
             {"hint": "配置 LLM_API_KEY 或 OPENAI_API_KEY 后重启服务（python -m server.main --port 8700）"},
         )
     state = _state(request)
-    title = str(payload.get("title") or f"任务书 {uuid.uuid4().hex[:6]}")
+    # 延迟 import：只有真正启动真实执行才拉起 agents SDK / LLM 相关依赖
+    from harness.runner.pentest_target import run_pentest_target
+
+    meta: dict[str, Any] = {
+        "bridge": state,
+        "brief_text": spec["brief_text"],
+        "scope": spec["scope"],
+        "settings": spec["settings"],
+        "labels": spec["labels"],
+    }
     try:
-        engagement_id, session_ids = state.start_run(title, targets)
+        engagement_id, session_ids = state.start_run(
+            spec["title"],
+            spec["targets"],
+            runner=run_pentest_target,
+            labels=spec["labels"],
+            meta=meta,
+        )
     except Exception as exc:
         return _error("run_failed", f"任务入队失败：{type(exc).__name__}: {exc}")
     return _ok({"engagementId": engagement_id, "sessionIds": session_ids})
@@ -138,7 +158,14 @@ async def api_steer(request: Request) -> JSONResponse:
     if rec.status not in ("running", "awaiting_approval"):
         return _error("session_inactive", f"会话 {session_id} 当前 {rec.status}，不接受指令")
     state.emit_event(session_id, "message", role="user", content=instruction)
-    steer_reply(state, session_id, instruction)
+    if rec.managed:
+        # 真实 run 会话：指令投递给 runner 的 steer_queue（下一轮被消费执行）
+        if rec.steer_queue is None:
+            rec.steer_queue = asyncio.Queue()
+        rec.steer_queue.put_nowait(instruction)
+    else:
+        # demo 会话：沿用 fixture 演示应答
+        steer_reply(state, session_id, instruction)
     return _ok({})
 
 
@@ -157,7 +184,10 @@ async def api_respond(request: Request) -> JSONResponse:
     resolution = state.resolve_approval(rpc_id, decision, comment=comment)
     if resolution is None:
         return _error("unknown_approval", f"未知或已裁决的审批请求 rpcId: {rpc_id}")
-    respond_aftermath(state, decision)
+    # demo fixture 的审批（rpc-101）裁决后走演示后续脚本；真实 run 的裁决
+    # 由 runner 侧的 approval waiter 直接唤醒，无需（也不应）触发 demo 后续
+    if rpc_id == APPROVAL_RPC:
+        respond_aftermath(state, decision)
     return _ok({})
 
 

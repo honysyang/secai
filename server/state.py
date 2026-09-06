@@ -22,6 +22,7 @@ import asyncio
 import json
 import os
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -114,6 +115,8 @@ class SessionRec:
     queue: list[dict[str, Any]] = field(default_factory=list)  # QueueItem shape
     projections: list[dict[str, Any]] = field(default_factory=list)  # [{seq, values}]
     approvals: dict[str, dict[str, Any]] = field(default_factory=dict)  # rpcId → ApprovalRequest
+    managed: bool = False          # True = SessionManager 驱动的真实 run 会话（区别于 demo）
+    steer_queue: Any = None        # asyncio.Queue[str] | None：run runner 的 steer 注入通道
     _event_seq: int = 0
     _projection_seq: int = -1
 
@@ -142,6 +145,8 @@ class AppState:
         self._ticker: asyncio.Task | None = None
         self._demo_ticks = 0
         self._closed = False
+        # 审批等待者：rpcId → asyncio.Future（runner 等待 /api/respond 裁决的唤醒通道）
+        self._approval_waiters: dict[str, asyncio.Future] = {}
 
     # ------------------------------------------------------------------
     # 任务书 / 会话登记
@@ -160,6 +165,8 @@ class AppState:
         target: str,
         engagement_id: str,
         status: str,
+        *,
+        managed: bool = False,
     ) -> SessionRec:
         now = now_iso()
         rec = SessionRec(
@@ -169,6 +176,7 @@ class AppState:
             status=status,
             created_at=now,
             updated_at=now,
+            managed=managed,
         )
         self.sessions[session_id] = rec
         if engagement_id in self.engagements:
@@ -292,10 +300,29 @@ class AppState:
         )
         BUS.emit(session_id, "approval/requested", rpc_id=rpc_id, action=action, description=description)
 
+    async def wait_for_approval(
+        self, session_id: str, rpc_id: str, *, timeout: float
+    ) -> str | None:
+        """等待该 rpcId 被 /api/respond 裁决：allow/deny；超时返回 None（未裁决）。
+
+        供真实 run runner 在工具审批门内 await：respond 路径 resolve_approval 会
+        以 decision 唤醒对应 future（超时由本方法兜底返回 None → 调用方自动拒绝）。
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._approval_waiters[rpc_id] = future
+        try:
+            try:
+                return await asyncio.wait_for(future, timeout=timeout)
+            except asyncio.TimeoutError:
+                return None
+        finally:
+            self._approval_waiters.pop(rpc_id, None)
+
     def resolve_approval(
         self, rpc_id: str, decision: str, comment: str | None = None
     ) -> dict[str, Any] | None:
-        """裁决一条 pending 审批：回响 rpcId、写 approval 记录、会话转 running。"""
+        """裁决一条 pending 审批：回响 rpcId、写 approval 记录、唤醒等待者、会话转 running。"""
         target: SessionRec | None = None
         for rec in self.sessions.values():
             if rpc_id in rec.approvals:
@@ -319,6 +346,9 @@ class AppState:
             comment=comment or "",
             decided_at=payload["decidedAt"],
         )
+        waiter = self._approval_waiters.get(rpc_id)
+        if waiter is not None and not waiter.done():
+            waiter.set_result(decision)
         self.set_status(target.session_id, "running")
         return payload
 
@@ -353,7 +383,7 @@ class AppState:
         return [{"type": "host/session-added", "session": rec.header()} for rec in self.sessions.values()]
 
     # ------------------------------------------------------------------
-    # /api/run 桥接：SessionManager 入队
+    # /api/run 桥接：SessionManager 入队（runner 缺省占位；真实执行由调用方注入）
     # ------------------------------------------------------------------
     def start_run(
         self,
@@ -361,15 +391,33 @@ class AppState:
         targets: list[str],
         *,
         engagement_id: str | None = None,
+        runner: Callable[[SessionContext], Awaitable[Any]] | None = None,
+        labels: dict[str, str] | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> tuple[str, list[str]]:
-        """新建任务书 + 每目标一条 SessionManager 会话（编排面入队，立即返回）。"""
+        """新建任务书 + 每目标一条 SessionManager 会话（编排面入队，立即返回）。
+
+        - runner：目标执行入口（默认占位挂起 _hold_runner；真实执行传
+          harness.runner.pentest_target.run_pentest_target 并在 meta 注入
+          bridge/scope/settings 等编排元信息）；
+        - labels：target id → 会话展示标签（缺省用 id 本身）；
+        - meta：随 start_target 注入每个 SessionContext.meta 的共享编排元信息。
+        """
         eng = self.create_engagement(title or "任务书（未命名）", engagement_id=engagement_id)
+        run_runner = runner or _hold_runner
+        labels = labels or {}
         sids: list[str] = []
         for target in targets:
             session_id = uuid.uuid4().hex[:12]
-            self.add_session(session_id, target=target, engagement_id=eng.engagement_id, status="running")
+            self.add_session(
+                session_id,
+                target=labels.get(target, target),
+                engagement_id=eng.engagement_id,
+                status="running",
+                managed=True,
+            )
             try:
-                self.manager.start_target(target, _hold_runner, session_id=session_id)
+                self.manager.start_target(target, run_runner, session_id=session_id, meta=meta)
             except Exception as exc:  # 编排面启动失败 → 会话转 error 状态，不拖垮其余目标
                 self.set_status(session_id, "failed")
                 self.emit_event(session_id, "message", role="system", content=f"会话启动失败：{exc}")
@@ -430,9 +478,11 @@ class AppState:
 
 
 async def _hold_runner(ctx: SessionContext) -> None:
-    """占位 runner：编排面已入队；真实 LLM 执行器（R 后续批次）接入前挂起。
+    """占位 runner：start_run 未注入真实执行器时挂起（编排面已入队）。
 
-    任务保持 running 态，SessionManager.stop()/close() 取消即停 —— 不伪造执行。
+    真实执行已接入：/api/run（有 LLM Key）会注入
+    harness/runner/pentest_target.run_pentest_target（ScopeCheck→审批门→
+    只读工具→blackboard→事件扇出），本占位仅供无执行器的编排面兜底。
     """
 
     await asyncio.Event().wait()
