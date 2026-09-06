@@ -97,6 +97,11 @@ export function deriveTurns(events: readonly SessionEvent[]): TimelineTurn[] {
         }
         break
       }
+      case 'usage': {
+        // token 用量事件：进 usage 聚合（usage.ts），不进对话流
+        open = pushOrClose(turns, open)
+        break
+      }
       case 'tool/call': {
         open = pushOrClose(turns, open)
         open = {
@@ -176,4 +181,150 @@ export function deriveSubagents(events: readonly SessionEvent[]): SubagentView[]
     latest.set(name, view)
   }
   return order.map((name) => latest.get(name)!)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 运行轨迹投影（TraceView 数据源，r4：渗透实战执行过程视图）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 轨迹步骤：执行时间线上的一个节点（工具/消息/系统标记）。 */
+export interface TraceStep {
+  key: string
+  kind: 'tool' | 'message' | 'system'
+  /** 工具名（kind=tool）。 */
+  tool?: string
+  state: 'running' | 'done' | 'failed'
+  /** 单行摘要（args 首行 / 消息首行 / 系统文本）。 */
+  summary: string
+  /** 可展开详情（工具 args JSON / 消息全文）。 */
+  detail?: string
+  /** 工具输出（展开查看原始输出）。 */
+  output?: string
+  /** 消息角色（kind=message）。 */
+  role?: 'user' | 'assistant' | 'system'
+  /** 工具执行时长（output 到达时间 − call 时间；运行中未定 = undefined）。 */
+  durationMs?: number
+  at: string
+}
+
+function tsMs(iso: string): number {
+  const value = Date.parse(iso)
+  return Number.isNaN(value) ? 0 : value
+}
+
+/** 一行摘要：首个非空行（截断 160 字符，工具摘要优先参数）。 */
+function traceSummary(source: string): string {
+  const line = source.split('\n', 1)[0] ?? ''
+  const text = line.trim()
+  return text.length > 160 ? `${text.slice(0, 160)}…` : text
+}
+
+/**
+ * 事件序列 → 执行轨迹（按 seq 升序）。
+ *
+ * 工具卡 = call+output 归并（带时长与状态）；消息压成一行摘要（可展开全文）；
+ * usage/system 等不进轨迹（usage 进聚合，system 仅保留带 label 的人类可读项）。
+ */
+export function deriveTrace(events: readonly SessionEvent[]): TraceStep[] {
+  const steps: TraceStep[] = []
+  interface OpenTool {
+    key: string
+    name: string
+    args?: string
+    at: string
+  }
+  let open: OpenTool | null = null
+
+  const flush = (): void => {
+    if (open === null) return
+    steps.push({
+      key: open.key,
+      kind: 'tool',
+      tool: open.name,
+      state: 'failed',
+      summary: traceSummary(open.args ?? ''),
+      detail: open.args,
+      at: open.at,
+    })
+    open = null
+  }
+
+  for (const event of [...events].sort((a, b) => a.seq - b.seq)) {
+    const data = asRecord(event.data) ?? {}
+    switch (event.type) {
+      case 'tool/call': {
+        flush()
+        open = {
+          key: event.eventId,
+          name: str(data.tool, str(data.name, 'tool')),
+          args: data.args !== undefined ? JSON.stringify(data.args) : undefined,
+          at: event.createdAt,
+        }
+        break
+      }
+      case 'tool/output': {
+        const name = str(data.tool, str(data.name, ''))
+        const output = str(data.output, str(data.result, ''))
+        const failed = data.ok === false
+        if (open !== null && (name === '' || name === open.name)) {
+          steps.push({
+            key: open.key,
+            kind: 'tool',
+            tool: open.name,
+            state: failed ? 'failed' : 'done',
+            summary: traceSummary(open.args ?? output),
+            detail: open.args,
+            output: output === '' ? undefined : output,
+            durationMs: Math.max(0, tsMs(event.createdAt) - tsMs(open.at)),
+            at: open.at,
+          })
+          open = null
+        } else {
+          flush()
+          steps.push({
+            key: event.eventId,
+            kind: 'tool',
+            tool: name === '' ? 'tool' : name,
+            state: failed ? 'failed' : 'done',
+            summary: traceSummary(output),
+            output: output === '' ? undefined : output,
+            at: event.createdAt,
+          })
+        }
+        break
+      }
+      case 'message': {
+        flush()
+        const role = str(data.role, 'assistant') as TraceStep['role']
+        const content = str(data.content)
+        if (content === '') break
+        steps.push({
+          key: event.eventId,
+          kind: 'message',
+          state: 'done',
+          role,
+          summary: traceSummary(content),
+          detail: content,
+          at: event.createdAt,
+        })
+        break
+      }
+      case 'subagent': {
+        flush()
+        const state = str(data.state, '')
+        steps.push({
+          key: event.eventId,
+          kind: 'system',
+          state: 'done',
+          summary: `子 agent「${str(data.name, '?')}」${state === '' ? '' : `：${state}`}`,
+          at: event.createdAt,
+        })
+        break
+      }
+      default:
+        break // usage / 未知类型不进轨迹
+    }
+  }
+  flush()
+  return steps
 }

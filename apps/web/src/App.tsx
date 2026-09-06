@@ -44,9 +44,15 @@ export default function App() {
     snapshot.route === 'assets' ? (
       <AssetPanel assets={snapshot.assets} />
     ) : snapshot.route === 'risks' ? (
-      <RiskPanel risks={snapshot.risks} />
+      <RiskPanel
+        risks={snapshot.risks}
+        onStatusChange={(riskId, status) => runtime.updateRiskStatus(riskId, status)}
+      />
     ) : snapshot.route === 'reports' ? (
-      <ReportPanel reports={snapshot.reports} />
+      <ReportPanel
+        reports={snapshot.reports}
+        onGenerate={(engagementId) => runtime.generateReport(engagementId)}
+      />
     ) : (
       <ConversationView
         session={session}
@@ -63,12 +69,15 @@ export default function App() {
         <SidebarPane
           engagement={snapshot.engagement}
           selectedId={snapshot.selectedId}
+          tasks={snapshot.tasks}
+          activeTaskId={snapshot.activeTaskId}
           link={snapshot.link}
           route={snapshot.route}
           onRoute={(route) => runtime.setRoute(route)}
           collapsed={!sidebarOpen}
           onToggle={() => setSidebarOpen((open) => !open)}
           onSelect={(sessionId) => runtime.select(sessionId)}
+          onSelectTask={(engagementId) => runtime.selectTask(engagementId)}
         />
       }
       conversation={center}

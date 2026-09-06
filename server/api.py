@@ -219,6 +219,9 @@ async def api_report(request: Request) -> JSONResponse:
     ready = bool(statuses) and all(s in TERMINAL_STATUSES for s in statuses)
     snapshot = build_report_snapshot(state, engagement_id)
     if snapshot is None:
+        # 无画像输入（真实会话未注册 TargetProfile）也要刷新清单广播：前端报告页
+        # 能看到 drafting 条目与产物目录（空）。
+        state.broadcast_reports()
         return _ok(
             {
                 "engagementId": engagement_id,
@@ -229,6 +232,11 @@ async def api_report(request: Request) -> JSONResponse:
             }
         )
     report = generate_engagement_report([snapshot], generated_at=now_iso())
+    # 风险账本联动：报告 findings → 风险清单（前端「风险」视图数据源，幂等）
+    try:
+        state.refresh_risks(engagement_id, list(report.findings))
+    except Exception as exc:  # 账本失败不阻断报告生成
+        print(f"[secai-api] refresh_risks 失败（隔离）: {type(exc).__name__}: {exc}")
     # 「生成即存」：报告引擎输出后立刻落盘 md + json + pdf 三份产物
     # （幂等留档，不覆盖旧产物；pdf 为客户交付标准格式，随报告一并生成）
     metas = [
@@ -288,15 +296,54 @@ async def api_export_report(request: Request) -> Response:
     )
 
 
+# ---------------------------------------------------------------------------
+# 全局清单：资产 / 风险 / 报告（前端管理视图数据源）
+# ---------------------------------------------------------------------------
+async def api_assets(request: Request) -> JSONResponse:
+    """assets：资产账本全量（runner 侦察产出经 commit_assets 上报）。"""
+    state = _state(request)
+    return _ok({"assets": state.assets_snapshot()})
+
+
+async def api_risks(request: Request) -> JSONResponse:
+    """risks：风险账本全量（refresh_risks 报告生成 hook 落账，severity 排序）。"""
+    state = _state(request)
+    return _ok({"risks": state.risks_snapshot()})
+
+
+async def api_reports(request: Request) -> JSONResponse:
+    """reports：报告清单（任务书 × 产物聚合，含下载入口元信息）。"""
+    state = _state(request)
+    return _ok({"reports": state.reports_snapshot()})
+
+
+async def api_update_risk(request: Request) -> JSONResponse:
+    """updateRisk：风险人工处理状态流转（open/mitigating/accepted/resolved）。"""
+    payload = await _rpc_payload(request)
+    risk_id = str(payload.get("riskId") or "")
+    status = str(payload.get("status") or "")
+    if not risk_id or status not in ("open", "mitigating", "accepted", "resolved"):
+        return _error("bad_request", "riskId 与 status（open/mitigating/accepted/resolved）必填")
+    state = _state(request)
+    entry = state.set_risk_status(risk_id, status)
+    if entry is None:
+        return _error("not_found", f"未知风险条目: {risk_id}")
+    return _ok({"risk": entry})
+
+
 __all__ = [
     "REPORT_SECTION_TITLES",
+    "api_assets",
     "api_describe",
     "api_engagements",
     "api_export_report",
     "api_list_artifacts",
     "api_report",
     "api_respond",
+    "api_risks",
     "api_run",
     "api_steer",
     "api_targets",
+    "api_reports",
+    "api_update_risk",
 ]

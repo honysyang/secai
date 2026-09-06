@@ -1,14 +1,17 @@
 // ConversationView：会话中栏组合视图（复刻 dsh ConversationRoot 语义）。
-// 结构 = scrollBody（ChatView）+ composerSeat（sticky 底部：审批卡优先，否则 InputBar）。
-// 无选中会话时输入栏直接下达任务（自然语言 → run）；有会话时发送指令（steer）。
-// 移除右栏详情依赖——资产/风险/报告迁至独立导航视图。
+// 结构 = 顶部会话状态栏（目标 + 状态 + token 计数/生成速率 + 对话/轨迹视图切换）
+// + scrollBody（ChatView 对话流 / TraceView 运行轨迹）+ composerSeat（sticky 底部：
+// 审批卡优先，否则 InputBar）。无选中会话时输入栏直接下达任务（自然语言 → run）；
+// 有会话时发送指令（steer）。
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { SessionSnapshot } from '../../runtime/session.ts'
+import { deriveUsage, formatRate, formatTokens } from '../../runtime/usage.ts'
 import type { RespondDecision } from './ApprovalCard.tsx'
 import { ApprovalCard } from './ApprovalCard.tsx'
 import { ChatView } from './ChatView.tsx'
 import { InputBar } from './InputBar.tsx'
+import { TraceView } from './TraceView.tsx'
 import css from './ConversationView.module.css'
 
 export interface ConversationViewProps {
@@ -38,24 +41,108 @@ function inputGate(session: SessionSnapshot | null): { disabled: boolean; reason
   }
 }
 
+/** 会话状态中文标签（顶栏状态胶囊）。 */
+function statusLabel(status: SessionSnapshot['status']): { text: string; tone: string } {
+  switch (status) {
+    case 'running':
+      return { text: '执行中', tone: 'running' }
+    case 'awaiting_approval':
+      return { text: '待审批', tone: 'approval' }
+    case 'completed':
+      return { text: '已完成', tone: 'done' }
+    case 'failed':
+      return { text: '已失败', tone: 'failed' }
+    case 'stopped':
+      return { text: '已停止', tone: 'stopped' }
+    default:
+      return { text: '待命', tone: 'idle' }
+  }
+}
+
+/** 顶部会话状态栏：目标名 + 状态胶囊 + token 计数/生成速率 + 视图切换。 */
+function ConversationHeader({
+  session,
+  view,
+  onView,
+}: {
+  session: SessionSnapshot
+  view: 'chat' | 'trace'
+  onView: (view: 'chat' | 'trace') => void
+}) {
+  const usage = useMemo(() => deriveUsage(session.events), [session.events])
+  const status = statusLabel(session.status)
+  const target = session.header?.target ?? session.sessionId
+  return (
+    <div className={css.header}>
+      <span className={css.headerTarget} title={target}>{target}</span>
+      <span className={css.headerStatus} data-tone={status.tone}>{status.text}</span>
+      <span className={css.headerSpacer} />
+      {usage.calls > 0 && (
+        <span
+          className={css.usage}
+          title={`输入 ${usage.inputTokens} tok · 输出 ${usage.outputTokens} tok · ${usage.calls} 次 LLM 调用${usage.model !== '' ? ` · ${usage.model}` : ''}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor"
+            strokeWidth="1.2" strokeLinecap="round" aria-hidden="true">
+            <circle cx="6" cy="6" r="4.6" />
+            <path d="M6 3.6V6l1.8 1.2" />
+          </svg>
+          {formatTokens(usage.totalTokens)} tok
+          <span className={css.usageRate}>{formatRate(usage.tokPerSec)}</span>
+        </span>
+      )}
+      <div className={css.viewToggle} role="tablist" aria-label="视图切换">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'chat'}
+          className={css.viewTab}
+          data-active={view === 'chat' || undefined}
+          onClick={() => onView('chat')}
+        >
+          对话
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'trace'}
+          className={css.viewTab}
+          data-active={view === 'trace' || undefined}
+          onClick={() => onView('trace')}
+        >
+          轨迹
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export function ConversationView({ session, onSubmit, onRespond, onNewTask }: ConversationViewProps) {
   const [approvalsOpen, setApprovalsOpen] = useState(false)
+  const [view, setView] = useState<'chat' | 'trace'>('chat')
   const gate = inputGate(session)
   const approvals = session?.pendingApprovals ?? []
   const hasApprovals = approvals.length > 0
 
   return (
     <div className={css.root}>
+      {session !== null && (
+        <ConversationHeader session={session} view={view} onView={setView} />
+      )}
       <div className={css.scrollBody}>
-        <ChatView
-          events={session?.events ?? []}
-          running={session?.status === 'running'}
-          emptyText={
-            session === null
-              ? '直接在下方输入目标或任务描述，回车即开始渗透测试。'
-              : '会话尚未开始——agent 的消息与工具调用会出现在这里。'
-          }
-        />
+        {view === 'trace' && session !== null ? (
+          <TraceView events={session.events} />
+        ) : (
+          <ChatView
+            events={session?.events ?? []}
+            running={session?.status === 'running'}
+            emptyText={
+              session === null
+                ? '直接在下方输入目标或任务描述，回车即开始渗透测试。'
+                : '会话尚未开始——agent 的消息与工具调用会出现在这里。'
+            }
+          />
+        )}
       </div>
 
       <div className={css.composerSeat}>

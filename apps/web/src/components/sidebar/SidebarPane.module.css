@@ -194,7 +194,84 @@
   padding-top: 8px;
 }
 
-/* 连接状态徽章：圆点 + 文字。tone：demo=蓝 / live=绿 / offline=琥珀。 */
+/* ── 任务/会话列表（仿 dsh sessionRow 几何：32px 行 + hover 换位） ── */
+
+/* 分组小标（任务 / 目标会话）。 */
+.sectionLabel {
+  flex: none;
+  padding: 8px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--secai-alias-label-tertiary);
+}
+
+/* 行几何：32px 高、radius 8、padding 0 8px；前导槽 16x20 放状态点。 */
+.sessionRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  overflow: hidden;
+  color: var(--secai-alias-label-primary);
+}
+
+.sessionRow:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.sessionRow[data-selected] {
+  background: var(--secai-alias-interactive-bg-active);
+}
+
+.slot {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+}
+
+.title {
+  min-width: 0;
+  flex: 1;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 目标数徽标：11/16 圆角小胶囊。 */
+.countBadge {
+  flex: none;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--secai-alias-interactive-bg-hover);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--secai-alias-label-secondary);
+}
+
+/* 时间列：hover 时让位（dsh 同款微交互）。 */
+.time {
+  flex: none;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.sessionRow:hover .time {
+  display: none;
+}
+
+/* 连接状态徽章：圆点 + 文字。tone：live=绿 / offline=琥珀。 */
 .linkBadge {
   display: inline-flex;
   align-items: center;
@@ -209,10 +286,6 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-}
-
-.linkBadge[data-tone='demo'] .linkDot {
-  background: var(--secai-alias-state-business-primary);
 }
 
 .linkBadge[data-tone='live'] .linkDot {

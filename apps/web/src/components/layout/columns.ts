@@ -29,8 +29,9 @@ export function clampWidth(px: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(px)))
 }
 
-/** 求解一个视口下的两栏宽；纯函数，(viewport, 偏好) → 决议。 */
+/** 求解一个视口下的两栏宽；纯函数，(viewport, 偏好) → 决议。
+ * 偏好 0 = 收起成 rail（渲染宽 = SIDEBAR_COLLAPSED 56px，保留展开钮）。 */
 export function computeColumns(viewport: number, sidebar: number): Columns {
-  const s = sidebar === 0 ? 0 : clampWidth(sidebar, SIDEBAR_MIN, SIDEBAR_MAX)
+  const s = sidebar === 0 ? SIDEBAR_COLLAPSED : clampWidth(sidebar, SIDEBAR_MIN, SIDEBAR_MAX)
   return { sidebar: s, center: Math.max(0, viewport - s) }
 }

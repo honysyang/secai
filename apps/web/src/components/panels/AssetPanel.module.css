@@ -113,3 +113,62 @@
   text-align: center;
   line-height: 1.6;
 }
+
+/* ── r6 重设计：搜索 + 类型筛选 ── */
+
+.spacer {
+  flex: 1;
+}
+
+.search {
+  flex: none;
+  width: 220px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 8px;
+  background: var(--secai-alias-bg-base);
+  color: var(--secai-alias-label-primary);
+  font: inherit;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--secai-alias-brand-primary);
+}
+
+.search::placeholder {
+  color: var(--secai-alias-label-tertiary);
+}
+
+.filters {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.chip {
+  border: none;
+  border-radius: 999px;
+  padding: 3px 12px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  color: var(--secai-alias-label-primary);
+}
+
+.chip[data-active] {
+  background: var(--secai-alias-interactive-bg-active);
+  color: var(--secai-alias-label-primary);
+  font-weight: 600;
+}

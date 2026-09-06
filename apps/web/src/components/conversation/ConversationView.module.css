@@ -69,3 +69,115 @@
 .moreApprovals:hover {
   background: var(--secai-alias-interactive-bg-hover-accent);
 }
+
+/* ── 顶部会话状态栏（r5/r4：目标 + 状态 + token/速率 + 视图切换） ── */
+
+.header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--secai-alias-border-l2);
+  background: var(--secai-alias-bg-base);
+  z-index: 6;
+}
+
+.headerTarget {
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--secai-alias-label-primary);
+}
+
+/* 状态胶囊：running 蓝 / approval 琥珀 / done 绿 / failed 红 / 其余灰。 */
+.headerStatus {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-secondary);
+}
+
+.headerStatus[data-tone='running'] {
+  background: var(--secai-static-deepseek-50);
+  color: var(--secai-alias-state-business-primary);
+}
+
+.headerStatus[data-tone='approval'] {
+  background: var(--secai-alias-state-warn-tertiary);
+  color: var(--secai-alias-state-warn-label);
+}
+
+.headerStatus[data-tone='done'] {
+  background: var(--secai-alias-state-success-tertiary);
+  color: var(--secai-alias-state-success-primary);
+}
+
+.headerStatus[data-tone='failed'] {
+  background: var(--secai-alias-interactive-bg-hover-danger);
+  color: var(--secai-alias-state-error-primary);
+}
+
+.headerSpacer {
+  flex: 1;
+}
+
+/* token 用量 + 生成速率（usage 事件聚合）。 */
+.usage {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--secai-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+
+.usageRate {
+  padding-left: 6px;
+  border-left: 1px solid var(--secai-alias-border-l2);
+  color: var(--secai-alias-state-business-primary);
+  font-weight: 600;
+}
+
+/* 对话/轨迹视图切换（分段控件）。 */
+.viewToggle {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.viewTab {
+  border: none;
+  border-radius: 6px;
+  padding: 2px 12px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--secai-alias-label-secondary);
+  cursor: pointer;
+}
+
+.viewTab:hover {
+  color: var(--secai-alias-label-primary);
+}
+
+.viewTab[data-active] {
+  background: var(--secai-alias-bg-layer-1);
+  color: var(--secai-alias-label-primary);
+  font-weight: 600;
+  box-shadow: var(--secai-alias-shadow-lv1);
+}

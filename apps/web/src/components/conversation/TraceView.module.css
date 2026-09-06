@@ -1,0 +1,224 @@
+/* TraceView 运行轨迹视图（r4）：工具栏统计 + 纵向时间线节点流。
+   节点 = 左轨状态图标 + 连接线，右体头部（工具名/角色标签 + 摘要 + 时长 + 时间）
+   + 可展开 pre 详情。running 节点 = 蓝色脉冲点。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 顶部统计条：步数 / 成功 / 失败。 */
+.toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--secai-alias-border-l2);
+}
+
+.metric {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--secai-alias-label-secondary);
+}
+
+.metric[data-tone='ok'] {
+  color: var(--secai-alias-state-success-primary);
+}
+
+.metric[data-tone='error'] {
+  color: var(--secai-alias-state-error-primary);
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 24px;
+  gap: 2px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.empty {
+  padding: 40px 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+/* 节点：左轨 20px + 右体。 */
+.step {
+  display: flex;
+  gap: 10px;
+}
+
+.rail {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 20px;
+}
+
+/* 状态图标：18px 圆底 + 图形。 */
+.stateIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  margin-top: 7px;
+}
+
+.stateIcon[data-state='done'] {
+  background: var(--secai-alias-state-success-tertiary);
+  color: var(--secai-alias-state-success-primary);
+}
+
+.stateIcon[data-state='failed'] {
+  background: var(--secai-alias-interactive-bg-hover-danger);
+  color: var(--secai-alias-state-error-primary);
+}
+
+/* running：脉冲点（业务蓝）。 */
+.pulse {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 11px;
+  border-radius: 50%;
+  background: var(--secai-alias-state-business-primary);
+  animation: tracePulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tracePulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgb(59 130 246 / 35%);
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 0 5px rgb(59 130 246 / 0%);
+  }
+}
+
+/* 连接线：轨内竖线，末节点可余留（简化为恒有，视觉连续）。 */
+.connector {
+  flex: 1;
+  width: 2px;
+  min-height: 8px;
+  border-radius: 1px;
+  background: var(--secai-alias-border-l2);
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0 10px;
+}
+
+/* 头部：工具名/角色标签 + 摘要 + 时长 + 时间（可点击展开）。 */
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin: 0 -6px;
+}
+
+.head[role='button'] {
+  cursor: pointer;
+}
+
+.head[role='button']:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.tool {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--secai-alias-bg-layer-2);
+  color: var(--secai-alias-label-primary);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+}
+
+.role {
+  flex: none;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--secai-alias-label-secondary);
+  background: var(--secai-alias-bg-layer-2);
+}
+
+.role[data-role='user'] {
+  color: var(--secai-alias-brand-text);
+  background: var(--secai-static-deepseek-50);
+}
+
+.summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 22px;
+  color: var(--secai-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.duration {
+  flex: none;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--secai-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.time {
+  flex: none;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--secai-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 展开详情：monospace pre 块（参数 / 输出）。 */
+.pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--secai-alias-markdown-code-block);
+  color: var(--secai-alias-label-primary);
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.pre[data-output] {
+  margin-top: 4px;
+}

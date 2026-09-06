@@ -13,21 +13,26 @@ lifespan：启动 demo ticker（running 会话周期帧），退出时统一收�
 from __future__ import annotations
 
 import argparse
+import os
 from contextlib import asynccontextmanager
 
 from starlette.applications import Starlette
 from starlette.routing import Route, WebSocketRoute
 
 from server.api import (
+    api_assets,
     api_describe,
     api_engagements,
     api_export_report,
     api_list_artifacts,
     api_report,
     api_respond,
+    api_risks,
     api_run,
     api_steer,
     api_targets,
+    api_reports,
+    api_update_risk,
 )
 from server.auth import AuthMiddleware, load_api_keys
 from server.fixture import install_demo
@@ -45,16 +50,24 @@ ROUTES = [
     Route("/api/report", api_report, methods=["POST"]),
     Route("/api/listArtifacts", api_list_artifacts, methods=["POST"]),
     Route("/api/exportReport", api_export_report, methods=["POST"]),
+    Route("/api/assets", api_assets, methods=["POST"]),
+    Route("/api/risks", api_risks, methods=["POST"]),
+    Route("/api/reports", api_reports, methods=["POST"]),
+    Route("/api/updateRisk", api_update_risk, methods=["POST"]),
     WebSocketRoute("/api/events.mux", events_mux),
     WebSocketRoute("/api/events.host", events_host),
     Route("/{path:path}", spa, methods=["GET"]),
 ]
 
+# demo fixture 开关：默认关闭（真枪实弹）；设 SECAI_FIXTURE=1 恢复离线演示三会话
+FIXTURE_ENABLED = os.getenv("SECAI_FIXTURE", "").strip() in ("1", "true", "yes")
+
 
 def create_app() -> Starlette:
     """组装整站 app（业务状态挂 app.state.state；每次调用得到独立 AppState）。"""
     state = AppState()
-    install_demo(state)  # 内置 demo engagement fixture：无 LLM key 离线可展示
+    if FIXTURE_ENABLED:
+        install_demo(state)  # 离线演示：无 LLM key 也能展示三会话运行态
 
     @asynccontextmanager
     async def lifespan(_: Starlette):

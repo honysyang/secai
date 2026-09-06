@@ -251,13 +251,15 @@ export interface ApiMethodMap {
   report: { request: ReportRequest; response: ReportSummary }
   listArtifacts: { request: { engagementId: string }; response: { artifacts: ArtifactMeta[] } }
   /** 导出走原始文件流（成功非 JSON 信封），不能用 call()——见 downloadReport helper。 */
-  exportReport: { request: { engagementId: string; format: 'md' | 'json' }; response: Blob }
+  exportReport: { request: { engagementId: string; format: 'md' | 'json' | 'pdf' }; response: Blob }
   /** 资产管理视图：授权目标的结构化清单（R4 攻击面投影聚合）。 */
   assets: { request: Record<string, never>; response: { assets: AssetEntry[] } }
   /** 风险管理视图：confirmed findings 聚合 + 处理状态。 */
   risks: { request: Record<string, never>; response: { risks: RiskEntry[] } }
   /** 报告管理视图：报告元信息列表（含产物下载入口）。 */
   reports: { request: Record<string, never>; response: { reports: ReportEntry[] } }
+  /** 风险人工处理状态流转（open/mitigating/accepted/resolved）。 */
+  updateRisk: { request: { riskId: string; status: RiskEntry['status'] }; response: { risk: RiskEntry } }
 }
 
 export type ApiMethodName = keyof ApiMethodMap
@@ -276,6 +278,7 @@ export const API_METHODS: readonly ApiMethodName[] = [
   'assets',
   'risks',
   'reports',
+  'updateRisk',
 ]
 
 // ───────────────────────── 报告文件导出（绕过 JSON 信封） ─────────────────────────
