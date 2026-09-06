@@ -111,14 +111,22 @@ export class AppRuntime {
     this.snapshotCache = null
   }
 
-  /** 下行帧路由：mux 按 sessionId 交 Engagement（未知会话静默丢弃）；host 交 Engagement。 */
+  /** 消费 host 流帧；mux 按 sessionId 交 Engagement（未知会话静默丢弃）。 */
   applyMuxFrame(frame: MuxFrame): void {
     if (!('sessionId' in frame)) return
     this.engagement.applyMuxFrame(frame)
+    // 同 applyHostFrame：帧直接路由进既有 Session 时 Engagement 不 touch，
+    // AppSnapshot 缓存不失效会让 App 层停在旧快照；统一补 touch 保活性。
+    this.touch()
   }
 
   applyHostFrame(frame: HostFrame): void {
+    // engagement 成员会话的 header/status 变更由 Session.applyHostFrame 落账，
+    // 但该路径不触发 Engagement.touch()——AppRuntime 的 AppSnapshot 因此永不
+    // 失效，App 层 useSyncExternalStore 拿不到新快照（UI 卡空态）。这里统一
+    // 补一次 touch：缓存置 null + 向 App 监听器重投最新快照。
     this.engagement.applyHostFrame(frame)
+    this.touch()
   }
 
   select(sessionId: string | null): void {

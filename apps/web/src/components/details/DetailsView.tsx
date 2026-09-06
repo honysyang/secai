@@ -1,7 +1,7 @@
 /**
  * DetailsView：右侧详情栏组合（F3 编排）。从当前 SessionSnapshot 的
  * projections 解析出各视图数据并分发给五个详情组件；标题栏带目标标识。
- * 内容区滚动：工具输出 → 证据链 → 端口与服务 → 报告预览 → 学习与成长。
+ * 内容区滚动：工具输出 → 推理假设 → 证据链 → 端口与服务 → 报告预览 → 学习与成长。
  */
 
 import type { ReactNode } from 'react'
@@ -13,7 +13,9 @@ import {
   parseGrowth,
   parseReport,
 } from '../../runtime/projections.ts'
+import { deriveHypotheses } from '../../runtime/hypotheses.ts'
 import { EvidenceChain } from './EvidenceChain.tsx'
+import { HypothesisQueue } from './HypothesisQueue.tsx'
 import { LearningPanel } from './LearningPanel.tsx'
 import { PortScanResult } from './PortScanResult.tsx'
 import { ReportPreview } from './ReportPreview.tsx'
@@ -42,6 +44,7 @@ export function DetailsView({ session }: DetailsViewProps) {
   const report = session !== null ? parseReport(session.projections.report) : null
   const growth = session !== null ? parseGrowth(session.projections.growth) : null
   const deadEndCount = session !== null ? (parseDeadEnds(session.projections.dead_ends)?.length ?? 0) : 0
+  const hypotheses = session !== null ? deriveHypotheses(session) : []
 
   return (
     <div className={css.root}>
@@ -57,6 +60,9 @@ export function DetailsView({ session }: DetailsViewProps) {
         <div className={css.body}>
           <Section title="工具输出">
             <ToolOutputPanel events={session.events} />
+          </Section>
+          <Section title="推理假设" hint={hypotheses.length > 0 ? `${hypotheses.length} 条` : 'queue · dead_ends · evidence'}>
+            <HypothesisQueue hypotheses={hypotheses} />
           </Section>
           <Section title="证据链" hint={chains !== null ? `${chains.length} 条` : 'projection.evidence'}>
             <EvidenceChain chains={chains} />
