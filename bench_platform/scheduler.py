@@ -10,8 +10,6 @@ P0-4 的落地，解决「Agent 卡在一道题不会换题 / 不会看提示」
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 # 难度系数：易题优先（先拿能拿的分），难题降权
 DIFF_COEF = {"easy": 1.3, "medium": 1.0, "hard": 0.7}
 # 死路衰减：同一题每放弃一次，EV 乘 0.3，避免反复撞硬题
@@ -40,7 +38,7 @@ _EARLY_HINT_KEYWORDS = ("azure", "azurite", "blob", "sas", "s3", "lambda",
                         "firebase", "supabase", "aws storage", "gcp", "google cloud")
 
 
-def is_endgame(challenges: List[dict], attempts: Dict[str, int]) -> bool:
+def is_endgame(challenges: list[dict], attempts: dict[str, int]) -> bool:
     """判断是否进入收尾回捞阶段：所有未完成题都至少被放弃过一次。
 
     此时没有「未尝试」的题可做，应降低衰减，回捞放弃过的题逐个再解决。
@@ -51,15 +49,15 @@ def is_endgame(challenges: List[dict], attempts: Dict[str, int]) -> bool:
     return all(attempts.get(c.get("unique_code", ""), 0) > 0 for c in unfinished)
 
 
-def select_challenge(challenges: List[dict], attempts: Dict[str, int],
-                     endgame: bool = False) -> Optional[dict]:
+def select_challenge(challenges: list[dict], attempts: dict[str, int],
+                     endgame: bool = False) -> dict | None:
     """EV 选题：total_score × 难度系数 × 衰减^死路次数，跳过已完成题。
 
     endgame=True（收尾回捞阶段）时用更温和的 ENDGAME_DECAY，回捞放弃过的题。
     返回 EV 最高的未完成题目；全部完成返回 None。
     """
     base = ENDGAME_DECAY if endgame else DECAY
-    best: Optional[dict] = None
+    best: dict | None = None
     best_ev = -1.0
     for c in challenges:
         if c.get("is_completed"):
