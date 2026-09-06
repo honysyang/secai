@@ -51,6 +51,10 @@ export class AppRuntime {
   private readonly api = new ApiClient()
 
   constructor() {
+    // StrictMode 下 effect 清理会把 start/stop 当普通函数调用导致 this 丢失，
+    // 构造时绑定兜底。
+    this.start = this.start.bind(this)
+    this.stop = this.stop.bind(this)
     this.engagement = new Engagement(DEMO_MODE ? DEMO_ENGAGEMENT_ID : LIVE_ENGAGEMENT_ID, {
       engagementId: DEMO_MODE ? DEMO_ENGAGEMENT_ID : LIVE_ENGAGEMENT_ID,
       title: DEMO_MODE ? '渗透演练：demo.ine.local 集群侦察与提权' : '待命（等待任务书）',
