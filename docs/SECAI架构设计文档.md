@@ -1,797 +1,653 @@
 # SECAI 架构设计文档
 
-> 多智能体安全攻防框架（AutoPentest）技术架构与工程设计说明
-> 版本：v1.2 ｜ 更新：2026-08-15
+> SECAI-PT v4（SECAI「破阵」终极执行计划 v4 全量实施后）技术架构与工程设计说明
+> 版本：v4.0 ｜ 更新：2026-09-06 ｜ 与代码现状同步
 
 ---
 
 ## 目录
 
-1. [项目概述](#1-项目概述)
+1. [文档定位与分工](#1-文档定位与分工)
 2. [设计思想与核心原则](#2-设计思想与核心原则)
-3. [总体架构](#3-总体架构)
+3. [总体架构（六层 L0–L6）](#3-总体架构六层-l0l6)
 4. [多智能体体系](#4-多智能体体系)
-5. [工作模式与工作流程](#5-工作模式与工作流程)
-6. [调度器（跑分编排）](#6-调度器跑分编排)
-7. [杀伤链（Kill-Chain）](#7-杀伤链kill-chain)
-8. [上下文生命周期管理](#8-上下文生命周期管理)
-9. [工具体系](#9-工具体系)
-10. [Skills 技能体系](#10-skills-技能体系)
-11. [角色体系](#11-角色体系)
-12. [漏洞检测体系](#12-漏洞检测体系)
-13. [POC 与知识库](#13-poc-与知识库)
-14. [前端可视化](#14-前端可视化)
-15. [目录结构](#15-目录结构)
-16. [关键设计决策与教训](#16-关键设计决策与教训)
-17. [能力覆盖（四类题型）](#17-能力覆盖四类题型)
-18. [内容资产](#18-内容资产)
+5. [工作模式与单题执行循环](#5-工作模式与单题执行循环)
+6. [调度器（跑分编排，零 LLM）](#6-调度器跑分编排零-llm)
+7. [pentest 数据模型（L0/L1）](#7-pentest-数据模型-l0l1)
+8. [L5 护栏层（Scope / 审批 / 沙箱）](#8-l5-护栏层scope--审批--沙箱)
+9. [L4 知识层（三路知识获取）](#9-l4-知识层三路知识获取)
+10. [L6 学习层（蒸馏与成长）](#10-l6-学习层蒸馏与成长)
+11. [Verifier 双核](#11-verifier-双核)
+12. [server + 前端（Web 控制面）](#12-server--前端web-控制面)
+13. [CTF 兼容（profiles/ctf_legacy 收敛）](#13-ctf-兼容profilesctf_legacy-收敛)
+14. [关键设计决策与教训](#14-关键设计决策与教训)
 
 ---
 
-## 1. 项目概述
+## 1. 文档定位与分工
 
-SECAI 是一个基于 **openai-agents SDK** 的多智能体安全攻防框架，目标是把「AI 自动化渗透测试」从玩具级 Demo 提升为可工程化的跑分/实战系统。
+| 文档 | 定位 | 分工 |
+|---|---|---|
+| **README.md**（仓库根） | 概览 + 运维入口 | 六章：系统架构（L0–L6/双核 Verifier/SessionManager/前后端拓扑）、功能模块、部署与运行（venv/.env/server/前端/gate.sh/-m e2e）、日志监控、安全机制、性能与缓存；目录结构树见 README 第 7 章 |
+| **本文档** | 设计 + 规格 | 设计思想、六层架构、数据模型逐文件规格、L5/L4/L6 深度设计、Verifier、server+前端契约、CTF 收敛、关键决策与教训 |
 
-核心能力：
-
-- **多智能体协作**：单主线 Executor + 用完即弃临时分身：Strategist（立法+规划）→ Executor（执行）→ Reporter（战报）→ Compactor（压缩）；Planner/Coach 已并入 Strategist 或由 fork_analyst 替代
-- **子任务并发**：`spawn_subtask` 声明子任务 + `finish_subtask` 结构化结束协议，主 Agent 上下文隔离；临时分身上限 N≤2（明确目标/独立预算/统一回收三闸门）
-- **跑分调度**：面向 TSecBench 等靶场平台的「选题 → 启动 → 渗透 → 提交 → 关闭 → 换题」机械编排
-- **自适应容器并发**：持续 start 直到 container_busy 被拒，并发度随平台真实上限自动收敛（2/3/4 自适应）；close 检查返回值 + 失败重试
-- **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出，不等 LLM finalize
-- **解法模板化**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式，正向复用
-- **破局干预**：3 轮零增量 → fork_analyst 复盘一次（写 next_directive）→ 再 3 轮零增量机械换题；coach/plan-mode 默认关闭可复活
-- **成本治理**：爆破/hint 预算 → 无感知换脑（switch）→ 挂起（suspend），token + 时钟双档止损
-- **信息增量判停**：从「看阶段切换」升级为「看产出质量」，正向证据清零、零增量累计，统一驱动 replan/判停
-- **提交铁律**：工具输出先全文扫 flag 再机械提交，不靠 LLM 自觉
-- **Prompt 注入防御**：工具输出统一检测注入特征，命中追加安全提醒、按不可信数据对待
-- **题级角色派任**：每道题按 unique_code 前缀派任对应角色皮肤
-- **上下文生命周期**：分层管理 + token 压缩 + 断点续跑 + 死路蒸馏 + 全局黑板（落盘持久化）
-- **事件总线 + 落库**：进程级 EventBus → SQLite（tasks/events 表，WAL，唯一真相源），events.jsonl 仅人读留痕
-- **渐进披露 + 技能预算**：技能按触发词解锁，注入带预算（同屏 3 篇 / 每篇 1200 字 / 总 8k）
-- **声明式内容**：skills / tools / roles / vulns / pocs / payloads / knowledge 全部本地化、自包含、可扩展
-- **实时可视化**：标准库后端 + SSE 实时流 + 三页前端（对话/监控/智能体 kill-chain）
-- **多模型灾备池**：额度/限流/鉴权/状态码失败自动切换候选模型，保持同一 session 继续作答
-- **模型惰性治理**：连续无进展优先自救换思路，自救无效切换模型接管；自救时压缩上下文防污染历史
-- **缓存防线**：静态 system prompt 每轮 hash 断言（漂移即 `[cache-guard]` ERROR）；压缩 append-only（定点截断 + 锚点追加，不 clear_session 保前缀缓存）；战报/看板输出真实 prefix_hit_rate（目标 ≥85%）
-- **统一日志系统**：终端 + 文件双写，时间戳/级别/颜色分级；AI 思考（reasoning）实时打印；黑板、flag、漏洞、证据等关键结论醒目输出
-
-技术栈约束（硬性）：
-
-- 后端：Python + openai-agents SDK（DeepSeek 等 OpenAI 兼容后端）
-- 前端：原生 JS，无框架 / CDN / 外部库
-- 无构建步骤，无额外运行时依赖
+两者口径统一；发现不一致时**以代码为准**（docstring 是最新事实源）。
 
 ---
 
 ## 2. 设计思想与核心原则
 
-### 2.1 五条公理
+### 2.1 五条公理（仍有效）
 
 | 公理 | 含义 | 落地 |
 |---|---|---|
-| ① 提交是机械保证 | flag 提交不靠 LLM 自觉 | `_submit_flags_if_any` 扫描 → `submit_flag` |
-| ② 调度是纯函数零 LLM | 选题/换题/看 hint/容器管理是代码 | `scheduler.py` |
-| ③ LLM 只做假设与解读 | LLM 不承担机械决策 | 调度器 + 判停器接管 |
-| ④ 状态外置、重启无感 | 进度持久化 | checkpoint + SQLiteSession + 黑板 |
-| ⑤ 观测是状态的投影 | 事件流 = 可观测事实源 | RunHooks → events.jsonl → UI |
+| ① 提交是机械保证 | flag 提交不靠 LLM 自觉 | `profiles/ctf_legacy/platform.py`（`_submit_flags_if_any`）经 `core/tool_pipeline.py` 的 AutoSubmitFlag 中间件执行 |
+| ② 调度是纯函数零 LLM | 选题/换题/看 hint/容器管理是代码 | `bench_platform/scheduler.py` |
+| ③ LLM 只做假设与解读 | LLM 不承担机械决策 | 调度器 + Verifier + 黑板事实不变量接管 |
+| ④ 状态外置、重启无感 | 进度持久化 | checkpoint + SQLiteSession + 黑板（`data/`）+ `mission_charter` 幂等缓存 |
+| ⑤ 观测是状态的投影 | 事件流 = 可观测事实源 | `core/events.py` BUS → hooks → SQLite（唯一真相源）→ UI |
 
-### 2.2 关键设计思想
+### 2.2 v4 设计裁决（终极执行计划 v4 第一部分，代码现状印证）
 
-1. **让 LLM 做高层判断，让代码做确定性检测** —— 借鉴 sec-agent / ctfSolver，fuzz / 差分检测 / 提交铁律等确定性动作由代码完成，LLM 只负责"往哪打、怎么解读"。
-2. **先易后难、先存在后复杂** —— 通用层优先，靶场/flag 铁律后接入。
-3. **自包含、可扩展** —— 所有内容（技能/角色/漏洞/POC/payload）都是声明式本地文件，改文件即改能力，无需改代码。
-4. **default-soft 容错** —— 工具失败是"信息"不是"死路"，交给 LLM 决策，只有明确死路才判负向。
-5. **止血 > 增产 > 降本** —— 先修丢分项，再做吞吐优化，最后降成本。
+| # | 议题 | 裁决 → 落点 |
+|---|---|---|
+| 1 | 双核 | 不做硬架构：Verifier 可插拔（`harness/runner/verifier.py`：Mechanical 默认 / LLM 低频） |
+| 2 | kill-chain 五阶段 | 不做控制流状态机：PTES 阶段仅作 blackboard fact_key category 命名空间（`pentest/blackboard/categories.py`） |
+| 3 | 三 Provider ABC | 不做：ModelPool 已是事实 Provider 边界（`runtime/model_pool.py`），ToolMiddleware ABC 已存在（`core/tool_pipeline.py`） |
+| 4 | 多任务并行 | 每目标 = 独立 Session/ExecutorLoop，SessionManager 统一管理（`harness/session_manager.py`），前端 mux WS 同时监视 |
+| 5 | 前端 | React + CSS Modules + `--secai-*` Design Token + 三栏布局（`apps/web/`）；禁 Tailwind/SCSS |
+| 6 | 网络搜索 | 三层知识获取：本地 RAG（离线）+ web_search（T1 自动）+ web_fetch（T2 审批，SSRF 防护）→ `pentest/knowledge/` |
+| 7 | 学习成长 | L6 学习层：每 engagement 结束后自动蒸馏沉淀、跨任务复用 → `pentest/learning/` |
+
+### 2.3 关键设计思想
+
+1. **让 LLM 做高层判断，让代码做确定性动作** —— 侦察/爆破预算/审批分级/提交/判停全代码化。
+2. **护栏是机械化强制执行点，不是 prompt 自约束** —— `pentest/presets/pentest_preset.py`
+   的 persona.disciplines 明示：ScopeCheck、DeadEnd、黑板事实是文字背后的强制执行点。
+3. **fail-closed 优先** —— 沙箱后端不可用禁止裸跑；ScopeConstraint 解析失败抛错不放行；
+   web_fetch 解析不了即拒绝（防 DNS rebinding）。
+4. **观测单一真相源** —— SQLite 为唯一真相源，events.jsonl 仅人读留痕（崩溃现场除外）。
+5. **止血 > 增产 > 降本** —— 先修丢分项（R0-R6 把 H1-H13 全结清），再做吞吐/降本优化。
 
 ---
 
-## 3. 总体架构
+## 3. 总体架构（六层 L0–L6）
 
-```mermaid
-flowchart TB
-    subgraph Frontend["前端 static/（三页）"]
-        FE1["index.html<br/>对话流 + 任务流"]
-        FE2["monitor.html<br/>任务生命周期监控"]
-        FE3["agents.html<br/>智能体 kill-chain 展示"]
-    end
+### 3.1 六层架构
 
-    subgraph Server["app/server.py（标准库 HTTP + SSE）"]
-        SRV["/ /monitor /agents<br/>/api/meta /api/tasks /api/events /api/stream"]
-    end
-
-    subgraph Orchestrator["app/main.py（主编排）"]
-        STG["① Strategist 立法+规划（一次性）"]
-        SCH["② 调度器循环<br/>list→EV选题→start→单题→close"]
-        RPT["③ Reporter 战报 + 死路蒸馏"]
-    end
-
-    subgraph Core["core/ 核心模块"]
-        AGENT["agents_def.py<br/>Agent 定义 + 动态 instructions"]
-        HOOKS["hooks.py<br/>事件流/渐进披露/增量打分"]
-        CTX["task_context.py<br/>执行现场+全局状态"]
-        CTXM["context_manager.py<br/>压缩+断点续跑"]
-        TOOLS["../demo_tools.py<br/>执行工具+提交铁律+注入防御"]
-    end
-
-    subgraph Platform["bench_platform/ 平台对接"]
-        SCHED["scheduler.py<br/>EV选题/难度分级/停滞决策"]
-        PCLI["platform_client.py<br/>平台 SDK 语义封装"]
-        PTOOLS["platform_tools.py<br/>平台 API 工具（异常上抛）"]
-    end
-
-    subgraph Observability["adapters/ + core/ 可观测性"]
-        BUS["events.py<br/>进程级事件总线"]
-        DB["db.py<br/>SQLite 落库 tasks/events"]
-    end
-
-    subgraph Runtime["runtime/ 治理与模型"]
-        BGT["budget.py<br/>爆破/hint 预算 + 换脑/挂起"]
-        STA["status.py<br/>阶段状态机"]
-        MPL["model_pool.py<br/>多模型灾备池"]
-        STK["stuck.py<br/>惰性检测 + 自救/切换"]
-        LOG["log.py<br/>统一日志"]
-        DDL["deadline.py<br/>比赛时限"]
-    end
-
-    subgraph Declarative["arsenal/ 声明式内容（本地化、可扩展）"]
-        PROMPTS["prompts/ 任务模板"]
-        ROLES["roles/ 9 角色"]
-        SKILLS["skills/ 64 技能"]
-        CLITOOLS["tools/ 92 CLI"]
-        VULNS["vulns/ 9 漏洞模块"]
-        POCS["pocs/ 31 POC"]
-        KNOW["knowledge/ 知识"]
-        PAYL["payloads/ 字典"]
-    end
-
-    FE1 & FE2 & FE3 --> SRV
-    SRV --> Orchestrator
-    Orchestrator --> Core
-    Orchestrator --> Runtime
-    Orchestrator --> Observability
-    Core --> Declarative
-    HOOKS --> BUS --> DB
+```
+┌──────────────────────────────────────────────────────────────┐
+│ L6 学习层   pentest/learning/：经验蒸馏引擎 + 剧本库 + 负面知识 │
+│              + 成长度量（lessons/playbooks/negatives/metrics） │
+├──────────────────────────────────────────────────────────────┤
+│ L5 护栏层   pentest/scope.py（纯函数）+ pentest/approval.py    │
+│              （T1-T4 分级 + HITL 审批）+ sandbox/（bwrap       │
+│              fail-closed）+ presets 工具分级词表 + 审计         │
+├──────────────────────────────────────────────────────────────┤
+│ L4 知识层   pentest/knowledge/：local_rag（离线）+ web_search   │
+│              （T1 自动）+ web_fetch（T2 审批, SSRF 防护）       │
+│              + sources/（cve_db/tool_manuals/methodology/     │
+│              negative_findings）                              │
+├──────────────────────────────────────────────────────────────┤
+│ L3 工具层   pentest/tool_adapters/：ToolAdapter 协议 + 14 适配 │
+│             器（parse_output 结构化提取 + build_command 注入   │
+│             校验）；执行侧 sec_tools（92 个 CLI YAML）          │
+├──────────────────────────────────────────────────────────────┤
+│ L2 编排层   harness/：SessionManager（多目标并行）+             │
+│              ExecutorLoop（pre/step/post）+ Verifier（双核）   │
+│              + subtasks 三闸门 + pool（全局模型池）            │
+├──────────────────────────────────────────────────────────────┤
+│ L1 认知层   pentest/target_profile.py + hypothesis.py +        │
+│              deadends.py + blackboard/ → SQLite durable        │
+│              （pentest.db 五表，跨 session 存活）               │
+├──────────────────────────────────────────────────────────────┤
+│ L0 方法论层 pentest/blackboard/categories.py（PTES fact_key    │
+│             命名空间）+ pentest/presets/pentest_preset.py      │
+│             （词汇表，非控制流）                               │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### 3.1 核心模块职责
+### 3.2 两条执行面与核心数据流
+
+**执行面 A：授权渗透 Web（v4 主线）** —— `python -m server.main --port 8700`
+
+```
+任务书（前端 → POST /api/run）
+  → server/run_spec.py 归一（task_brief/targets/scope/settings；预算护栏收敛）
+  → harness.SessionManager.start_target()（每目标独立 Session/总线/state，并行）
+  → harness/runner/pentest_target.py（ScopeCheck → T2 审批门(approval/requested 帧)
+      → 只读工具白名单执行 → 黑板）→ 事件经 BUS 扇出 mux WS
+  → /api/report 桥接 R5 报告引擎（纯函数投影）
+```
+
+**执行面 B：CTF 跑分/通用 CLI（legacy，保留）** —— `python -m app.main`
+
+```
+app/main.py run_task 调度循环（while True / _run_one / _endgame_sweep，
+结构被 tests/test_core.py AST 锁定）
+  ├─ legislate_charter（harness/runner/orchestrator.py：战略家立法+规划，幂等缓存）
+  ├─ 单题闭环 → harness/runner/executor.py run_single_challenge() → ExecutorLoop.run()
+  │    ├─ RunnerState(pre/step/post) + _pre_step/_step/_post_step 直驱
+  │    ├─ 上下文增量注入（charter/plan 版本化 + field_notes 仅首轮 + 黑板 diff）
+  │    ├─ 停滞治理：hint（scheduler 机械阈值）→ fork_analyze（3 轮零增量，≤1 次）→ 机械换题
+  │    ├─ 成本治理：爆破预算 / 换脑 switch / 挂起 suspend（runtime/budget.py）
+  │    ├─ 后台子任务：三闸门（subtasks.py）+ 情报 sub_intel.jsonl 合并（context.py）
+  │    └─ 收尾：cost_report / trajectory / stuck-replay / dashboard（runtime/reporting.py）
+  ├─ finalize_report（战报 + field_notes 机械沉淀 + 四指标看板）
+  └─ profiles/ctf_legacy：提交铁律 / 通关复核 / finalize（CTF 假设全收敛）
+```
+
+### 3.3 核心模块职责（v4 现状）
 
 | 模块 | 路径 | 职责 |
 |---|---|---|
-| `main.py` | `app/` | 主编排入口：立法 → 规划 → 调度器循环 → 报告 + 子任务并发 + 成本治理 + 自适应容器 |
-| `server.py` | `app/` | SSE 实时流服务（三页 + 监控 API） |
-| `agents_def.py` | `core/` | Agent 定义与动态 instructions 组装 + 子任务结束协议 + 卡壳教练 |
-| `scheduler.py` | `bench_platform/` | 跑分编排纯函数层（EV 选题 / 停滞决策） |
-| `solution_templates.py` | `solvecraft/` | 解法模板（solved 题正向沉淀 + 同指纹题复用） |
-| `budget.py` | `runtime/` | 成本治理（爆破/hint 预算 + 换脑/挂起），单一事实源 |
-| `hooks.py` | `core/` | RunHooks 事件流 + 渐进披露 + 信息增量打分 + 网络不可达检测 |
-| `events.py` | `core/` | 进程级事件总线（内存历史 + 订阅者分发） |
-| `db.py` | `adapters/` | SQLite 落库（tasks/events 表，WAL，线程安全） |
-| `model_pool.py` | `runtime/` | 多模型灾备池（额度/限流/鉴权/状态码失败自动切换，保持同一 session） |
-| `stuck.py` | `runtime/` | 模型惰性治理（自救优先 + 切换接管 + 上下文压缩） |
-| `deadline.py` | `runtime/` | 比赛硬总时限常量 |
-| `log.py` | `runtime/` | 统一日志（终端+文件双写，级别/颜色） |
-| `status.py` | `runtime/` | 阶段状态机（PHASE_DEFS + PHASE_TRANSITIONS） |
-| `task_context.py` | `core/` | TaskContext：执行现场 + 全局状态 |
-| `context_manager.py` | `core/` | 上下文压缩 + 断点续跑（state/session） |
-| `demo_tools.py` | 根目录 | 执行工具集 + 提交铁律 + Prompt 注入防御 + 工具按需加载 |
-| `platform_client.py` | `bench_platform/` | 平台 SDK 语义封装（唯一懂平台协议的地方） |
-| `platform_tools.py` | `bench_platform/` | 平台 API 的 Agent 工具封装 |
-| `charter.py` | `core/` | 使命宪章落盘 |
-| `config.py` | `adapters/` | env 配置 + 模型 |
-| 各 `*_registry.py` | `arsenal/registries/` | 声明式内容加载器（skill/vuln/poc/knowledge/role） |
+| `session_manager.py` | `harness/` | 多目标并行 SessionManager（start_target/list/stop/broadcast/close；独立 bus+state） |
+| `executor.py` | `harness/runner/` | ExecutorLoop（单题 pre/step/post 循环）+ `run_single_challenge` setup |
+| `state.py` | `harness/runner/` | RunnerState 显式状态（原闭包 nonlocal 变量字段化） |
+| `verifier.py` | `harness/runner/` | Verifier 协议 + Mechanical/LLM 双实现 + parse_verdict |
+| `subtasks.py` | `harness/runner/` | 后台子任务三闸门调度/收割/回收 |
+| `context.py` | `harness/runner/` | field_notes / 黑板载入 / sub_intel 合并 / fork_analyze 复盘 |
+| `orchestrator.py` | `harness/runner/` | run_task 入口编排段：legislate_charter / finalize_report |
+| `pool.py` | `harness/runner/` | 进程级全局 ModelPool 句柄 |
+| `pentest_target.py` | `harness/runner/` | `/api/run` 真实执行 runner（轻量授权目标循环） |
+| `scope.py` | `pentest/` | ScopeConstraint 纯函数授权守卫（fail-closed） |
+| `target_profile.py` | `pentest/` | 目标认知状态机（Identity/AttackSurface/AttackChain/coverage） |
+| `hypothesis.py` | `pentest/` | 假设队列（attempts 上限 2 → 强制 falsified） |
+| `deadends.py` | `pentest/` | 死路蒸馏（overturn_condition 决定复活） |
+| `contract.py` | `pentest/` | 验收契约纯函数（coverage/dead_end_ratio/deliverables） |
+| `approval.py` | `pentest/` | ApprovalGate（T1-T4 分级 + 人审 + 审计双写） |
+| `blackboard/` | `pentest/` | L0 事实黑板（categories/facts/store：pentest.db 五表） |
+| `presets/` | `pentest/` | PENTEST_PRESET 注册（persona/verifier/tool_levels/knowledge/subagents） |
+| `tool_adapters/` | `pentest/` | L3 14 适配器（结构化输出解析 + 参数注入校验） |
+| `knowledge/` | `pentest/` | L4 知识层（engine 三路 + 三源 + sources/ 本地源） |
+| `learning/` | `pentest/` | L6 学习层（models/store/distiller/retriever/metrics） |
+| `sandbox/` | 根目录 | L5 沙箱（backend 协议/bubblewrap/policy 词表/selfcheck） |
+| `backend.py` | `sandbox/` | SandboxBackend 协议 + fail-closed 失败语义 |
+| `policy.py` | `sandbox/` | 命令分级词表（read-only/workspace-write/danger） |
+| `bubblewrap.py` | `sandbox/` | bwrap 真实隔离后端（--unshare-all + 根只读 + 工作区可写） |
+| `selfcheck.py` | `sandbox/` | `python -m sandbox.selfcheck` 自检 |
+| `events.py` | `core/` | 进程级 EventBus + BUS |
+| `hooks.py` | `core/` | RunHooks 事件投影 + 渐进披露 + 增量打分 + 缓冲落盘 |
+| `tool_pipeline.py` | `core/` | 统一工具管线（BruteGate/注入防护/Spill/AutoSubmitFlag 等 middleware） |
+| `agents_def.py` | `core/` | Strategist/Executor/Reporter/Compactor 定义 + 动态 instructions |
+| `task_context.py` | `core/` | TaskContext + L5GuardrailConfig + SubtaskBudget |
+| `context_manager.py` | `core/` | 上下文压缩（append-only）+ 断点续跑 |
+| `charter.py` | `core/` | 使命宪章落盘/加载 |
+| `memory.py` | `core/` | 三层记忆统一访问（含黑板快照渲染） |
+| `reporting.py` | `runtime/` | first_strike/cost_report/轨迹导出/stuck-replay/四指标看板 |
+| `budget.py` | `runtime/` | 成本治理单一事实源（爆破/hint/switch/suspend 阈值） |
+| `model_pool.py` | `runtime/` | 多模型灾备池 + ModelExhaustedError |
+| `model_fallback.py` | `runtime/` | 外层 Agent Runner.run 灾备重试包装 |
+| `stuck.py` | `runtime/` | 模型惰性治理（自救/切换模型） |
+| `fork_analyst.py` | `runtime/` | 轨迹分叉分析（一次性强模型调用） |
+| `status.py` | `runtime/` | 阶段状态机 + PHASE_DEFS |
+| `log.py` | `runtime/` | 统一日志（终端+文件双写） |
+| `main.py` | `server/` | Starlette 组装 + uvicorn 入口 |
+| `api.py` | `server/` | 七方法 RPC（describe/targets/engagements/run/steer/respond/report） |
+| `ws.py` | `server/` | mux/host 双 WS 纯下行帧流 |
+| `state.py` | `server/` | AppState（SessionManager 桥接 + Hub 扇出 + 审批注册表） |
+| `run_spec.py` | `server/` | /api/run 请求归一 + 预算护栏（max_rounds/wallclock/approval/token） |
+| `fixture.py` | `server/` | demo engagement fixture（离线三态） |
+| `static.py` | `server/` | apps/web/dist SPA 托管 |
+| `engine.py` | `profiles/practical_pentest/report/` | R5 报告引擎纯函数投影 |
+| `task.py` / `platform.py` | `profiles/ctf_legacy/` | CTF 默认任务书 / 提交铁律与终局收敛 |
+| `scheduler.py` | `bench_platform/` | 零 LLM 纯函数调度（EV 选题/停滞决策） |
+| `platform_client.py` | `bench_platform/` | 平台协议唯一实现 + `get_platform_client` 单例 |
 
 ---
 
 ## 4. 多智能体体系
 
-### 4.1 Agent 一览
+> 本体系描述 **CLI/跑分执行面**（app.main + ExecutorLoop）的角色编排；v4 Web 面的轻量
+> runner（pentest_target）不使用这些角色，只驱动单一执行 Agent + 人工审批（见第 12 章）。
 
 | Agent | 角色定位 | 产物 | 触发时机 |
 |---|---|---|---|
-| **Strategist** 战略家 | 立法 + 深度分析（为什么打、按什么顺序） | 使命宪章 + 作战计划 plan（任务研判/攻击面/flag 定位/分步计划） | 任务开始，一次性；`build_strategist` 工厂化按需构建 |
-| **Executor** 执行者 | 执行（怎么打） | 证据、黑板、flag | 每轮循环（单主线） |
-| **Subtask Executor** | 子任务并发执行（N≤2，三道闸门） | `finish_subtask` 结构化结论（summary/findings/flag），运行期情报共享主线 | 主 Agent `spawn_subtask` 后并发调度 |
-| **Reporter** 报告者 | 战报 + 死路蒸馏 | 战报（代码校验 `## 战报`/`## 死路蒸馏` 两节）+ field_notes | 任务结束，一次；`build_reporter` 工厂化 |
-| **Compactor** 压缩器 | 历史压缩（append-only） | 压缩摘要（定点截断旧输出 + 锚点追加） | 上下文超阈值 / 卡壳自救强制 |
+| **Strategist** 战略家 | 立法 + 深度分析（为什么打、按什么顺序） | 使命宪章 + 作战计划 plan | 任务开始一次性；`build_strategist` 工厂化按需构建，同任务幂等缓存（`orchestrator.legislate_charter`） |
+| **Executor** 执行者 | 执行（怎么打） | 证据、黑板、flag | 每轮循环（单主线，`agents_def.build_executor`） |
+| **Subtask Executor** | 子任务并发执行（N≤2，三闸门） | `finish_subtask` 结构化结论（summary/findings/flag） | 主 Agent `spawn_subtask` 后并发调度（`harness/runner/subtasks.py`） |
+| **Reporter** 报告者 | 战报 + 死路蒸馏 | 战报（`## 战报` / `## 死路蒸馏`）+ field_notes | 任务结束一次（`orchestrator.finalize_report`） |
+| **Compactor** 压缩器 | 历史压缩（append-only） | 压缩摘要（定点截断 + 锚点追加） | 上下文超阈值 / 卡壳自救强制 |
+| **fork_analyst**（非 Agent） | 轨迹分叉复盘 | `next_directive` 写黑板 | 3 轮零增量触发一次（`runtime/fork_analyst.py`，一次性强模型调用） |
 
-> 已退役：Manager/Planner 并入 Strategist（兼容别名删除）；Coach 由 `runtime/fork_analyst.py`（轨迹分叉分析，一次性强模型调用，不常驻）替代。破局链收敛为两级：3 轮零增量 → fork_analyze 一次 → 再 3 轮零增量机械换题。
+> 已退役：Manager/Planner 并入 Strategist；Coach 机制代码保留但默认关闭
+> （`ENABLE_COACH=true` 复活），由 fork_analyst 替代。
 
-### 4.2 数据流
-
-```
-task(完整任务书)
-   │
-   ├─→ Strategist ──→ charter + plan(使命宪章 + 作战计划)
-   │
-   └─→ Executor(动态 instructions)
-         注入：角色风格 + 阶段 + charter + plan + 纪律 + playbooks
-              + field_notes + 压缩摘要 + 黑板 + brief
-         反馈：黑板 + 事件流 → fork_analyze(停滞3轮，一次) / compact(超阈值/自救)
-         子任务：spawn_subtask(独立会话) ── sub_intel.jsonl ──→ 主线每轮合并
-```
-
-### 4.3 Executor 的动态 instructions
-
-Executor 的 `instructions` 是**动态函数**，每轮从 `TaskContext` 读取最新状态重新渲染：
-
-```python
-def _instructions(ctx, agent):
-    c = ctx.context
-    return EXECUTOR_TEMPLATE.format(
-        phase_name=c.phase,          # 当前阶段
-        plan=c.plan,                 # 当前计划
-        playbooks=load_skill_bodies(c.disclosed_skills),  # 已披露技能
-        blackboard=_format_blackboard(c.blackboard),       # 黑板摘要
-        compaction_summary=c.compaction_summary,           # 压缩摘要
-        ...
-    )
-```
-
-这样 hooks 运行时追加技能 / 切换阶段后，下一轮系统提示自动带上新状态。
+Executor 的 instructions 是**动态函数**，每轮从 TaskContext 读取最新状态重渲染，注入：
+角色风格 + 当前阶段 + charter + plan + 纪律 + playbooks + field_notes + 压缩摘要 + 黑板。
+hook 运行时追加技能 / 切换阶段后，下一轮系统提示自动带上新状态。
 
 ---
 
-## 5. 工作模式与工作流程
+## 5. 工作模式与单题执行循环
 
 ### 5.1 两种工作模式
 
 | 模式 | 说明 |
 |---|---|
-| **通用模式** | 单 Executor 循环，Agent 自主编排，适合任意渗透任务 |
-| **跑分模式（调度器）** | 代码机械编排「选题→启动→渗透→提交→关闭→换题」，适合 TSecBench 等平台 |
+| 通用模式 | 单 Executor 循环，Agent 自主编排（`python -m app.main "<任务>"`） |
+| 跑分模式（调度器） | 代码机械编排选题→启动→渗透→提交→关闭→换题（TSecBench 类平台） |
+| Web 受控模式 | server `/api/run`：预算护栏 + 审批门 + 只读白名单（见第 12 章） |
 
-### 5.2 通用渗透工作流程
+### 5.2 单题循环（现为 harness/runner ExecutorLoop）
 
-无论跑分还是通用任务，都遵循同一套「立法 → 规划 → 杀伤链推进 → 报告」的核心流程：
+R1 可测试性重构后，原 `app/main.py` 的 `_run_single_challenge` 等价变换为：
 
-```
-任务接收
-  → ① Strategist 立法+规划（一次性：使命宪章 + 作战计划）
-  → ② Executor 执行（按 5 阶段杀伤链推进：recon→enumerate→detect→exploit→post）
-       ├─ 停滞 3 轮 → fork_analyze（复盘一次，写 next_directive；再 3 轮零增量机械换题）
-       ├─ 超阈值/自救 → compact（append-only 压缩）
-       ├─ 独立分支 → spawn_subtask（N≤2，情报经 sub_intel.jsonl 共享主线）
-       └─ 关键进展 → 写黑板 / checkpoint
-  → ③ Reporter 报告（战报 + 死路蒸馏 → field_notes 沉淀）
-```
+- `RunnerState`（`harness/runner/state.py`）：把原 pre/step/post 三个内嵌 async 闭包的
+  nonlocal 捕获变量（switched/outcome/death_reason/intervention_count/hint_used/
+  coach_used/turn_count/next_input）全部提升为数据类字段；
+- `ExecutorLoop`（`harness/runner/executor.py`）：循环控制 + `_pre_step/_step/_post_step`
+  三个可直驱方法（fake state/clock/scorer/model_pool 注入 → 13 条直驱单测）；
+- `run_single_challenge()`：保留 setup 流程（工作区/角色派任/黑板回注/工具裁剪/
+  first_strike/缓存观测/executor 与 session 构建），组装后交给 `ExecutorLoop.run()`。
 
-跑分模式是在这套通用流程上，**增加调度器层**（选题/容器/换题/hint 的机械编排），杀伤链本身不变。
-
-### 5.3 跑分模式完整流程（3 槽并发）
-
-```
-① Strategist 立法+规划 → charter + plan
-② 调度器主循环（零 LLM，3 槽并发）：
-   while True:
-     ├─ deadline 检查（比赛时限）
-     ├─ list_challenges 拉题目
-     ├─ 补满 3 槽（排除活跃题，避免重复选题）：
-     │    ├─ EV 选题（死路降权 + 零启动倾斜）
-     │    └─ start_challenge 启动容器 → 创建单题 asyncio 任务
-     ├─ asyncio.wait(FIRST_COMPLETED) 等任一题完成
-     ├─ 完成处理：close 容器 → 记录结果 → 补位
-     └─ 任一题 fatal（任务结束）→ 取消其余任务 → 终止
-③ 终局重扫（_endgame_sweep）：主循环退出后再拉列表，补漏题 / 重试 stuck
-④ Reporter 战报 + 死路蒸馏
-```
-
-吞吐：串行 ×1 → 并发 ×3，配合平台 3 容器上限。
-
-### 5.4 单题循环（_run_single_challenge）
-
-单题独立工作区（`worker_{code}`）+ 独立事件流，避免并发交错：
+`ExecutorLoop.run()` 主循环：
 
 ```
 while True:
-  ├─ 成本治理：token/时钟到换脑档 → 无感知 switch 模型
-  ├─ 成本治理：token/时钟到挂起档 → suspended（腾槽，下轮 EV 重选）
-  ├─ Runner.run(max_turns=1)   # 每轮一个 LLM 回合
-  ├─ 阶段停滞检测 / 信息增量累计
-  ├─ fatal → 全局终止（任务结束/token 无效）
-  ├─ finalized → 本题 solved
-  ├─ 空转 6 轮 → 换题
-  ├─ 网络不可达 2 次 → 换题（防 VPN 死磕）
-  ├─ 停滞按难度分级 → 机械看 hint / 机械换题
-  ├─ hint 预算：卡题（≥2 失败路径）且 token 达挂起档比例 → 机械拉 hint
-  ├─ 停滞 5 轮 → replan（重新规划本题）
-  ├─ 子任务并发调度（spawn_subtask）
-  └─ 上下文压缩（超阈值）
+  pre  → _pre_step()：静态 prompt hash 断言（[cache-guard]）· 墙钟硬顶（有进展延长半档）·
+         token/时钟到档 → 无感知 switch 模型 · StuckDetector 自救/切换
+  step → _step()：Runner.run(max_turns=1)（模型失败自动 fallback 重试同输入）
+  post → _post_step()：信息增量累计 → hint 机械前置 / fork_analyze 破局（3 轮零增量 ≤1 次）/
+         replan / 机械换题（空转 SINGLE_EMPTY_TURNS=4 轮 / 网络不可达 2 次 / hint 后零增益
+         HINT_GRACE_TURNS=5）· 子任务调度收割 · 压缩 · 熔断（fatal/solved/stuck）
+finally：统一回收（子任务取消 / 事件冲刷 / session 清理）
+收尾：field_notes 机械沉淀 + cost_report + trajectory + stuck-replay + dashboard
 ```
 
-单题开始登记 `tasks` 表（生命周期），结束登记终态（solved/stuck/suspended/fatal），供监控页追溯。黑板落盘 `blackboard.json`，挂起/重试时回注进度。
+### 5.3 跑分模式主流程（app.main 调度循环）
+
+```
+① 战略家立法+规划 → charter + plan（幂等缓存，可复用）
+② 调度器主循环（零 LLM）：
+     deadline 检查 → list_challenges → 补满并发槽（EV 选题排除活跃题，start 容器）
+     → 等待任一完成（FIRST_COMPLETED）→ close 容器 + 记录结果 + 补位
+     → 任一题 fatal（TaskEnded/TaskNotFound）→ 取消其余 → 终止
+③ _endgame_sweep 终局重扫：主循环退出后再拉列表，补漏题/重试 stuck
+④ Reporter 战报 + 死路蒸馏（finalize_report）
+```
 
 ---
 
-## 6. 调度器（跑分编排）
+## 6. 调度器（跑分编排，零 LLM）
 
-`platform/scheduler.py` 是**零 LLM 纯函数层**，实现报告 P0-4 的核心要求。
+`bench_platform/scheduler.py` 纯函数层：选题/停滞决策全代码，不靠 LLM 自觉。
 
 ### 6.1 EV 选题
 
-```python
-EV = total_score × 难度系数 × 0.3^死路次数
+```
+EV = total_score × 难度系数 × 衰减^attempts（从未做过 ×3 零启动倾斜）
 难度系数：easy=1.3  medium=1.0  hard=0.7
+衰减：常规 DECAY=0.3；终局回捞 ENDGAME_DECAY=0.6（收尾阶段对放弃过的题回捞）
+终局判定：is_endgame() = 所有未完成题都至少被放弃过一次
 ```
 
-- 先易后难（easy 加权），先拿能拿的分
-- 死路降权（`0.3^attempts`）：同一题放弃一次，EV 乘 0.3，避免反复撞硬题
+### 6.2 单题停滞决策（decide_stuck_action，阈值按难度分级）
 
-### 6.2 单题停滞决策（按难度分级）
+优先级：`zero_gain >= skip → 'skip' 换题；zero_gain >= hint 且未看过 hint → 'hint'；
+否则 'continue'`。
 
-| 难度 | 看 hint 阈值 | 换题阈值 |
+| 难度 | hint 阈值 | skip 阈值 |
 |---|---|---|
-| easy | 6 轮 | 12 轮 |
-| medium | 8 轮 | 20 轮 |
-| hard | 10 轮 | 25 轮 |
-| 未知 | 8 轮 | 16 轮 |
+| easy | 4 | 8 |
+| medium | 6 | 12 |
+| hard | 8 | 18 |
+| 未知 | 6 | 12 |
 
-- 连续 N 轮零增益且未看 hint → 机械 `get_hint`（看提示）
-- 看完 hint 仍零增益到 skip 阈值 → 机械换题
-- 连续 6 轮无工具调用 → 机械换题（空转放弃，与难度无关）
-- 连续 2 次网络不可达（连接拒绝/超时/无路由）→ 机械换题（防 VPN 死磕）
+- 云存储/SaaS 类指纹题（azure/s3/blob/lambda/firebase 等）hint/skip 阈值整体提前 2/4 轮；
+- `SINGLE_EMPTY_TURNS = 4`：连续 4 轮无工具调用 → 机械换题（空转与难度无关）；
+- hint 后仍零增益 `HINT_GRACE_TURNS = 5` 轮 → `hint_stale` 机械换题（runtime/budget.py 常量）。
 
-### 6.3 容器 SOP
+### 6.3 成本治理（runtime/budget.py，单一事实源）
 
-```
-start_challenge
-  ├─ 成功 → 记录 active_codes
-  └─ ContainerBusy(max active 3)
-       ├─ 关闭最旧活跃容器 → 重试 start
-       └─ 无记录 → 关闭所有 available 残留 → 换题
-```
-
-- 启动前清理残留容器
-- 结束（正常/中断）统一 `finally` 清理 active_codes
-- 单题循环移除 Agent 的 `start/close/list` 工具，防止破坏调度器追踪
+| 层 | 触发 | 动作 |
+|---|---|---|
+| 爆破预算 | 单题爆破调用 ≥ `BRUTEFORCE_MAX_CALLS`（默认 20） | `brute_gate` 拦截，强制定向验证 |
+| hint 预算 | 卡题且 token 达挂起档 `HINT_BUDGET_RATIO`（默认 0.35） | 机械拉 hint |
+| 换脑 switch | 单题 token 达 switch_tokens（按难度分档） | 无感知切换候选模型 |
+| 挂起 suspend | token 达 suspend_tokens 或墙钟达 `SUSPEND_SECONDS`（默认 2700） | 停止本次尝试释放槽位 |
+| 干预上限 | 单题累计干预 ≤ MAX_STUCK_INTERVENTIONS（easy 3 / medium 5 / hard 8） | 超限机械换题 |
 
 ---
 
-### 6.4 成本治理（runtime/budget.py）
+## 7. pentest 数据模型（L0/L1）
 
-治理规则收拢在 `runtime/budget.py`（单一事实源），避免在 config/scheduler/demo_tools/main 多处漂移。目标：Agent 空烧 token 时**机械止损**，而不是一路跑到超时。
+> 规格来源：终极执行计划 v4 第三部分。全部为数据模型/纯函数，无 IO 控制流。
 
-| 层 | 触发条件 | 动作 |
-|---|---|---|
-| 爆破预算 | 单题爆破/枚举调用 ≥ `BRUTEFORCE_MAX_CALLS`（默认 20） | `brute_gate` 拦截后续爆破，强制转向定向验证 |
-| hint 预算 | 卡题（≥2 条失败路径）且 token 达挂起档 `HINT_BUDGET_RATIO`（默认 0.35） | 机械拉 hint（比继续空烧便宜） |
-| 换脑 switch | 单题 token 达 `switch_tokens`（按难度分档） | 无感知切换候选模型（`ESCALATION_MODELS`） |
-| 挂起 suspend | 单题 token 达 `suspend_tokens` 或时钟达 `SUSPEND_SECONDS` | 停止本次尝试、释放槽位，下轮 EV 重选 |
+### 7.1 scope.py —— 授权范围守卫（L5 起点）
 
-挂起恢复：黑板落盘 `blackboard.json`，重选该题时回注上次进度（已完成/已排除结论），不重复劳动。
+- `ScopeConstraint`：allowed_targets（IP/CIDR/域名/`*.` 通配）/ excluded_targets /
+  forbidden_actions（dos/social_engineering/data_theft）/ time_window / max_intensity；
+- `check(target, action, now_iso)`：**排除优先于授权** → 不在授权范围 → 禁区动作 → 时间窗；
+- `from_task_brief()`：解析失败抛 `ScopeParseError`（不静默放行）。
 
----
+### 7.2 target_profile.py —— 目标认知状态机（L1）
 
-## 7. 杀伤链（Kill-Chain）
+Identity（ip/hostname/domains/os/tech_stack）→ PortFinding / WebFinding / CredentialLead
+→ AttackSurface → Hypothesis 队列 → validated AttackChain → DeadEnd 列表 → coverage 统计
+（category → {done,total}）。
 
-SECAI 的渗透执行采用 **5 阶段杀伤链**，对标经典 Cyber Kill Chain / MITRE ATT&CK 方法论，是「从侦察到拿 flag」的核心推进模型。
+关键方法：
+- `surface_diff(other)`：与上一快照的差异是**唯一应进入 LLM 上下文**的部分；
+- `coverage_ratio()`：供 AcceptanceContract 计算覆盖率。
 
-### 7.1 杀伤链对标
+### 7.3 hypothesis.py —— 假设队列（L1）
 
-| SECAI 阶段 | 对标标准杀伤链 | 目标 | 关键活动 | 退出条件 |
-|---|---|---|---|---|
-| `recon` 侦察 | Reconnaissance | 摸清指纹与技术栈 | HTTP头/banner/证书/端口/路径 | 拿到指纹+端口+入口 |
-| `enumerate` 枚举 | Weaponization | 枚举攻击面 | 端口/路径/入口/信任边界 Top-N | 列出攻击面清单 |
-| `detect` 检测 | Delivery | 漏洞检测 | fuzz/detect_vuln 假设验证 | 确认漏洞 |
-| `exploit` 利用 | Exploitation | 漏洞利用 | 拿权限/读文件/执行命令 | 拿到权限/读文件能力 |
-| `post` 后利用 | Actions on Objectives | 拿 flag | 读 /flag、config.php、环境变量 | 提交 flag / finalize |
+- `Hypothesis`：statement / evidence_basis（引用 fact_key）/ expected_outcome /
+  success_criteria / failure_criteria / priority / status
+  （pending/testing/validated/falsified/inconclusive）/ attempts；
+- 纪律：inconclusive 允许换方法重试，attempts 上限 2，超过强制 falsified
+  （由调用方生成 DeadEnd）；
+- 匹配辅助：matches_criteria（contains 等子句解析）。
 
-### 7.2 合法转移图
+### 7.4 deadends.py —— 死路蒸馏（L1）
 
-```
-recon     → enumerate / post
-enumerate → detect / recon
-detect    → exploit / enumerate / post
-exploit   → post / detect
-post      → （终态）
-```
+- `DeadEnd`：path_description / hypothesis_id / falsified_at_step / falsified_at /
+  evidence_snapshot / falsification_method / **overturn_condition**；
+- 注入纪律：ExecutorLoop 每轮只注入 path_description + overturn_condition 摘要
+  （不注入 evidence_snapshot 全文）；
+- `is_overturned_by(new_facts)`：新事实满足 overturn_condition 才允许复活该方向。
 
-- `set_phase` 工具校验合法转移，防止乱跳
-- hooks 里 `_auto_advance_phase` 代码兜底：发现 flag 线索自动切 post，漏洞确认自动切 exploit
-- 任意阶段发现 flag 线索可直切 post（跳过中间阶段，快速收分）
+### 7.5 blackboard/ —— 事实黑板（L0 落地）
 
-### 7.3 顶层流程阶段
+- `categories.py`：PTES fact_key 命名空间（词汇表非控制流）——`recon/ delivery/
+  exploitation/ c2/ objectives/ finding/ chain/ exploit/ poc/`，key 均以 `/` 结尾；
+- `facts.py`：`ProjectFact`（fact_key/category/body/links/confidence/created_by/
+  engagement_id），**写入即校验**：fact_key 必在 category 命名空间、必须有 ≥1 条关联边、
+  body 非空 —— 「未记录事实不得宣称漏洞」；
+- `store.py`：`BlackboardStore`（默认 `pentest.db`）五表：`target_profiles / hypotheses /
+  dead_ends / blackboard / events`（黑板上事件表供 ApprovalGate 等审计落库）；
+  **`diff_since()` 是黑板上下文注入的唯一来源**；`record_event()/query_events()` 供审计。
 
-```
-legislate（立法）→ assign（派任）→ execute（执行）→ report（收尾）
-```
+### 7.6 contract.py —— 验收契约（Verifier 输入）
 
-杀伤链（recon→post）是 `execute` 阶段的内部子状态机，驱动 Executor 的 instructions 按阶段动态切换目标与焦点。
-
----
-
-## 8. 上下文生命周期管理
-
-### 8.1 四层上下文架构
-
-| 层 | 内容 | 生命周期 |
-|---|---|---|
-| **L1 稳定层** | 任务书、宪章、工具 schema | 全程不变 |
-| **L2 工作记忆** | 对话历史滑动窗口 | 压缩裁剪 |
-| **L3 长期记忆** | 压缩摘要 + 黑板 + 死路蒸馏 | 跨轮持久化 |
-| **L4 外置存储** | artifacts/ 文件 | 按需读取 |
-
-### 8.2 Token 压缩
-
-- `COMPACT_TOKEN_THRESHOLD = 30000`（估算，字符/2.5）
-- 超阈值触发 Compactor 把旧历史压成摘要
-- 摘要上限 `COMPACTION_SUMMARY_CHARS = 2000`，防二次膨胀
-- `_split_for_compact` 回退到回合边界，保证 tool_calls 配对不拆散（避免 400）
-
-### 8.3 断点续跑
-
-- `state.json` 持久化 TaskContext 全字段（含 phase/plan/黑板/token/zero_gain）
-- `session.sqlite` 持久化会话历史
-- `--resume` 恢复；调度器模式下题目进度天然在平台侧（`is_completed`）
-
-### 8.4 信息增量信号（reward）
-
-`hooks._score_tool_result` 纯规则打分：
-
-- **正向（+1）**：flag / 漏洞确认 / 登录成功 / 响应差异 / HTTP 状态码 / 开放端口
-- **中性（0）**：常规侦察、工具失败（default-soft，交 LLM 决策）
-- 无负向（对齐 sec-agent 的 default-soft：失败是信息不是死路）
-
-该信号统一驱动 **replan**（连续 5 轮零增益）和 **判停**（连续 50 轮零增益兜底）。
-
-此外还有独立的**网络不可达检测**（`hooks._is_network_unreachable`）：
-
-- 识别连接拒绝 / 超时 / 无路由 / DNS 失败
-- 连续 2 次命中 → 判定本题不可达，机械换题
-- 解决「VPN 断开后 Agent 死磕同一题 30+ 轮」的实战丢分问题
-
-### 8.5 提交铁律
-
-`_spill_output` 在截断前先扫描全文 flag：
-
-```
-shell / http_request / fuzz 输出 → 先扫 flag{...} → 截断外置
-   └─ 扫描到 flag + 已知 current_code → 机械 submit_flag
-       └─ 回执拼在返回尾部："[系统·提交铁律] flag → correct=true"
-```
-
-解决「flag 埋在截断点之后 LLM 看不见」和「提交靠 LLM 自觉」两个问题。
-
-### 8.6 全局黑板
-
-- 结构：`{key: {value, status, ts, verified, evidence, supersedes}}`（status: pending/doing/done/failed）
-- LRU 淘汰（`BLACKBOARD_MAX_ENTRIES = 50`，优先淘汰 done/failed）
-- 注入系统提示只列 key/状态/验证标记/时间摘要，完整值用 `blackboard get` 按需取
-- 关键进展（登录成功/确认漏洞/flag 路径）强制写黑板，压缩后靠黑板恢复记忆
-- **结构化记忆**：`verified` 标记是否已验证；`evidence` 附证据（判死必须附证据）；`supersedes` 指向被取代的旧 key
-- **落盘持久化**：`blackboard.json` 跨尝试/挂起恢复，重试同一题回注上次进度，不重复劳动
-
-### 8.7 死路蒸馏
-
-- Reporter 输出「死路蒸馏」清单，追加进 `field_notes.md`
-- 下次执行注入 `field_notes` 尾部，实现「死路不重复」接力
+`AcceptanceContract`：required_deliverables（kind: attack_surface_map / validated_chain /
+dead_end_coverage / report，minimum 默认 1）+ minimum_coverage（默认 0.8）+
+max_dead_end_ratio（默认 0.5）。`evaluate(profile)` 纯函数返回
+ContractCheckResult（passed/reasons/coverage/dead_end_ratio/fulfilled/required）。
+死路占比过高 = 覆盖率造假信号。
 
 ---
 
-## 9. 工具体系
+## 8. L5 护栏层（Scope / 审批 / 沙箱）
 
-### 9.1 核心工具（常驻）
-
-`CORE_TOOL_NAMES`（14 个，任何任务都需要）：
+### 8.1 执行链
 
 ```
-shell, http_request, read_artifact, write_file, finalize, checkpoint,
-blackboard, set_phase, find_skills, fuzz, spawn_subtask, parallel_shell,
-enable_tool, list_disabled_tools
+ScopeCheck（scope.check 逐 token 越范围硬拦截）
+  → sandbox.confine（policy 命令分级 + bwrap 包装，fail-closed）
+  → (T3) ApprovalGate（高危调用暂停等人审）
+  → 执行 → ToolAdapter.parse_output 结构化提取 → 黑板/状态更新
 ```
 
-### 9.2 工具分组（按需加载）
+集成点：
+- `core/task_context.py::L5GuardrailConfig`（task_id/scope/target/policy/backend/approval，
+  鸭子类型避免 core→pentest/sandbox 静态依赖；None = 旧模式透传）；
+- `core/tool_pipeline.py` 统一工具管线挂护栏中间件；
+- `pentest/presets/pentest_preset.py` 注册护栏语义（Tier 词表 + verifier + knowledge 分级）。
 
-| 组 | 工具 | 用途 |
+### 8.2 ApprovalGate（pentest/approval.py）
+
+- 词表 `DEFAULT_TOOL_TIERS`：shell/run_batch/parallel_shell/exploit_fuzz = T3；
+  fuzz/run_tool/spawn_subtask = T2；未登记默认 T1；T4 = forbidden 由
+  ScopeConstraint.forbidden_actions 拦截（与工具名解耦）；
+- `request()` 唯一入口：T1 直接放行不产生记录；T2/T3 有 deny 缓存 → 结构化拒绝；
+  有 grant 缓存 → granted_cached 放行；否则落 `ApprovalRecord(pending)` + 事件
+  `approval/requested` + 返回「暂停执行」；
+- `grant()` 只能裁决 pending；事件 `approval/resolved`；
+- 审计双写：EventBus + （可选）SQLite events 表；线程安全（锁内变更、锁外 emit/persist）。
+
+### 8.3 sandbox/（fail-closed 门面）
+
+裁定表（`sandbox/__init__.py::confine`）：
+
+| tier \ backend | 可用 | 不可用 |
 |---|---|---|
-| `web` | distinguish, web_search | 差分实验、联网搜索 |
-| `seccli` | list_tools, get_tool_spec, run_tool | 92 个本地安全 CLI |
-| `poc` | search_cve, get_poc | CVE/POC 检索 |
-| `vuln` | list_vulns, detect_vuln, get_payload | 漏洞类型检测 |
-| `knowledge` | list_knowledge, get_knowledge | 知识库查询 |
-| `vpn` | connect_vpn | VPN 启用 |
-| `platform` | check_vpn, list_challenges, start_challenge, get_hint, submit_flag, close_challenge | 平台 API |
+| danger | `SandboxBlockedError`（拦截清单，永不执行） | `SandboxUnavailableError`（禁止裸跑） |
+| 其余 | ConfineResult（写档按 policy 决定工作区可写） | `SandboxUnavailableError`（禁止裸跑回退） |
 
-### 9.3 按需加载机制
+- `policy.py` 三档：read-only / workspace-write / danger（写即危险）。danger 正则 +
+  子串词表覆盖 `rm -rf /`（任意 r/f 顺序）、`--no-preserve-root`、mkfs、dd 写裸盘、
+  根递归 chmod/chown、shutdown/reboot/halt/poweroff、fork 炸弹、`>/dev/sd*`；
+- `bubblewrap.py`：`--unshare-all --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp`
+  （+ writable 时 `--bind <workdir>`）；启动失败（stderr 以 "bwrap: " 开头）抛
+  `SandboxUnavailableError`，禁止降级裸跑；`--unshare-all` 含新 net namespace → 沙箱内无外网；
+- `selfcheck.py`：`python -m sandbox.selfcheck`（bwrap 二进制 / 真实 userns 探针 /
+  危险词表 ≥6 条 / 拔后端后 danger 命令抛 SandboxUnavailableError）。
 
-- 核心工具常驻，非核心工具挂 `is_enabled` 动态开关
-- `enable_tool` 按组/按名启用，`list_disabled_tools` 查看未挂载
-- 默认启用：核心 + platform + vpn + seccli；web/poc/vuln/knowledge 按需
+---
 
-### 9.4 特色工具
+## 9. L4 知识层（三路知识获取）
 
-| 工具 | 说明 |
+### 9.1 统一接口（base.py）
+
+`KnowledgeSource` 协议（async query(question, context) → KnowledgeResult）+
+`KnowledgeResult`（answer/source_type/source_refs/confidence）。设计纪律：失败/降级一律
+低置信度 + 空 source_refs 表达，不抛错打断检索。
+
+### 9.2 路由引擎（engine.py）
+
+```
+1. L4a local_rag（离线零成本）——总是先查；
+2. L4b web_search（T1 自动）——本地最高置信度 < high 且 allow_web=True 才触发；
+3. L4c web_fetch（T2 审批）——永不自动，只抓调用方显式传入的 fetch_urls。
+合并：跨源去重 → 置信度降序（high>medium>low）→ 同置信度本地优先；
+单路独立 asyncio.wait_for 超时，超时/异常吞掉不影响其他路。
+```
+
+### 9.3 三源实现
+
+| 源 | 说明 |
 |---|---|
-| `fuzz` | 代码级差分模糊测试（并发 + 响应归一化归组），替代手写 shell 循环 |
-| `distinguish` | 差分实验：多探针对比响应差异定位攻击面 |
-| `spawn_subtask` | 声明独立子任务，主循环 `asyncio.gather` 并发 |
-| `connect_vpn` | 后台启用 VPN，验证 tun0 隧道真正建立 |
-| `read_artifact` | 读取外置到 artifacts/ 的工具输出全文 |
+| `local_rag.py` | SQLite FTS5（knowledge_items + knowledge_fts，key/content 关键词索引；无 FTS5 退 LIKE）+ 可选 embedding 列（无向量自动退纯关键词）；key 精确命中（COLLATE NOCASE，支持 CVE 编号）置顶 |
+| `web_search.py` | DeepSeek Anthropic 兼容端点（base `https://api.deepseek.com/anthropic`）`web_search_20250305` 服务端工具；复用 `DEEPSEEK_API_KEY`，未配置 available=False 优雅降级；解析 content 块 web_search_tool_result 来源列表 |
+| `web_fetch.py` | HTML→Markdown（标准库 parser）；`ssrf_check` 纯函数：URL 主机解析 IP，全局公网放行，保留段（环回/RFC1918/CGNAT/链路本地/组播/IPv6 ULA 等）要求解析 IP 显式在 ScopeConstraint.allowed_targets；域名多 IP 任一被拒 → 整体拒绝（防 DNS rebinding）；解析失败 → 拒绝 |
 
-### 9.5 本地安全 CLI（92 个）
+### 9.4 本地知识源（sources/）
 
-`arsenal/tools/*.yaml` 声明式注册表，涵盖：nmap、sqlmap、ffuf、nuclei、gobuster、hydra、dirsearch、masscan、nikto、wpscan、metasploit、john、hashcat、gdb、radare2、angr、pwntools、slither、mythril 等。
+`cve_db`（CVE/Nuclei 索引）、`tool_manuals`（工具手册）、`methodology`（方法论卡片）、
+`negative_findings`（负面知识：R4.5 阶段自带内存后端 register/search；
+`connect_learning_store()` 在 R6 后经 lazy import 同步 L6 NegativeKnowledge 表，
+探测失败返回 False 不抛错——负面知识检索不成为执行循环硬依赖）。
 
-- `arsenal/registries/sec_tools.py` 负责加载、构建命令、执行
-- `list_tools` / `get_tool_spec` / `run_tool` 结构化调用
-- 启动时可 `shutil.which` 普查可用性（P2 优化）
+> 接入现状说明：知识层以可单测的库形态落地（`tests/unit/knowledge/` 覆盖各源 + SSRF），
+> 供执行循环/编排层注入；无 key 环境全链路离线可用（local_rag 本地索引 + 降级结果）。
 
 ---
 
-## 10. Skills 技能体系
+## 10. L6 学习层（蒸馏与成长）
 
-### 10.1 结构
+### 10.1 数据模型（models.py）
 
-`arsenal/skills/` 目录，64 个 Markdown 文件（顶层 + 分类子目录）：
+- `Lesson`（情景→语义记忆）：title + context_tags（tool:sqlmap / phase:exploitation /
+  tech:wordpress）+ content；applied_count 由 LearningRetriever 命中后回写；
+- `PlaybookStep / Playbook`（程序记忆）：仅当完整 AttackChain 被 validated 才蒸馏；
+  结构 = preconditions（目标指纹特征）+ steps（tool + params_template + expected_check）
+  + expected_checks；success_count/fail_count 供复用降权或标记失效；
+- `NegativeKnowledge`（负面知识）：deadEnds 跨目标泛化；overturned 由新证据推翻后置 True
+  ——只标记不物理删除（保留复现历史审计）；
+- `GrowthMetrics`：单 engagement 成长度量（输出前端 LearningPanel）。
+
+### 10.2 SQLite store（四表）
+
+`LearningStore`（默认 `learning.db`）：lessons / playbooks / negatives / growth_metrics。
+upsert 同主键 INSERT OR REPLACE（蒸馏幂等可重放）；计数走 bump/record 增量；
+search_lessons：tag 过滤（精确 / "tool:" 前缀 / 段值）∪ 关键词词元覆盖打分；
+`iter_negatives(db_path)` 供知识层 `negative_findings.connect_learning_store` 对接
+（库文件缺失抛 FileNotFoundError，连接失败返回 False）。
+
+### 10.3 蒸馏引擎（distiller.py）
+
+`EngagementTrace`（事件日志 + blackboard + profile/deadEnds）→
+`{"lessons": [...], "playbooks": [...], "negatives": [...], "metrics": {...}}`；
+`validate_distillate()` schema 校验；`Distiller.distill()` 永远产出 schema 合法结果。
+
+- LLM 蒸馏为可注入的一次性低频调用（async callable，本模块不 import LLM SDK）；
+- 无 LLM / LLM 抛错 / 输出 schema 无效 → **规则回退（离线保证可用）**：
+  Lessons = 工具异常事件按工具聚合；Playbook = 仅 validated AttackChain 存在时生成
+  （前提 = 目标指纹，与 retriever.fingerprint_tokens 同口径）；Negatives = deadEnds
+  泛化；Metrics = compute_growth_metrics 机械化计算。
+
+### 10.4 检索器（retriever.py）与注入点
+
+`LearningRetriever.retrieve(profile, hypothesis)` → LearningContext，三路全本地
+（关键词/指纹匹配，无 LLM）：
+
+1. 负面命中 → 拦截/跳过并给原因（优先级最高，已推翻项自动排除）；
+2. Playbook 前提命中 → 步骤模板注入；
+3. Lesson 命中 → 注意事项注入（回写 applied_count）。
+
+`fingerprint_tokens(profile)` 为公开指纹词表（tech:/os:/service:/version:），
+distiller 与 retriever 共用，保证「写入-检索」两端口径一致。
+
+> 接入现状：本层按设计面向 ExecutorLoop pre-step 注入与 engagement 结束蒸馏提供
+> 完整可用的组件库 + 43 条单测；调用方按需组装（不破坏默认离线全绿测试）。
+
+### 10.5 成长度量（metrics.py）
+
+`compute_growth_metrics`：hypothesis_hit_rate / deadend_overturn_rate /
+inconclusive_rate / token_per_validated_chain / playbook_reuse / lesson_injection；
+overturned 数用 blackboard 新事实对 deadEnd.overturn_condition 的满足情况机械化判定。
+
+---
+
+## 11. Verifier 双核
+
+`harness/runner/verifier.py`（裁决 #1：不做硬架构，可插拔）。
+
+- 协议：`async verify(profile: TargetProfile, contract: AcceptanceContract, events) -> Verdict`；
+- `Verdict` 五值：`verified_done`（契约全过，可出报告）/ `continue`（有实质进展未达验收）/
+  `redirect`（当前方向无进展/攻击链为零且覆盖不足）/ `corrective`（死路占比过高=造假信号，
+  先纠正再验证）/ `need_human`（机械无法裁决需人工）；
+- `MechanicalVerifier`：纯函数零 token（默认），只用 `AcceptanceContract.evaluate()`
+  结果按确定性规则映射；无 IO、无 LLM；
+- `LLMVerifier`：低频唤醒（唤醒策略由调用方按触发条件控制）——事件日志尾部 + 黑板摘要 +
+  机械初判 → llm 回调 → parse_verdict 归一化；llm 为空/解析失败 → 回退机械初判（fail-safe）；
+- 触发注册：`pentest/presets/pentest_preset.py`（`DEFAULT_VERIFIER="llm"` +
+  `FALLBACK_VERIFIER="mechanical"`；触发条件 phase_complete / contract_80pct /
+  stall_5_steps）。
+
+---
+
+## 12. server + 前端（Web 控制面）
+
+### 12.1 server 包（Starlette + uvicorn）
+
+| 模块 | 职责 |
+|---|---|
+| `server/__init__.py` | 包加载时自载项目根 `.env`（load_dotenv）；握手身份 SERVER_NAME=SECAI-PT / SERVER_VERSION=4.0.0 |
+| `server/main.py` | app 组装 + 路由表 + demo fixture 安装 + lifespan（ticker 启停/统一收尾）；`python -m server.main --port 8700` |
+| `server/api.py` | 七方法 RPC。业务错误恒 HTTP 200 + `{ok:false,error:{code,message,details}}`；describe=严格握手；run=无 LLM Key → `llm_key_missing`，有 Key → run_spec 归一 → 逐目标接 pentest_target runner；steer=会话指令注入（managed 会话）；respond=审批裁决（rpcId 回响）；report=桥接 R5 报告引擎 |
+| `server/ws.py` | `/api/events.mux`（MuxFrame：session/event / subscribed / projection / queue / approval/requested / approval/resolved / jobs）+ `/api/events.host`（HostFrame：session-added / removed / status / engagement-changed）。连接后先回放快照（首帧基线），持续扇出 live 帧；客户端上行 → 1008 |
+| `server/state.py` | AppState：SessionManager(shared_bus=BUS) 桥接 + BUS 订阅→SessionEvent 落账→Hub 扇出 + 审批注册表 + engagements/sessions 编排记录 + demo ticker（`SECAI_DEMO_TICK_SECONDS` 可调） |
+| `server/run_spec.py` | /api/run 请求归一：新式 `{task_brief, targets, scope, settings}` + 兼容旧式 allowedTargets；预算护栏 max_rounds≤10(默认3)/墙钟≤300s(默认60)/审批等待≤45s 且必短于墙钟/token 硬顶 100k；解析失败抛 RunSpecError |
+| `server/fixture.py` | 内置 demo engagement：三会话（sess-a-demo running 周期性活动 / sess-b-demo awaiting_approval 挂 approval/requested / sess-c-demo completed 全量投影），与前端 demo.ts 同一叙事；engagementId=live-engagement 与前端 LIVE_ENGAGEMENT_ID 对齐 |
+| `server/static.py` | GET / → `apps/web/dist`（已知文件 FileResponse + 其余 SPA fallback + 防路径穿越）；dist 缺失 404 提示先 `npm run build` |
+
+### 12.2 真实执行 runner（harness/runner/pentest_target.py）
+
+`/api/run` 经 SessionManager 每目标独立驱动：
 
 ```
-arsenal/skills/
-├── unknown_target_sop.md     # 未知目标通用 SOP
-├── file_read_oob.md          # 文件读取越权
-├── filter_bypass.md          # 过滤绕过
-├── evasion_dual_track.md     # 免杀双轨
-├── sandbox_escape.md         # 沙箱逃逸
-├── tcp_binary.md             # TCP 二进制协议
-├── ai_security.md            # AI 安全
-├── arsenal_index.md          # 武器库导航（开局注入）
-├── binary/                   # 二进制（pwn_exploitation/static_analysis）
-├── ai_security/              # AI 安全（tool_misuse）
-├── blockchain/               # 区块链（smart_contract_security）
-├── cloud/                    # 云安全
-├── coordination/             # 协调
-├── custom/                   # 自定义技能
-├── frameworks/               # 框架
-├── protocols/                # 协议
-├── reconnaissance/           # 侦察
-├── scan_modes/               # 扫描模式
-├── technologies/             # 技术栈
-├── tooling/                  # 工具使用
-└── vulnerabilities/          # 漏洞（23 个 Web 漏洞技能）
+runner(ctx) 循环（≤max_rounds 轮 / ≤wallclock 墙钟）：
+  drain steer_queue（人工 /api/steer 指令优先）
+  → LLM 单轮（agents SDK Runner.run，FAST_MODEL，SQLiteSession 保历史）
+  → 工具选择：blackboard(set/list) · run_recon_tool（ScopeCheck 逐目标硬拦截
+      → bridge.request_approval（approval/requested 帧）→ wait_for_approval 唤醒
+      → 只读白名单执行：nmap/httpx/whatweb/dnsx/subfinder/certsh/searchsploit/arp-scan）
+      · complete_task（收敛结束）
+  → 事件经 BUS（session_id 键隔离）→ state 落 SessionRec.events + 扇出 mux WS
+审批等待超时 → 自动拒绝（无人应答也收敛）
 ```
 
-### 10.2 渐进披露（Progressive Disclosure）
+### 12.3 前端（apps/web）
 
-- 初始技能包在角色派任时注入
-- 运行中 hooks 扫描工具输出，命中触发词 → 追加技能到 `disclosed_skills`
-- `find_skills` 工具可主动检索并解锁
-- 下一轮动态 instructions 自动带上新技能（避免一次性塞 58 篇撑爆上下文）
-
----
-
-## 11. 角色体系
-
-### 11.1 角色定义（9 个）
-
-`arsenal/roles/*.md`，frontmatter（name/pattern/playbooks）+ 思维风格正文：
-
-| 角色 | 匹配 pattern（前缀锚定） | 定位 |
-|---|---|---|
-| `web_auditor` | Web 应用 | Web 应用审计员 |
-| `binary_protocol_analyst` | f1/二进制/tcp | 二进制/协议分析师 |
-| `sandbox_escape_expert` | 沙箱/e2 | 沙箱逃逸专家 |
-| `evasion_craftsman` | 免杀/e3/检测 | 免杀规避工匠 |
-| `boundary_penetration` | WAF/边界/e1 | 边界渗透 |
-| `lateral_movement` | 横向移动 | 横向移动 |
-| `privilege_escalation` | 提权 | 提权 |
-| `ai_security_tester` | AI 安全 | AI 安全测试员 |
-| `tscbench` | TSec/Benchmark/跑分 | TSecBench 跑分专员 |
-
-### 11.2 派任机制
-
-- `assign_role(code, description)` 位于 `arsenal/registries/role_registry.py`：先按 `^` 前缀锚定题型，再按描述关键词，最后 fallback 通用侦察兵
-- **题级派任**：调度器每 start 一题，用 `unique_code` 前缀 + 描述派任，注入该题专属 playbook（报告 P0-5）
-- 角色 = 思维风格模板 + 初始技能包，与阶段机正交分离
+- 技术栈：React 19 + TypeScript + Vite + CSS Modules + `--secai-*` Design Token
+  （禁 Tailwind/SCSS）；脚本 dev/build(tsc -b && vite build)/lint(oxlint)/preview；
+  开发态 vite.config.ts 代理 `/api`（含 WS）→ `127.0.0.1:8700`；
+- 通信契约（`src/connection/api.ts`）：RPC 上行 `{rpcId, method, payload}` +
+  双 WS 纯下行帧协议；ConnectionController（`connection.ts`）：双流握手
+  （describe + 双 WS onOpen，3s 超时兜底）、指数退避重连（500ms×2 封顶 10s ±50% 抖动）、
+  HTTP RPC 客户端（transport/business 双层错误）；
+- 运行层（`src/runtime/`）：demo.ts（内嵌 mock 帧驱动，90ms 步进三会话交错投递）/
+  appRuntime.ts（`DEMO_MODE` 常量切换离线 DEMO 与真实通道；true=createDemo，
+  false=ConnectionController）/ engagement/session/projections 状态对象；
+- UI：三栏布局（conversation 对话 + sidebar 目标列表 + details 详情）：
+  ApprovalCard（审批）/ HypothesisQueue（假设队列）/ DeadEndList（死路清单）/
+  EvidenceChain（证据链）/ PortScanResult / ToolOutputPanel / ReportPreview /
+  LearningPanel（成长面板），主题三态、拖拽分栏。
 
 ---
 
-## 12. 漏洞检测体系
+## 13. CTF 兼容（profiles/ctf_legacy 收敛）
 
-### 12.1 漏洞类型模块（9 个）
+R4 H12：CTF 专属假设从主循环/工具层全部收敛到 `profiles/ctf_legacy/`：
 
-`arsenal/vulns/*.yaml`，每种漏洞一份结构化检测规范：
+| 收敛前 | 收敛后 |
+|---|---|
+| app.main 读平台模板与凭证常量 | `profiles/ctf_legacy/task.py::build_default_task()`（读 prompts/tsec_task.txt 替换占位符） |
+| demo_tools/tools/domains 内嵌提交铁律/通关复核 | `profiles/ctf_legacy/platform.py`（`_submit_flags_if_any` / `_is_completed` / `_late_bind_submit` / `finalize`） |
+| 多处构造 PlatformClient | `bench_platform/platform_client.py::get_platform_client()` 模块级单例（唯一构造点），`platform_configured()` 判定凭证 |
 
-```
-SQLI, XSS, SSTI, LFI, RCE, IDOR, SSRF, XXE, UPLOAD
-```
+主循环 grep 已无 `BENCHMARK_TOKEN` 直接引用；CTF 跑分仍走 `python -m app.main`（调度编排
+留在 app/main.py，单题闭环在 harness/runner）。
 
-每份 YAML 含：name / description / need_detect / prompt / payloads
-
-### 12.2 检测工具
-
-- `list_vulns`：列出内置漏洞类型
-- `detect_vuln(vuln_type)`：取某类型的标准检测规范 + payload
-- `get_payload(payload_type)`：取 payload 字典
-
-### 12.3 Payload 字典（10 个）
-
-`arsenal/payloads/*.txt`：`sqli / lfi / path / xss / ssti / rce / idor / ssrf / upload / xxe`
-
-配合 `fuzz` / `parallel_shell` 使用。
+配套资产库 `arsenal/`（声明式本地资产）：roles/（17 角色）、skills/（97 技能 md）、
+tools/（92 CLI YAML，经 `arsenal/registries/sec_tools.py` 装载执行）、vulns/（9 漏洞模块）、
+pocs/（29 POC）、knowledge/（5 条目）、payloads/（字典+脚本）+ registries/（加载器）。
 
 ---
 
-## 13. POC 与知识库
+## 14. 关键设计决策与教训
 
-### 13.1 POC（31 个有效 POC）
+### 14.1 已落地关键决策（v4 批次摘要）
 
-`arsenal/pocs/` 目录，`search_cve` 检索 + `get_poc` 取全文，含利用原理/步骤/载荷/验证方式。
+1. **单题循环类化（R1，H1）**：闭包状态机 → `ExecutorLoop + RunnerState`，可直驱单测；
+   工具巨石（H2）按域拆到 `tools/domains/`（11 域 + registry），demo_tools.py 收敛为
+   re-export shim。
+2. **动态上下文增量注入（R2，H3）**：charter/plan 版本化、field_notes 仅首轮、
+   黑板 diff 注入（第 10 轮 ≤40%）。
+3. **真实统计替代硬编码（R2，H4）**：zero_gain_events 看板聚合 cost_report 真实值。
+4. **session 物理清理（R2，H5）**：sub_*.sqlite 句柄登记 + 兜底 close + glob 删除。
+5. **Executor 工作纪律 6 条收口（R2，H6）**：语义去重，约束不删。
+6. **破局链（R2，H7）**：惰性点 ±5 步回放自动导出 + 前提证伪级联回收。
+7. **执行安全（R3，H9/H10）**：sandbox bwrap fail-closed（rm -rf / 真实拦截验证）；
+   ApprovalGate T1 自动/T2-T3 审批/T4 禁止，审计入事件总线 + events 表。
+8. **Verifier 双核（R3）**：Mechanical 纯函数默认 + LLM 低频，fail-safe 回退。
+9. **预设注册 + 多目标（R4，H12）**：pentest/presets + harness/session_manager；
+   CTF 提交/终局收敛 profiles/ctf_legacy；平台客户端单例收口。
+10. **知识层（R4.5）**：本地 RAG + 联网搜索 + 网页抓取三路（web_fetch 过审批门 + SSRF 防护）。
+11. **工具层补全（R4.5）**：11 个命令型适配器 + 参数注入校验 + 字段级解析。
+12. **质量门 + 报告引擎（R5）**：gate.sh（ruff + unit + replay，无网）+ 纯函数报告投影
+    （含已排除攻击面负面章节 / 跨目标链 / 快照回放）。
+13. **学习层（R6）**：四蒸馏物管线（LLM 可注入 / 规则回退离线可用）+ 四表 SQLite +
+    pre-step 三路检索 + GrowthMetrics 成长度量。
+14. **server 面（R3-R4）**：RPC 七方法 + mux/host 双 WS 纯下行 + dist 静态托管 +
+    demo fixture 离线三态；/api/run 接真实执行器（ScopeCheck→T2 审批→只读工具→黑板→
+    BUS 扇出），run_spec 预算护栏（默认 ≤3 轮/60s/审批超时自动拒）；服务端自载 .env。
+15. **前端（F0-F3）**：双 WS 通信层与帧契约 → 三栏拖拽 + 主题三态 + 渗透组件全集 +
+    DEMO 驱动（无 LLM key 可展示）。
+16. **E2E 隔离**：真实 LLM 联调测试移入 tests/e2e + e2e marker，默认 pytest/gate 不触发
+    真实 API，显式 `-m e2e` 才跑。
+17. **依赖清单基线**：pyproject（project secai 0.1.0 / pytest / ruff py311）+ requirements.txt；
+    gate.sh 覆盖受控架构路径，历史存量违规不进本门（白名单哲学，只减不增）。
 
-> 注：早期曾导入 1967 个只有元数据无 poc 段的死数据，已清理；后续持续沉淀有效 POC。
+### 14.2 实战教训（保留自 v1.2，仍有效）
 
-### 13.2 知识库（5 个条目）
-
-`arsenal/knowledge/` 目录，`list_knowledge` 看简介 + `get_knowledge` 按 id 取全文（如 get_flag / post_exploit / waf_bypass）。
-
----
-
-## 14. 前端可视化
-
-`static/`（三页）+ `app/server.py`（标准库 HTTP + SSE 实时流）：
-
-| 页面 | 路由 | 用途 |
-|---|---|---|
-| 对话 / 任务流 | `/` | 左对话流（`dir=web`）+ 右任务流（`dir=generic`），实时展示 Agent 思考/执行 |
-| 监控页 | `/monitor` | 任务生命周期（status/answer/事件数/最新活动），按题追踪 |
-| 智能体页 | `/agents` | 按 kill-chain 展示 5 个智能体 + 各阶段对应工具/流程 |
-
-- 事件类型：`llm_call / thought / tool / tool_result / reward / phase_changed / net_unreachable / token / skill_disclosed / agent_start / agent_end`
-- 文本不截断，实时展示阶段切换、token 预算、信息增量、网络不可达
-- 事件经 `events.py` 总线 → `db.py` 落库（tasks/events 表），监控页经 `/api/tasks` / `/api/events` / `/api/stream-db` 追溯历史
-
-### 界面截图
-
-**启动界面（对话 / 任务流）**
-
-![启动界面](img/启动.png)
-
-**实时流界面**
-
-![实时流](img/实时流.png)
-
-**监控界面**
-
-![监控](img/监控.png)
-
-**智能体界面（kill-chain）**
-
-![智能体](img/智能体.png)
-
----
-
-## 15. 目录结构
-
-```
-SECAI/
-├── app/
-│   ├── main.py             # 主编排（立法→规划→调度→报告 + 子任务并发 + 成本治理 + 自适应容器）
-│   └── server.py           # SSE 实时流服务（三页 + 监控 API）
-├── core/
-│   ├── agents_def.py       # Agent 定义 + 动态 instructions + 子任务结束协议 + 教练
-│   ├── context_manager.py  # 上下文压缩 + 断点续跑
-│   ├── events.py           # 进程级事件总线（内存历史 + 订阅者分发）
-│   ├── hooks.py            # 事件流 + 渐进披露 + 增量打分 + 网络不可达检测
-│   ├── task_context.py     # TaskContext 状态
-│   └── charter.py          # 宪章落盘
-├── bench_platform/
-│   ├── platform_client.py  # 平台 SDK 语义
-│   ├── platform_tools.py   # 平台 API 工具
-│   └── scheduler.py        # 跑分调度器（EV选题/停滞决策，纯函数）
-├── runtime/
-│   ├── budget.py           # 成本治理（爆破/hint 预算 + 换脑/挂起）
-│   ├── status.py           # 阶段状态机
-│   ├── deadline.py         # 比赛硬总时限
-│   ├── model_pool.py       # 多模型灾备池（额度/失败切换）
-│   ├── stuck.py            # 模型惰性治理（自救 + 切换 + 压缩）
-│   └── log.py              # 统一日志（终端+文件双写，级别/颜色）
-├── adapters/
-│   ├── config.py           # env 配置 + 模型
-│   └── db.py               # SQLite 落库（tasks/events 表，WAL，线程安全）
-├── solvecraft/
-│   └── solution_templates.py   # 解法模板（solved 题正向沉淀 + 同指纹题复用）
-├── arsenal/                # 声明式武器库（本地化、可扩展）
-│   ├── roles/              # 9 个角色定义
-│   ├── skills/             # 64 个技能（含子目录）
-│   ├── tools/              # 92 个 CLI 工具 YAML
-│   ├── vulns/              # 9 个漏洞检测模块
-│   ├── pocs/               # 31 个有效 POC
-│   ├── knowledge/          # 5 个知识条目
-│   ├── payloads/           # 10 个 payload 字典
-│   └── registries/         # 各类 registry 加载器
-│       ├── role_registry.py
-│       ├── skill_registry.py
-│       ├── sec_tools.py
-│       ├── vuln_registry.py
-│       ├── poc_registry.py
-│       └── knowledge_registry.py
-├── demo_tools.py           # 执行工具 + 提交铁律 + 注入防御 + 按需加载
-├── prompts/                # 任务模板（tsec_task.txt）
-├── static/                 # 前端三页（index/monitor/agents）
-├── docs/                   # 文档
-├── data/                   # 运行时数据（agent.db + worker_generic/ 下含 worker_{code}/ 题级独立工作区）
-├── tests/                  # 单元测试（预留）
-├── scripts/                # 辅助脚本（预留）
-├── config/                 # 配置模板（预留）
-├── .env                    # 凭证配置
-└── requirements.txt
-```
-
----
-
-## 16. 关键设计决策与教训
-
-### 16.1 已落地的关键决策
-
-1. **角色/阶段正交分离**：流程阶段（recon→post）合并进 phase 状态机，角色只保留题型风格，避免"阶段角色永不触发"（报告 P0-5）。
-2. **单 Executor + 阶段状态机**：替代多 Agent 分治，减少上下文切换成本。
-3. **Strategist 一次性立法+规划**：Manager/Planner 并入 Strategist（`build_strategist` 工厂化，宪章缓存幂等）；卡壳时 `fork_analyze` 复盘一次写 next_directive，再 3 轮零增量机械换题（破局链两级收敛，coach/plan-mode 默认关闭可复活）。
-4. **信息增量信号统一判停/replan**：从"看阶段切换"升级为"看产出质量"。
-5. **提交铁律代码机械化**：flag 扫描 + 机械提交，不靠 LLM 自觉（报告 P0-1）。
-6. **调度器零 LLM 编排**：选题/换题/看 hint/容器 SOP 全代码（报告 P0-2/P0-4）。
-7. **平台异常上抛**：TaskEnded/TaskNotFound 标记 `ctx.fatal` 让主循环终止（报告 P0-2）。
-8. **成本治理归拢单一事实源**：爆破/hint 预算、换脑、挂起收拢到 `budget.py`，避免规则多处漂移。
-9. **事件总线 + SQLite 落库**：hooks 只发射事件，`events.py` 分发、`db.py` 落库，与 events.jsonl 双写留痕，监控页可追溯历史。
-10. **子任务上下文隔离**：`finish_subtask` 结构化结束协议，主 Agent 只拿 summary/findings/flag，不接触子任务海量输出。
-11. **结构化记忆（黑板）**：`verified/evidence/supersedes` 三字段 + 落盘持久化，判死必须附证据、被取代指向旧 key。
-12. **Prompt 注入防御**：工具输出统一检测注入特征，只检测不修改原文，命中追加安全提醒。
-13. **任务模板外置**：跑分任务模板抽离到 `prompts/tsec_task.txt`，与编排代码解耦。
-14. **自适应容器并发**：不硬编码容器上限，持续 start 直到 container_busy 被拒，并发度随平台真实上限收敛；close 检查返回值 + 失败重试，堵住名额静默泄漏。
-15. **通关机械判决**：correct=true 后复核平台 is_completed，通关即退出不等 LLM finalize；多 flag 题明确告知剩余面数。
-16. **解法模板化（正向复用）**：solved 题机械沉淀「指纹→解法」模板，同指纹题注入起手式；与 field_notes（负向死路）分工，形成正负双向跨题复用。
-17. **破局干预（fork_analyst）**：3 轮零增量触发轨迹分叉分析（一次性强模型调用，不常驻），产出一条 next_directive 写黑板；再 3 轮零增量直接机械换题。Coach 机制保留但默认关闭（`ENABLE_COACH=true` 复活）。
-18. **多模型灾备池（ModelPool）**：分析型 Agent（Strategist/Reporter/Compactor）默认主模型（glm），执行型 Agent（Executor/Subtask）默认 fast 模型（deepseek-v4-flash），一律工厂化按需构建、无模块级可变单例；主模型额度/限流/鉴权/状态码失败时自动 `next()` 切换候选模型（`ESCALATION_MODELS`），保持同一 `SQLiteSession` 继续作答；所有模型耗尽抛 `ModelExhaustedError` 交外层调度器。
-19. **模型惰性治理（自救优先）**：连续 `MODEL_SWITCH_TURNS` 轮零增量先自救（解锁新技能 + 阶段重置 + 上下文压缩），自救 `MODEL_SELF_RESCUE_MAX` 次无效再切换候选模型接管；阈值均可环境变量配置。
-20. **比赛连续性保险**：`app/main.py` 入口对未预期异常退出（模型/网络/工具/进程异常）自动重启，指数退避，默认最多 5 次；平台 `TaskEnded` / `TaskNotFound` 正常终止不触发重启。
-21. **题目列表空值保护**：`list_challenges` 返回空列表或非列表时，不静默误判为「全部完成」，而是抛异常走重试逻辑，避免漏题提前退出。
-22. **错误提交熔断纠偏**：`wrong_submit_count` 叠加「期间无任何信息增量」且阈值 6 次才熔断，避免误杀越权/支付类快题的多次试错得分模式。
-23. **槽位泄漏双保险**：平台侧 running 但本地未活跃容器自动检测并关闭；`close_challenge` 失败进入重试队列，避免名额静默泄漏。
-24. **统一日志系统**：终端 + `data/logs/secai-YYYYMMDD.log` 双写，级别分级（INFO/WARN/ERROR）带颜色；黑板、flag、漏洞、证据等关键结论醒目打印，DEBUG 细节只落盘不刷屏。
-25. **缓存防线（动静分离 + hash 断言）**：静态 system prompt 字节级稳定，每轮 `_pre_step` 重算 hash 断言（漂移即 `[cache-guard]` ERROR + 累计 violations）；动态上下文只走 user message 尾部，目标 prefix_hit_rate ≥85%。
-26. **压缩收敛 + append-only**：压缩实现唯一归属 `core/context_manager`（`compact_if_needed(force=...)`），卡壳自救走薄包装；收尾统一为定点截断旧工具输出 + 摘要锚点追加，仅超长硬阈值才 clear_session（前缀缓存不归零）。
-27. **子任务情报共享（R2）**：子任务新结论性情报 append 到 `sub_intel.jsonl`（免锁），主线每轮增量合并——verified 才回流、不覆盖父结论；子任务从 recon 阶段起跑，flag 计数以平台 `correct_flag_count` 为唯一真相源。
-28. **阈值常量收口**：墙钟预算/干预上限/hint 宽限等全部集中 `runtime/budget.py`，其他文件只 import。
-29. **事件流单一真相源**：SQLite 为唯一真相源，events.jsonl 仅人读留痕（崩溃现场除外）；关键事件（flag/阶段切换/网络异常/agent 结束）立即刷盘绕过缓冲。
-
-### 16.2 实战教训
-
-1. **openai-agents 默认走 Responses API**，DeepSeek 不支持 → 改用 `OpenAIChatCompletionsModel`。
-2. **DeepSeek 不支持 `response_format=json_schema` strict** → 结构化输出用 tool + 手动校验。
-3. **`parallel_tool_calls=False`** 规避 DeepSeek 并行工具调用 JSON 不稳定。
-4. **工具输出外置**（`_spill_output`）+ token 压缩，解决上下文膨胀。
-5. **VPN 需要 CAP_NET_ADMIN**：openvpn 创建 tun0 需 root，`--daemon` 后台 fork 会误报成功 → 必须验证 tun0。
-6. **default-soft**：工具失败是信息不是死路，判停别误杀正常侦察。
-7. **"2000+ 步才正常"**：真实漏洞挖掘需要长战线，迭代上限宁宽勿严。
-
----
-
-## 17. 能力覆盖（四类题型）
-
-面向 CTF / 攻防比赛的四类题型覆盖：
-
-| 题型 | 占比 | 覆盖情况 |
-|---|---|---|
-| Web 漏洞挖掘 | 67% | 23 个漏洞技能（含业务逻辑/竞态/越权）+ 大量工具，覆盖强 |
-| 二进制漏洞挖掘 | 20% | pwn_exploitation/static_analysis 技能 + gdb/pwntools/angr/ROPgadget |
-| AI 漏洞挖掘 | 7% | prompt_injection/tool_misuse 技能 + AI 安全测试员角色 |
-| 区块链漏洞挖掘 | 6% | smart_contract_security 技能 + slither/mythril 工具 |
-
-加权覆盖估算约 **85%**（Web 是基本盘，二进制/区块链是补齐后的增量）。
-
----
-
-## 18. 内容资产
-
-| 资产 | 路径 | 数量 | 说明 |
-|---|---|---|---|
-| 角色 | `arsenal/roles/` | 9 | Web审计、二进制协议、沙箱逃逸、免杀、边界渗透、AI安全、提权、横向、跑分 |
-| 技能 | `arsenal/skills/` | 64 | Web漏洞（23）+ 二进制 + AI + 区块链 + 侦察 + 框架 + 云 + 协议 |
-| CLI 工具 | `arsenal/tools/` | 92 | nmap/sqlmap/ffuf/gdb/pwntools/angr/slither/mythril 等 |
-| 漏洞模块 | `arsenal/vulns/` | 9 | SQLI/XSS/SSTI/LFI/RCE/IDOR/SSRF/XXE/UPLOAD |
-| POC | `arsenal/pocs/` | 31 | 有效 POC（含 CVE + 云/协议/框架） |
-| 知识 | `arsenal/knowledge/` | 5 | get_flag(idor/lfi/xss) + post_exploit + waf_bypass |
-| Payload | `arsenal/payloads/` | 10 | sqli/lfi/path/xss/ssti/rce/idor/ssrf/upload/xxe |
+1. openai-agents 默认走 Responses API，DeepSeek 不支持 → 改用 `OpenAIChatCompletionsModel`。
+2. DeepSeek 不支持 strict json_schema → 结构化输出用 tool + 手动校验。
+3. `parallel_tool_calls=False` 规避 DeepSeek 并行工具调用 JSON 不稳定（exploit 阶段可
+   `EXECUTOR_PARALLEL=true` 显式开启）。
+4. 工具输出外置（ArtifactSpill）+ token 压缩（append-only 保前缀缓存）解决上下文膨胀。
+5. VPN 需 CAP_NET_ADMIN，`--daemon` 后台 fork 会误报成功 → 必须验证 tun0。
+6. default-soft：工具失败是信息不是死路；deadEnd/判停必须有证据门槛（黑板事实不变量）。
+7. 观测单一真相源：SQLite 唯一真相，jsonl 仅人读留痕；关键事件（flag/阶段/网络异常/
+   agent_end/prompt 漂移）立即刷盘绕过缓冲。
+8. fail-closed 三件套：沙箱不可用禁止裸跑、Scope 解析失败抛错、web_fetch 解析不了即拒
+   （DNS rebinding 防不住就整体拒绝）。
 
 ---
 
 > **作者：一片丹心（别名：奋进的小杨）**
 >
-> *本文档随代码演进持续更新，是跨会话连续性的技术基座。*
+> *本文档随代码演进持续更新，是跨会话连续性的技术基座；规格细节冲突以代码 docstring 为准。*
