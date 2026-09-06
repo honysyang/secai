@@ -1,6 +1,6 @@
 """Payload/漏洞检测域：内置漏洞类型与载荷字典（vuln 组 + fuzz 共享解析）。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
+工具域模块：按功能域划分的工具实现。
 - list_vulns：列出内置漏洞类型检测模块
 - detect_vuln：按类型取标准检测规范 + 基础 payload
 - get_payload：按类型取载荷字典

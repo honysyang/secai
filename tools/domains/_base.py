@@ -1,7 +1,6 @@
-"""共享基础：跨域常量 + 安全纯函数（demo_tools 拆分——纯搬家，逻辑零改动）。
+"""共享基础：跨域常量 + 安全纯函数。
 
 - PREVIEW：工具输出正文预览长度
-- FLAG_RE / _scan_flags：flag{...} 机械扫描（提交铁律用）
 - INJECTION_PATTERNS / INJECTION_WARNING / _guard_output：prompt injection 检测
 """
 from __future__ import annotations
@@ -9,9 +8,6 @@ from __future__ import annotations
 import re
 
 PREVIEW = 4000  # 工具输出正文预览长度
-
-
-FLAG_RE = re.compile(r"flag\{[^}\s]{1,200}\}", re.IGNORECASE)
 
 
 # Prompt injection 防御：工具输出统一检测注入特征，命中追加安全提醒。
@@ -36,8 +32,3 @@ def _guard_output(text: str) -> str:
     if any(p.search(text) for p in INJECTION_PATTERNS):
         return INJECTION_WARNING
     return ""
-
-
-def _scan_flags(text: str) -> list[str]:
-    """扫描文本中的 flag{...}（去重保序，最多 10 个）。"""
-    return list(dict.fromkeys(m.group(0) for m in FLAG_RE.finditer(text)))[:10]

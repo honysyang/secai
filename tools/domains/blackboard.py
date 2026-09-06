@@ -1,6 +1,6 @@
 """黑板域：全局黑板工具 + 落盘（跨尝试/挂起恢复）。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
+工具域模块：按功能域划分的工具实现。
 - blackboard：set / get / list / del（结构化记忆语义：verified/evidence/supersedes）
 - _persist_blackboard：黑板落盘到 workdir/blackboard.json
 - BLACKBOARD_MAX_ENTRIES / BLACKBOARD_FILE：容量与落盘文件名

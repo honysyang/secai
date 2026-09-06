@@ -1,4 +1,4 @@
-"""SessionManager 多目标并行单测（R4 验收：≥2 并行 ExecutorLoop 的编排底座）。
+"""SessionManager 多目标并行单测（R4 验收：≥2 并行执行循环的编排底座）。
 
 用 fake runner（零 LLM/平台依赖）直驱 SessionManager，验证：
 - 两个目标 session 并发执行且上下文（state/bus）互不污染；

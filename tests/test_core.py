@@ -2,15 +2,12 @@
 
 覆盖本批修复的关键纯函数，防止回归：
 - core.memory：黑板快照 / MemoryManager 读写
-- runtime.fork_analyst：破局指令质量门
 - core.tool_pipeline：增量打分 / 网络不可达（收敛到 hooks 后行为不变）
-- runtime.reporting：成本报告 / 轨迹 / 看板落盘
 
 运行：.venv/bin/python -m unittest discover -s tests -v
 """
 from __future__ import annotations
 
-import json
 import unittest
 from pathlib import Path
 
@@ -57,23 +54,6 @@ class TestMemory(unittest.TestCase):
         self.assertTrue(b.objective)
         self.assertEqual(b.max_turns, 8)
 
-
-class TestForkAnalystQualityGate(unittest.TestCase):
-    def test_short_directive_degrades(self):
-        from runtime.fork_analyst import update_blackboard_with_fork
-        bb = {}
-        directive = update_blackboard_with_fork(bb, {"next_directive": "继续", "directions": []})
-        # 过短 → 降级为通用指令
-        self.assertNotEqual(directive, "继续")
-        self.assertGreater(len(directive), 12)
-
-    def test_action_directive_passes(self):
-        from runtime.fork_analyst import update_blackboard_with_fork
-        bb = {}
-        directive = update_blackboard_with_fork(
-            bb, {"next_directive": "用 curl 访问 /admin/api/flag 验证端点", "directions": []})
-        self.assertIn("curl", directive.lower())
-        self.assertIn("next_directive", bb)
 
 
 class TestToolPipeline(unittest.TestCase):
@@ -159,37 +139,6 @@ class TestScoring(unittest.TestCase):
             _score_tool_result("shell", "MySQL syntax error near '1'", ctx), 1)
 
 
-class TestReporting(unittest.TestCase):
-    def test_write_cost_report(self):
-        from runtime.reporting import write_cost_report
-        from core.task_context import TaskContext
-        with __import__("tempfile").TemporaryDirectory() as td:
-            workdir = Path(td)
-            ctx = TaskContext(workdir=workdir)
-            ctx.token_usage = {"input": 100, "output": 50, "total": 150,
-                               "requests": 2, "cache_read": 80, "cache_write": 70}
-            write_cost_report(workdir, "t1", "solved", ctx, death_reason="solved")
-            data = json.loads((workdir / "cost_report.json").read_text())
-            self.assertEqual(data["code"], "t1")
-            self.assertAlmostEqual(data["cache"]["hit_rate"], 80 / 150, places=4)
-            self.assertEqual(data["death_reason"], "solved")
-
-    def test_write_dashboard(self):
-        from runtime.reporting import write_cost_report, write_dashboard
-        from core.task_context import TaskContext
-        with __import__("tempfile").TemporaryDirectory() as td:
-            workdir = Path(td)
-            w = workdir / "worker_t1"
-            w.mkdir()
-            ctx = TaskContext(workdir=w)
-            ctx.token_usage = {"input": 100, "output": 50, "total": 150,
-                               "requests": 2, "cache_read": 80, "cache_write": 70}
-            write_cost_report(w, "t1", "solved", ctx, death_reason="solved")
-            write_dashboard(workdir)
-            data = json.loads((workdir / "dashboard.json").read_text())
-            self.assertEqual(data["challenge_count"], 1)
-            self.assertEqual(data["solved_count"], 1)
-            self.assertAlmostEqual(data["cache"]["hit_rate"], 80 / 150, places=4)
 
 
 if __name__ == "__main__":

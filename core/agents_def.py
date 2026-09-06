@@ -17,8 +17,10 @@ from agents import Agent, ModelSettings, RunContextWrapper
 from adapters.config import FAST_MODEL, MODEL
 from arsenal.registries.skill_registry import load_skill_bodies
 from core.task_context import TaskContext
-from demo_tools import ALL_TOOLS, finish_subtask, get_knowledge, list_knowledge, list_tools, query_skills
 from runtime.status import PHASE_DEFS
+from tools.domains.knowledge import get_knowledge, list_knowledge, query_skills
+from tools.domains.registry import ALL_TOOLS
+from tools.domains.subtask import finish_subtask
 
 # 按角色拆分 ModelSettings：输出型 Agent 稳定低 temperature，探索型 Agent 略高；
 # Strategist/Reporter 给更大 max_tokens 以输出完整宪章+计划/总结；
@@ -41,6 +43,7 @@ def intel_tools():
     - 执行者的 find_skills 会写 disclosed_skills（披露），这里不用它——分析型
       智能体不该写执行者的账本（权力分界铁约束）。
     """
+    from tools.domains.seccli import list_tools
     return [query_skills, list_knowledge, get_knowledge, list_tools]
 
 

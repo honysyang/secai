@@ -308,7 +308,7 @@ async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None,
     # ② 摘要锚点追加到上下文尾部，模型下一轮自然看到
     # ③ 仅当截断后仍超超长硬阈值才 clear_session 兜底（记 ERROR，赛后追责）
     truncated = _truncate_old_tool_outputs(session)
-    log_info(f"[compact] 单题 {ctx.current_code} 定点截断 {truncated} 条旧输出，"
+    log_info(f"[compact] 定点截断 {truncated} 条旧输出，"
              f"历史结构保留（append-only）")
     try:
         await session.add_items([{
@@ -324,7 +324,7 @@ async def compact_if_needed(session, ctx: TaskContext, agent: Agent = None,
         total_chars = sum(len(str(i)) for i in items_after)
         HARD_CAP = 400_000  # 约 10 万 token 量级，按模型上下文调整
         if total_chars > HARD_CAP:
-            log_error(f"[compact] 单题 {ctx.current_code} 截断后仍 {total_chars} 字符 "
+            log_error(f"[compact] 截断后仍 {total_chars} 字符 "
                       f"> {HARD_CAP}，被迫 clear_session（前缀缓存归零，赛后排查）")
             await session.clear_session()
         after_count = len(items_after)
@@ -365,7 +365,6 @@ def save_state(workdir: Path, ctx: TaskContext, turn_count: int,
         "plan": ctx.plan,
         "replan_count": ctx.replan_count,
         "zero_gain_turns": ctx.zero_gain_turns,
-        "current_code": ctx.current_code,
         "fatal": ctx.fatal,
     }
     (workdir / STATE_FILE).write_text(
@@ -412,6 +411,5 @@ def build_ctx_from_state(workdir: Path, state: dict[str, Any]) -> TaskContext:
         plan=state.get("plan", ""),
         replan_count=state.get("replan_count", 0),
         zero_gain_turns=state.get("zero_gain_turns", 0),
-        current_code=state.get("current_code", ""),
         fatal=state.get("fatal", ""),
     )

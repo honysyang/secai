@@ -1,6 +1,6 @@
 """待办清单域：执行者自我管理多面 flag / 多步骤攻击链的进度。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
+工具域模块：按功能域划分的工具实现。
 - todo_add / todo_list / todo_mark + 优先级/状态枚举校验
 """
 from __future__ import annotations

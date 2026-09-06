@@ -42,9 +42,6 @@ select = ["F", "E4", "E7", "E9", "I", "UP006", "UP035", "UP045", "FURB167", "PLW
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-# 历史巨石文件在 R1 拆分前允许存量违规（只减不增）
-"demo_tools.py" = ["UP006", "UP035", "I001"]
-"app/main.py" = ["UP006", "UP035", "I001"]
 # 测试基线文件锁定（验收红线：tests/test_core.py 一字不改），存量 I001/B010 白名单豁免
 "tests/test_core.py" = ["I001", "B010"]
 "*.py" = ["EXE002"]  # shebang 由脚本文件自行决定

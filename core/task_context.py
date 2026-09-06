@@ -1,7 +1,7 @@
 """任务上下文：执行现场 + 渐进披露 + 全局状态，与任何具体靶场解耦。
 
-TaskContext 通过 Runner.run(context=...) 注入，被工具（demo_tools）、hooks、
-context_manager、agents_def、main 共用。独立成模块以解耦依赖、避免循环导入。
+TaskContext 通过 Runner.run(context=...) 注入，被工具、hooks、
+context_manager、agents_def 共用。独立成模块以解耦依赖、避免循环导入。
 """
 from __future__ import annotations
 
@@ -64,59 +64,36 @@ class TaskContext:
     blackboard: dict[str, Any] = field(default_factory=dict)  # 全局黑板：已完成事项 / 全局变量（每条含 value/status/ts/verified/evidence/supersedes）
     token_usage: dict[str, int] = field(default_factory=lambda: {"input": 0, "output": 0, "total": 0, "requests": 0})  # 累计 token 用量
     last_prompt_tokens: int = 0                                  # 最近一次 LLM 请求的真实 prompt_tokens（压缩观测用，SDK 返回的 input_tokens）
-    bruteforce_calls: int = 0                                    # 本题爆破/枚举类调用计数（成本治理，超 BRUTEFORCE_MAX_CALLS 拦截）
-    submitted: set[str] = field(default_factory=set)             # 已提交过的 flag（去重，铁律提交用）
-    correct_flags: list[str] = field(default_factory=list)       # 已确认 correct 的 flag（多 flag 题进度）
+    bruteforce_calls: int = 0                                    # 爆破/枚举类调用计数（成本治理，超 BRUTEFORCE_MAX_CALLS 拦截）
     seen_signatures: set[str] = field(default_factory=set)       # 已见路径/指纹签名（信息增量去重用）
     subtasks: list[dict[str, Any]] = field(default_factory=list)  # 子任务队列 [{id, desc, branch_type, status, result}]，主循环并发调度
     subtask_jobs: dict[str, asyncio.Task] = field(default_factory=dict)  # 已后台化的子任务 id -> asyncio.Task
     todos: list[dict[str, Any]] = field(default_factory=list)      # 待办清单 [{id, title, status, priority, created_at, done_at}]，执行者自我管理用
-    enabled_tools: set[str] | None = None  # 工具按需加载：None=全部启用；否则只启用集合内的工具名（见 demo_tools.CORE_TOOL_NAMES）
+    enabled_tools: set[str] | None = None  # 工具按需加载：None=全部启用；否则只启用集合内的工具名
     phase: str = "recon"                      # 当前阶段（recon/enumerate/detect/exploit/post），驱动 instructions 动态切换
     plan: str = ""                            # 作战计划（Planner 深度分析产出，注入执行者系统提示）
     boosted_roles: list[str] = field(default_factory=list)  # 已注入的阶段增强角色（证据触发，去重用）
     role_boost: str = ""                      # 当前注入的阶段增强打法（下一轮 instructions 追加）
     replan_count: int = 0                     # 已执行 replan 次数（防止无限重规划）
-    turn_gain: bool = False                   # 本轮是否产出正向信息增量（hooks 打分，main 每轮清零）
+    turn_gain: bool = False                   # 本轮是否产出正向信息增量（hooks 打分，主循环每轮清零）
     zero_gain_turns: int = 0                  # 连续零信息增量轮数（判停/replan 共用，>0 的正向增量才清零）
-    current_code: str = ""                    # 当前正在攻打的题目 unique_code（提交铁律机械提交用）
-    fatal: str = ""                           # 致命错误标记（task_ended/task_not_found），主循环检测后终止
-    turn_net_fail: bool = False               # 本轮是否命中网络不可达（hooks 检测，main 每轮清零）
-    net_fail_turns: int = 0                   # 连续网络不可达轮数（≥2 快速换题，防 VPN 死磕）
-    # ---- 单题墙上时钟 + 提交错误熔断（高分作战硬约束） ----
-    challenge_start_ts: float = 0.0           # 本题开始攻击的 monotonic 时间戳
-    wallclock_budget: int = 0                 # 本题墙上时间预算（秒），由主循环按 difficulty 设置
-    wrong_submit_count: int = 0               # 本题累计错误提交次数（≥3 全错则标记 stuck）
-    # ---- 缓存/复用命中率观测（用于赛后优化数据沉淀） ----
-    cache_hits: int = 0                       # 命中历史成功解法 / 同前缀笔记 / 已披露技能即可见解法
-    cache_misses: int = 0                     # 未能命中现成解法，需要从头推导的题数
-    cache_notes: list[str] = field(default_factory=list)  # 命中/未命中的具体记录（赛后分析用）
+    fatal: str = ""                           # 致命错误标记，主循环检测后终止
+    turn_net_fail: bool = False               # 本轮是否命中网络不可达（hooks 检测，主循环每轮清零）
+    net_fail_turns: int = 0                   # 连续网络不可达轮数（≥2 快速换目标，防 VPN 死磕）
     # ---- Plan Mode 二态开关（进入时只输出/更新计划，不执行工具） ----
     plan_mode: bool = False
-    plan_mode_history: int = 0  # 进入 plan mode 后已消耗的轮次（防无限 plan）
-    # ---- exploit 阶段 payload 台账（差分基线纪律，避免重复同一失败变体） ----
-    payload_ledger: list[dict[str, Any]] = field(default_factory=list)  # [{target, signature, hit, count, last_text_hash}]
-    # ---- 强弱模型分工：强模型（破局）每题目最多 STRONG_MODEL_MAX_TURNS 轮 ----
-    strong_model_uses: int = 0            # 已用强模型轮数（主循环计数，超限切回快模型）
-    _on_strong_model: bool = False        # 当前是否处于强模型接管状态
-    # ---- 降级计数：静默吞咽的失败在此留数（修补 7），赛后按 N 排查 ----
-    silent_failures: int = 0              # 静默吞掉的异常/失败次数（close 失败/归档失败等）
-    # ---- 子任务标识（R2）：区分主线/分身，子任务情报共享用 ----
-    is_subtask: bool = False              # 是否后台子任务（spawn_subtask 创建）
-    # ---- R2 H3：动态上下文增量注入状态（charter/plan 版本化 + field_notes 仅首轮） ----
+    # ---- 动态上下文增量注入状态（charter/plan 版本化 + field_notes 仅首轮） ----
     injected_signatures: dict[str, str] = field(default_factory=dict)  # 已全量注入的内容签名（charter/plan → sha256[:16]）
     injected_versions: dict[str, int] = field(default_factory=dict)    # 已注入的版本号（每次内容变化 +1）
     field_notes_injected: bool = False                                 # 历史作战档案是否已注入（仅首轮注入）
-    # ---- R2 H4：零增量轮真实统计（看板 zero_gain_events 的数据源，经 cost_report 落盘） ----
-    zero_gain_total: int = 0              # 累计零信息增量轮次
-    peak_zero_gain_streak: int = 0        # 峰值连续零增量轮数（单次最长停滞长度）
-    # ---- R2 H5：后台子任务 SQLiteSession 句柄登记（收尾统一 close 后再物理删 sub_*.sqlite） ----
-    open_sub_sessions: dict[str, Any] = field(default_factory=dict, repr=False)  # subtask id → session 句柄
-    # ---- R2 H7：惰性点锚点登记（±5 步回放自动导出的数据源） ----
-    stuck_anchors: list[dict[str, Any]] = field(default_factory=list)  # [{turn, reason, ts}]，收尾统一导出回放
+    # ---- exploit 阶段 payload 台账（差分基线纪律，避免重复同一失败变体） ----
+    payload_ledger: list[dict[str, Any]] = field(default_factory=list)  # [{target, signature, hit, count, last_text_hash}]
+    # ---- 强弱模型分工：强模型（破局）每任务最多 STRONG_MODEL_MAX_TURNS 轮 ----
+    strong_model_uses: int = 0            # 已用强模型轮数（主循环计数，超限切回快模型）
+    _on_strong_model: bool = False        # 当前是否处于强模型接管状态
     # ---- R3 L5：护栏运行配置（None = 关闭；设置后 tool_pipeline 的 L5 中间件生效） ----
     l5_guardrail: Any = None       # L5GuardrailConfig | None
 
 
-# 模块级常量：每题同时运行的后台子任务上限（避免无界增长拖死 harness；对齐 Harness 验收 N≤2）
+# 模块级常量：每任务同时运行的后台子任务上限（避免无界增长拖死 harness）
 SUBTASK_MAX_CONCURRENT = 2

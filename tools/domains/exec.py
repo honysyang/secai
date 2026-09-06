@@ -1,6 +1,6 @@
 """执行域：基础命令 / HTTP 执行 + 执行流程自管理工具。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
+工具域模块：按功能域划分的工具实现。
 - run_batch / shell / http_request / parallel_shell：统一管线执行工具
 - _python_traceback_hint：python3 脚本报错提炼（shell 后置 hint）
 - think / checkpoint / set_phase：执行者决策缓冲 / 里程碑存档 / 阶段切换
@@ -35,7 +35,7 @@ def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 1
 
     适用：目录枚举后对 200 的逐个试 payload；差分实验（基线+变体族）；
     任意需要多步串联但只把结论回传 Agent 的场景。
-    脚本用 python3 执行，print 输出结论；flag 出现系统机械提交。
+    脚本用 python3 执行，print 输出结论。
     """
     c = ctx.context
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
@@ -59,6 +59,43 @@ def run_batch(ctx: RunContextWrapper[TaskContext], script: str, timeout: int = 1
 
 
 # ================= 基础执行 / 侦察工具 =================
+async def recon_probe(addrs: list) -> str:
+    """首轮机械预侦察（零 LLM）：在 LLM 介入前发起常见入口/敏感路径/状态码探测。
+
+    使用 asyncio.to_thread 把同步 requests.get 放到后台线程执行，避免阻塞事件循环；
+    各路径之间用 asyncio.gather 并发，缩短预侦察耗时。
+    """
+    if not addrs:
+        return ""
+    addr = next((a for a in addrs if a.startswith(("http://", "https://"))), None)
+    if not addr:
+        return ""
+    base = addr.rstrip("/")
+    paths = ["/", "/robots.txt", "/.git/HEAD", "/index.php", "/index.html",
+             "/login", "/admin", "/api", "/upload", "/.env", "/config.php",
+             "/includes/config.php", "/health",
+             "/wp-login.php", "/phpinfo.php", "/server-status", "/swagger-ui.html",
+             "/api/v1/", "/favicon.ico"]
+
+    def _probe(path: str) -> dict:
+        url = base + path
+        try:
+            r = requests.get(url, timeout=8, verify=False, allow_redirects=False)
+            title = re.search(r"<title>([^<]*)</title>", r.text, re.IGNORECASE)
+            return {
+                "path": path, "status": r.status_code, "len": len(r.content),
+                "title": (title.group(1) if title else "")[:80],
+                "server": r.headers.get("Server", "")[:40],
+                "powered": r.headers.get("X-Powered-By", "")[:40],
+                "ct": r.headers.get("Content-Type", "")[:40],
+            }
+        except Exception as e:
+            return {"path": path, "error": str(e)[:80]}
+
+    rows = await asyncio.gather(*[asyncio.to_thread(_probe, p) for p in paths])
+    return "首轮预侦察:\n" + json.dumps(rows, ensure_ascii=False, indent=2)
+
+
 def _python_traceback_hint(command: str, stderr: str, rc: int) -> str:
     """Python 脚本执行失败时，提炼 traceback 关键错误并给出修复指引。"""
     if rc == 0 or "Traceback" not in stderr:

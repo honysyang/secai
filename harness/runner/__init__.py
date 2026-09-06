@@ -1,1 +1,1 @@
-# harness.runner：单题执行循环（RunnerState + ExecutorLoop）与编排支撑
+# harness.runner：单目标执行循环（pentest_target）与编排支撑

@@ -1,7 +1,7 @@
 """SessionManager —— 多目标并行执行管理（R4 前半，L2 编排层落地）。
 
 规格来源：SECAI-PT 终极执行计划 v4 第五部分 R4（harness/session_manager.py 多目标并行）
-与设计裁决 #4「每个目标 = 一个独立 Session/ExecutorLoop，SessionManager 统一管理，
+与设计裁决 #4「每个目标 = 一个独立 Session/执行循环，SessionManager 统一管理，
 前端 mux WebSocket 同时监视」。
 
 职责与语义：
@@ -15,7 +15,7 @@
 
 线程/循环约束：start_target 必须在运行中的事件循环里调用（内部 create_task）。
 runner 签名：Callable[[SessionContext], Awaitable[Any]] —— 真实接入时在 runner 内
-组装 ExecutorLoop（单测注入 fake runner，互不依赖）。
+组装单目标执行循环（单测注入 fake runner，互不依赖）。
 """
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ class SessionEntry:
 class SessionManager:
     """统一管理多个目标 session：注册 / 并行驱动 / 事件隔离 / 广播 / 查询 / 幂等停止。
 
-    真实接入：runner 内以 PENTEST_PRESET 组装 ExecutorLoop 驱动单目标；
+    真实接入：runner 内组装单目标执行循环驱动单目标（如 pentest_target.run_pentest_target）；
     单测接入：fake runner（本类对 runner 零假设，只要求签名与返回 awaitable）。
     """
 

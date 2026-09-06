@@ -1,6 +1,6 @@
 """VPN 域：远程靶场接入（OpenVPN 后台启用 + 隧道真实建立验证）。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
+工具域模块：按功能域划分的工具实现。
 - connect_vpn：读取 .env 配置后台启用 OpenVPN，验证 tun0 真正建立（避免误报 connected）
 """
 from __future__ import annotations

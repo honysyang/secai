@@ -1,6 +1,5 @@
-"""工具注册中心：清单单一事实源 + 按需加载控制（demo_tools 拆分——纯搬家）。
+"""工具注册中心：清单单一事实源 + 按需加载控制。
 
-原 demo_tools.py 底部《工具按需加载（分桶）》区域整体迁移，逻辑不变：
 - _TOOL_SPECS 声明式清单（工具对象 + 是否核心 + 归属分组）——单一事实源
 - CORE_TOOL_NAMES / TOOL_GROUPS / _BASE_TOOLS / ALL_TOOL_NAMES / ALL_TOOLS 自动派生
 - enable_tool / list_disabled_tools / _tool_gate：按需加载控制
@@ -72,7 +71,7 @@ _TOOL_SPECS = [
     (connect_vpn, False, ("vpn",)),
 ]
 # 注：9_6 起平台编排工具组（platform，原 bench_platform/platform_tools）随 CTF 跑分面整体删除，
-# TOOL_GROUPS 不再含 platform 组；停滞机械决策已内联 harness/runner/executor.py。
+# TOOL_GROUPS 不再含 platform 组。
 
 _BASE_TOOLS = [t for t, _, _ in _TOOL_SPECS]
 # 核心工具名（enable_tool/list_disabled_tools 为控制工具，单独挂载、不参与分组）

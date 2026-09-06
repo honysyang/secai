@@ -22,6 +22,10 @@ data/
 nohup.out
 *.out
 
+# 本地跑分/靶场运行时产物
+xctf/
+target.txt
+
 # Docker 构建产物（大体积镜像包）
 docker/*.tar.gz
 docker/*.tar

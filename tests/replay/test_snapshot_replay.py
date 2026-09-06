@@ -27,8 +27,8 @@ from profiles.practical_pentest.report import (
     find_cross_target_chains,
     generate_engagement_report,
     render_report_yaml,
+    write_dashboard,
 )
-from runtime.reporting import write_dashboard
 
 # ---------------------------------------------------------------------------
 # 快照 1：单目标完整 engagement 事件日志（nmap 探测 → RCE 确认链 + SQLi 死路）

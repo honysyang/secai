@@ -6,7 +6,7 @@
 - 长期（FieldNotes）：跨题经验、payload 模板，落盘 field_notes.md。
 
 本模块提供统一访问入口；TaskContext 仍保留原有字段（blackboard/notes/...）以保证
-与现有代码（demo_tools / hooks / context_manager / main）向后兼容，MemoryManager
+与现有代码（tools / hooks / context_manager）向后兼容，MemoryManager
 只是把这些字段的读写收敛到同一层，避免各处散落重复逻辑。
 """
 from __future__ import annotations

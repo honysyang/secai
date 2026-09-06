@@ -1,6 +1,6 @@
 """统一工具调用管线（Tool Pipeline）。
 
-把分散在 demo_tools.py / hooks.py 中的横切关注点（爆破预算、prompt injection 防护、
+把分散在工具层与 hooks 的横切关注点（爆破预算、prompt injection 防护、
 payload 台账、增量打分、网络不可达检测）收敛成可插拔的 middleware，
 让新增工具、新增安全策略、新增观测点都只需要加一行配置。
 
@@ -18,6 +18,7 @@ import asyncio
 import functools
 import ipaddress
 import json
+import os
 import re
 import uuid
 from abc import ABC
@@ -29,11 +30,46 @@ from urllib.parse import urlparse
 from agents import RunContextWrapper
 
 from core.task_context import TaskContext
-from runtime.budget import brute_gate as _budget_brute_gate
 from runtime.log import log_info, log_warn
 from sandbox import SandboxBlockedError, SandboxUnavailableError
 from sandbox import confine as _l5_confine
 from sandbox.policy import Policy as SandboxPolicy
+from tools.domains._base import _guard_output as _base_guard_output
+
+# ================= 爆破预算 =================
+BRUTEFORCE_MAX_CALLS = int(os.getenv("BRUTEFORCE_MAX_CALLS", "20"))  # 每会话爆破调用硬上限，0=关闭
+_BRUTE_TOOLS = {"fuzz", "parallel_shell", "run_tool"}                # 一定是爆破/枚举的工具
+_BRUTE_BINARIES = ("hydra", "ffuf", "dirsearch", "sqlmap", "john",   # shell 里的爆破二进制
+                   "masscan", "nuclei", "gobuster", "wfuzz", "dirb")
+
+
+def _is_brute_call(name: str, args: str = "") -> bool:
+    """判断一次工具调用是否属于爆破/枚举类（成本治理用）。"""
+    if name in _BRUTE_TOOLS:
+        return True
+    if name == "shell":
+        low = (args or "").lower()
+        return any(b in low for b in _BRUTE_BINARIES)
+    return False
+
+
+def brute_gate(ctx: RunContextWrapper, name: str, args: str = "") -> str:
+    """爆破预算闸门：超限返回拦截消息（工具应直接返回它），未超限返回空串。
+
+    返回空串 = 放行。拦截时计数已 +1，且不会实际执行该次爆破。
+    """
+    if BRUTEFORCE_MAX_CALLS <= 0:
+        return ""
+    if not _is_brute_call(name, args):
+        return ""
+    c = ctx.context
+    c.bruteforce_calls += 1
+    if c.bruteforce_calls <= BRUTEFORCE_MAX_CALLS:
+        return ""
+    return (f"[error] 爆破预算硬上限：本会话爆破/枚举类调用已达 {c.bruteforce_calls} 次"
+            f"（上限 {BRUTEFORCE_MAX_CALLS}），本次调用未执行。禁止继续大规模爆破/枚举/"
+            "字典攻击（含 shell 里的 hydra/ffuf/dirsearch/sqlmap 等）——转向已确认线索的"
+            "定向验证，或换攻击面。")
 
 # ---------------------------------------------------------------------------
 # Middleware 协议
@@ -75,12 +111,12 @@ class BruteGateMiddleware(ToolMiddleware):
 
     def guard(self, ctx, tool, args):
         arg_text = json.dumps(args, ensure_ascii=False) if args else ""
-        block = _budget_brute_gate(ctx, tool, arg_text)
+        block = brute_gate(ctx, tool, arg_text)
         return block or None
 
 
 class ArtifactSpillMiddleware(ToolMiddleware):
-    """超长输出落盘 middleware：截断前保留全文扫描 flag/注入的机会。
+    """超长输出落盘 middleware：截断前保留全文扫描注入特征的机会。
 
     工具输出超过阈值时写入 artifacts/，只返回预览 + 引用，避免撑爆会话上下文。
     """
@@ -92,16 +128,10 @@ class ArtifactSpillMiddleware(ToolMiddleware):
 
     async def post(self, ctx, tool, args, result):
         text = str(result)
-        # 延迟导入 demo_tools 中的注入扫描函数，避免循环导入
-        try:
-            from demo_tools import _guard_output
-        except Exception:
-            _guard_output = None
         notes = []
-        if _guard_output is not None:
-            note = _guard_output(text)
-            if note:
-                notes.append(note)
+        note = _base_guard_output(text)
+        if note:
+            notes.append(note)
         if len(text) <= self.threshold:
             tail = "\n".join(notes)
             return text + (f"\n{tail}" if tail else "")
@@ -481,7 +511,7 @@ class ApprovalGateMiddleware(ToolMiddleware):
             return None
         gate = cfg.approval
         session_id = (getattr(cfg, "task_id", "") or ""
-                      or getattr(getattr(ctx, "context", None), "current_code", "") or "l5")
+                      or getattr(getattr(ctx, "context", None), "task", "")[:40] or "l5")
         result = gate.request(session_id, tool, dict(args or {}))
         if result.ok:
             return None
@@ -509,7 +539,7 @@ DEFAULT_PIPELINE.add(ApprovalGateMiddleware())
 
 
 # ---------------------------------------------------------------------------
-# 以下 helper 从原 demo_tools.py / hooks.py 迁移，保持行为一致
+# 以下 helper 统一收敛到 core.hooks 的增强实现，避免双份漂移
 # ---------------------------------------------------------------------------
 
 _NO_PROGRESS_TOOLS = {"think", "todo_add", "todo_list", "todo_mark", "checkpoint", "list_tools"}

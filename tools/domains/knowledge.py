@@ -1,6 +1,6 @@
 """知识与技能域：联网搜索 / POC / 知识库 / 技能检索与沉淀。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
+工具域模块：按功能域划分的工具实现。
 - web_search：联网搜索（外脑）
 - search_cve / get_poc：POC 库检索与完整利用细节
 - list_knowledge / get_knowledge：知识库浏览
