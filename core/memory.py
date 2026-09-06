@@ -2,7 +2,7 @@
 
 设计要点（对齐《优秀 Harness 落地指南》第 2 章）：
 - 短期（ShortTermMemory）：当前会话消息，只追加不修改历史，由 SQLiteSession 承载；
-- 中期（Blackboard）：已验证事实、flag、死路、hint 法令、next_directive，只由代码写入；
+- 中期（Blackboard）：已验证事实、敏感凭据、死路、hint 法令、next_directive，只由代码写入；
 - 长期（FieldNotes）：跨题经验、payload 模板，落盘 field_notes.md。
 
 本模块提供统一访问入口；TaskContext 仍保留原有字段（blackboard/notes/...）以保证

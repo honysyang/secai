@@ -68,20 +68,20 @@ def spawn_subtask(ctx: RunContextWrapper[TaskContext], desc: str,
 
 @function_tool
 def finish_subtask(ctx: RunContextWrapper[TaskContext], summary: str,
-                   findings: str = "", flag: str = "") -> str:
+                   findings: str = "", credential: str = "") -> str:
     """完成子任务并结构化汇报（子任务专用结束协议）。调用后即结束，不再继续执行。
 
     Args:
         summary: 任务结论（一两句话），自包含——主 Agent 只看得到这个结果。
         findings: 关键发现列表（换行分隔，如 URL/参数名/凭据/文件路径等具体事实）。
-        flag: 拿到的完整 flag（flag{...}）；没拿到就留空，不要编造。
+        credential: 拿到的敏感凭据/数据（密码/token/密钥原文）；没拿到就留空，不要编造。
     """
     c = ctx.context
     c.finalized = True
     c.final_payload = {
         "summary": (summary or "").strip(),
         "findings": [x.strip() for x in (findings or "").split("\n") if x.strip()],
-        "flag": (flag or "").strip() or None,
+        "credential": (credential or "").strip() or None,
     }
     return json.dumps({"ok": True, "summary": (summary or "").strip()[:200]},
                       ensure_ascii=False)

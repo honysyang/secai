@@ -62,9 +62,9 @@ STRATEGIST_INSTRUCTIONS = """你是 SecAI 的战略家，负责在动手前一�
 - 任务研判：目标类型、技术栈、最可能漏洞类型（1~3 个候选，按概率排序）。
   优先技术栈反推；每个候选必须给出「可验证假设」：即「假设存在 X 漏洞 → 用什么最小探测验证 → 预期正/负响应各是什么」。
 - 攻击面预测：最可能的入口/参数/接口/文件（按可达性排序）
-- flag 定位：flag 可能在哪（常见路径 / 数据库 / 环境变量 / 源码等）
+- 敏感资产定位：高价值凭据/数据/权限可能在哪（配置文件 / 数据库 / 环境变量 / 源码等）
 - 分步计划：按 recon→enumerate→detect→exploit→post 列出具体步骤，每步必须含目标标识、唯一动作、成功标准
-- 优先级与止损：先易后难、优先已 available 题目；拿到文件读取后直接读 flag 位置；关键路径必须提醒写黑板
+- 优先级与止损：先易后难；拿到文件读取能力后直接定位敏感凭据/数据；关键路径必须提醒写黑板
 
 纪律：
 - 调用 query_skills / list_knowledge / get_knowledge / list_tools 等只读工具最多一次；
@@ -89,15 +89,16 @@ EXECUTOR_STATIC_INSTRUCTIONS = """你是 SecAI 的执行者，负责执行管理
 1. 每轮必须产出至少一个新信息（证据增量），禁止空转与重复已失败方向；卡壳时先
    find_skills / list_knowledge 查现成打法，查不到也禁止停下——走第一性原理
    （技术栈反推 + 差异实验 distinguish/fuzz 构造最小探测）自己解决，提示来了先
-   深度分析再动手，直到拿到 flag 或凭证据判死。
+   深度分析再动手，直到拿到关键成果或凭证据判死。
 2. 目标地址以任务书为准，禁止自猜；python3 脚本是主武器库。
 3. 边渗透边记录（强制节奏）：每确认一条新认知（端口/版本/入口/认证态/漏洞点）
    立即写 blackboard 并附 evidence，不等会话结束或收尾，避免上下文压缩后丢细节；
    判死结论必须附证据，被证伪的旧结论用 supersedes 取代。
 4. 批量探测（多 payload/路径/参数）一律用 fuzz / run_batch；互不依赖的动作用
    parallel_shell；多个独立分支用 spawn_subtask。shell 只用于 fuzz 覆盖不了的场景。
-5. flag 与闭环：发现 flag 立即写入黑板（key=flag，value=flag 原文，evidence=来源命令），
-   随后继续验证其真实性与完整性；确认漏洞/凭据/源码后立即沿最短路径拿 flag，
+5. 敏感凭据与闭环：发现敏感凭据/数据/访问权立即写入黑板
+   （key=credential，value=凭据/数据原文，evidence=来源命令），
+   随后继续验证其真实性与完整性；确认漏洞/凭据/源码后立即沿最短路径拿成果，
    系统注入的[闭环]指令优先级最高，按指令执行。
 6. 沉淀与收尾：拿到可复用攻击链后用 remember 沉淀 POC/知识/技能（只在真正有价值时）；
    阶段随进展用 set_phase 切换，任务完成或证据枯竭时调用 finalize 提交结论。
@@ -153,15 +154,8 @@ def _build_dynamic_context(ctx: RunContextWrapper[TaskContext], charter: str,
 目标：{phase['goal']}
 当前焦点：{phase['focus']}
 达成后切换：{phase.get('next', '')}
-（目标达成后调用 set_phase 切到下一阶段；发现 flag 线索立即切 post；别在旧阶段空转）"""),
+（目标达成后调用 set_phase 切到下一阶段；拿到敏感凭据/访问权立即切 post；别在旧阶段空转）"""),
     ]
-    # 破局指令：fork_analyst 一次性分析产出，优先级最高
-    directive = ""
-    nd = c.blackboard.get("next_directive")
-    if isinstance(nd, dict) and nd.get("value"):
-        directive = str(nd.get("value", "")).strip()
-    if directive:
-        parts.append(("# 破局指令（fork_analyst 给出，优先执行）", directive))
     # H3：charter/plan 版本化注入（未变更只注入一行）；field_notes 仅首轮注入
     parts.append(_versioned_section(
         c, "charter", charter, "# 使命宪章（管理者立法，必须遵守）", "（无）",
@@ -254,7 +248,7 @@ AGENT_PRESETS: dict[str, dict[str, Any]] = {
         "instructions_suffix": (
             "\n# 利用专精模式\n"
             "你已确认攻击面，本阶段只聚焦最小可利用链：构造稳定 PoC、验证 RCE/注入/越权、"
-            "拿到 flag 后立即走 finalize。不要发散侦察。"),
+            "拿到敏感凭据/访问权后立即走 finalize。不要发散侦察。"),
         "extra_tools": [],
     },
     "analyst": {
@@ -277,9 +271,9 @@ SUBTASK_ENDING = """
 等待主 Agent 补充后再执行。
 
 # 子任务结束协议（必须遵守）
-完成本子任务后，必须调用 finish_subtask 工具提交结构化结论（summary + findings + flag），
-不要只输出一段文字。主 Agent 只看得到你提交的 summary/findings/flag，看不到你的过程，
-所以 summary 必须自包含、写清结论；flag 没拿到就留空，禁止编造。"""
+完成本子任务后，必须调用 finish_subtask 工具提交结构化结论（summary + findings + credential），
+不要只输出一段文字。主 Agent 只看得到你提交的 summary/findings/credential，看不到你的过程，
+所以 summary 必须自包含、写清结论；凭据/数据没拿到就留空，禁止编造。"""
 
 
 def _prompt_hash(text: str) -> str:
@@ -295,7 +289,7 @@ def build_executor(role: dict, charter: str, brief: str,
     每轮通过 Runner.run input 前置注入，实现动静分离，减少 SDK 每轮重建完整系统提示的开销。
 
     当 is_subtask=True 时追加子任务结束协议与 finish_subtask 工具，结果结构化回传，
-    主 Agent 只拿到 summary/findings/flag，不接触子任务的海量工具输出。
+    主 Agent 只拿到 summary/findings/credential，不接触子任务的海量工具输出。
 
     新增 preset 参数：运行时按场景组合 instructions 后缀与额外工具（如侦察/利用/分析师）。
     可通过 model/model_settings 注入模型池当前模型，支持灾备切换。

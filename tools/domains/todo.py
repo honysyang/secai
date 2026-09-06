@@ -19,11 +19,11 @@ _VALID_TODO_STATUS = {"pending", "in_progress", "done"}
 
 @function_tool
 def todo_add(ctx: RunContextWrapper[TaskContext], todos: str) -> str:
-    """添加待办事项（可批量），用于跟踪多面 flag / 多步骤攻击链的进度。
+    """添加待办事项（可批量），用于跟踪多阶段任务 / 多步骤攻击链的进度。
 
     todos 传 JSON 数组，每项 ``{"title": "...", "priority": "low|normal|high|critical"}``，
     priority 默认 normal。单个待办也传一个元素的数组。
-    例：todo_add(todos='[{"title":"读 /flag","priority":"high"},{"title":"测 SQLi"}]')
+    例：todo_add(todos='[{"title":"读配置文件","priority":"high"},{"title":"测 SQLi"}]')
     """
     c = ctx.context
     try:

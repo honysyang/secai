@@ -29,7 +29,7 @@ _NO_PROGRESS_TOOLS = {"think", "todo_add", "todo_list", "todo_mark", "checkpoint
 _EMIT_BUFFER: dict = {}
 _EMIT_BUFFER_LOCK = threading.Lock()
 _EMIT_FLUSH_THRESHOLD = 20  # 单文件缓冲条数，达到即刷盘（Q1：阈值由 100 降到 20，崩溃丢帧更少）
-# 关键事件：flag 提交/阶段切换/网络异常/智能体结束/prompt 漂移，立即刷盘绕过缓冲
+# 关键事件：敏感凭据获取/阶段切换/网络异常/智能体结束/prompt 漂移，立即刷盘绕过缓冲
 # （Q1：kill -9/OOM 崩溃现场恰恰最需要事件流，不能让缓冲吞掉现场）
 _CRITICAL_EVENT_KINDS = {"reward", "phase_changed", "net_unreachable",
                          "agent_end", "prompt_drift"}
@@ -160,10 +160,6 @@ def _log_thinking(agent: str, reasoning: str) -> None:
     log_debug(f"[思考全量:{agent}] {reasoning}")
 
 
-
-
-
-
 _HTTP_STATUS_RE = re.compile(r"\b(?:200|201|204|301|302|307|308|401|403|405|500)\b")
 # 枚举类工具中视为「正向存活」的状态码：2xx 成功 / 3xx 重定向
 _POSITIVE_STATUS_CODES = {"200", "201", "204", "301", "302", "307", "308"}
@@ -171,7 +167,7 @@ _PORT_OPEN_RE = re.compile(r"\b\d{1,5}/(?:tcp|udp)\s+open\b", re.IGNORECASE)
 # 增量打分 v3：路径抽取与敏感文件识别（配合 seen_signatures 去重）
 _PATH_EXTRACT_RE = re.compile(r"(?:/[A-Za-z0-9_.~%-]{2,}){1,4}")
 _SENSITIVE_RE = re.compile(
-    r"(config\.php|\.git/|backup|\.env|phpinfo|/flag|flag\.txt|wp-config|"
+    r"(config\.php|\.git/|backup|\.env|phpinfo|wp-config|"
     r"\.bak|\.sql|\.zip|web\.config|id_rsa|shadow)", re.IGNORECASE)
 _ENUM_TOOLS = {"run_tool", "fuzz", "parallel_shell"}   # 枚举类工具的状态码算增量
 # shell/http_request 等交互类工具的行为差异关键词（SQLi/命令注入/SSRF/反序列化）
@@ -180,7 +176,7 @@ _STRONG_BEHAVIOR_HINTS = (
     "syntax error", "mysql", "sqlite", "postgresql", "ORA-", "pg_sleep",
     "whoami", "id\n", "uid=", "root:", "deserialization", "serial",
     "gadget", "__destruct", "__wakeup", "popen", "system(", "eval(",
-    "exec(", "shell_exec", "sleep(", "benchmark(", "flag{",
+    "exec(", "shell_exec", "sleep(", "benchmark(", "flag{", "password",
 )
 _WEAK_BEHAVIOR_HINTS = ("admin", "root", "secret", "internal", "localhost")
 _ERROR_CONTEXT_RE = re.compile(r"error|exception|failed|denied|refused", re.IGNORECASE)
@@ -251,7 +247,7 @@ def _score_tool_result(tool: str, text: str, ctx) -> int:
     """信息增量打分 v3：+1 正向新认知 / 0 中性（纯规则，零 LLM）。
 
     原则：
-    - 铁证（flag/提交正确/漏洞确认/登录/差分判定）任何工具都算；
+    - 铁证（敏感凭据/漏洞确认/登录成功/差分判定）任何工具都算；
     - 枚举类工具：出现正向存活码 + 不同状态码差异/新路径/敏感文件即算增量；
     - 交互类工具（shell/http_request）：响应出现可利用行为特征（SQLi 报错、命令回显、
       内网内容、反序列化异常、敏感关键词）也算增量，避免精心构造的 payload 被误判为零；
@@ -260,9 +256,10 @@ def _score_tool_result(tool: str, text: str, ctx) -> int:
     """
     low = text.lower()
 
-    # ① 铁证：任何工具，永远优先于 hint 方向锁（读到 flag 必须 +1，D1 修复）
+    # ① 铁证：任何工具，永远优先于 hint 方向锁（读到敏感凭据必须 +1，D1 修复）
     if any(k in low for k in (
-            "flag{", '"correct": true', '"correct":true',
+            "flag{", "credential", "password", "passwd", "password=",
+            "token:", "token=", "access_token", "api_key", "secret_key",
             '"vulnerable": true', '"vulnerable":"true"',
             '"differentiated": true', '"vuln": true', '"vuln":"true"',
             "login success", "logged in")):

@@ -46,8 +46,8 @@ class ExecutorDisciplineSixTest(unittest.TestCase):
             "run_batch",                   # 旧 4
             "parallel_shell",              # 旧 4
             "spawn_subtask",               # 旧 4
-            "flag 与闭环",                 # 旧 5（9_6 起去平台提交语义，只保留黑板留证）
-            "最短路径",                    # 旧 9 拿 flag
+            "敏感凭据与闭环",             # 旧 5（9_6 起去平台提交语义，只保留黑板留证）
+            "最短路径",                    # 旧 9 拿成果
             "[闭环]",                      # 旧 9 最高优先级
             "remember",                    # 旧 7 沉淀
             "set_phase",                   # 旧 8

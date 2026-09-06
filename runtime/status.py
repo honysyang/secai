@@ -49,7 +49,7 @@ PHASE_DEFS = {
 }
 
 # 阶段转移图：允许的合法转移（防止 Agent 乱跳）。
-# 任意阶段若发现 flag 线索，都可直接切 post（在 hooks 证据自动切里兜底）。
+# 任意阶段若拿到敏感凭据/访问权，都可直接切 post（由 Agent 用 set_phase 执行）。
 PHASE_TRANSITIONS = {
     "recon":     ["enumerate", "post"],
     "enumerate": ["detect", "recon"],

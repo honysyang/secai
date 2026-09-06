@@ -3,7 +3,7 @@
 工具域模块：按功能域划分的工具实现。
 - list_tools：列出已安装安全 CLI
 - get_tool_spec：查看单个工具完整参数定义
-- run_tool：执行本地安全 CLI（统一管线处理爆破预算/flag 提交/注入过滤/台账）
+- run_tool：执行本地安全 CLI（统一管线处理爆破预算/注入过滤/台账）
 """
 from __future__ import annotations
 

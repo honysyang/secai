@@ -253,7 +253,7 @@ async def _summarize(agent: Agent, old_items: list[Any], prev_summary: str) -> s
     user_text = (
         "请把下面这段历史对话压缩成关键事实摘要，用于后续轮次继续推进任务。\n\n"
         "要求：\n"
-        "1. 保留所有已确认漏洞/入口/凭证/路径/flag 线索；\n"
+        "1. 保留所有已确认漏洞/入口/凭证/路径/敏感数据线索；\n"
         "2. 保留已失败方向和判死结论，避免重复尝试；\n"
         "3. 保留黑板上 confirmed 状态的关键条目；\n"
         "4. 不要编造未证实内容；\n"
