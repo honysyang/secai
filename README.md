@@ -1,6 +1,6 @@
 # SECAI — AI 驱动的授权渗透测试系统（SECAI-PT v4）
 
-> 面向**授权渗透交付**与 **CTF / 靶场跑分**的 AI 安全评估系统。
+> 面向**授权渗透交付**的 AI 安全评估系统。
 > 六层架构（L0–L6）+ 双核 Verifier + 多目标 SessionManager + Web 控制面（server + React 前端）。
 > 本 README 与代码现状同步更新（SECAI-PT v4 全量改造后，2026-09）。
 
@@ -26,17 +26,19 @@
 
 ## 1. 系统架构
 
-### 1.1 定位与两条执行面
+### 1.1 定位与执行面
 
-SECAI 存在两条真实的执行面，共用同一套 L0–L6 模块库：
+SECAI 自 9_6 起只保留一条执行面：授权渗透 Web 面（v4 主线）。原 CTF 跑分/通用 CLI 面
+（`app/main.py` + `bench_platform/` + `profiles/ctf_legacy/`）已整体删除，不再维护。
+全套 L0–L6 模块库由 Web 面独占：
 
 | 执行面 | 入口 | 驱动 | 目标 |
 |---|---|---|---|
-| **授权渗透 Web 面（v4 主线）** | `python -m server.main --port 8700` + 前端 `apps/web` | `/api/run` → `harness.SessionManager` → `harness/runner/pentest_target.py` 轻量目标循环 | 对授权范围内的目标做受控只读侦察，ScopeCheck → T2 审批门 → 只读工具，事件实时上 mux WS |
-| **CTF 跑分/通用 CLI 面（legacy，保留）** | `python -m app.main`（调度器/通用任务/--resume） | `app/main.py` 调度循环 → `harness/runner/executor.py` `ExecutorLoop` | TSecBench 类平台选题→渗透→提交→换题；CTF 专属假设收敛于 `profiles/ctf_legacy/` |
+| **授权渗透 Web 面（v4 主线，唯一执行面）** | `python -m server.main --port 8700` + 前端 `apps/web` | `/api/run` → `harness.SessionManager` → `harness/runner/pentest_target.py` 轻量目标循环 | 对授权范围内的目标做受控侦察/渗透，ScopeCheck → T2 审批门 → 工具白名单，事件实时上 mux WS |
 
-两条面共用：`core/`（事件总线/工具管线/hooks）、`runtime/`（模型池/预算/日志）、
-`pentest/`（L0–L1 数据模型 + L4/L5/L6 模块）、`sandbox/`、`adapters/`。
+Web 面独占：`core/`（事件总线/工具管线/hooks）、`runtime/`（模型池/预算/日志）、
+`pentest/`（L0–L1 数据模型 + L4/L5/L6 模块）、`harness/`（ExecutorLoop 等单目标执行骨架）、
+`sandbox/`、`adapters/`。
 
 ### 1.2 六层架构（L0–L6）
 
@@ -126,10 +128,10 @@ server/（Starlette + uvicorn）
 
 `harness/runner/executor.py`（R1 可测试性重构核心）：
 
-- `RunnerState`（`harness/runner/state.py`）：把原 `app/main.py` `_run_single_challenge`
-  闭包里的 nonlocal cell 变量提升为数据类字段（phase/steps/budget/seq/outcome/…）；
+- `RunnerState`（`harness/runner/state.py`）：把原单题执行闭包
+  里的 nonlocal cell 变量提升为数据类字段（phase/steps/budget/seq/outcome/…）；
 - `ExecutorLoop.run()`：`pre → step → post` 三段主循环，`_pre_step/_step/_post_step`
-  三个方法可脱离 `app/main.py` 用 fake state/clock/scorer/model_pool 直驱单测
+  三个方法可用 fake state/clock/scorer/model_pool 直驱单测
   （`tests/unit/runner/test_executor_loop.py` 13 条）；
 - `run_single_challenge()`：保留对外签名与 setup 流程（工作区/派任/黑板回注/工具裁剪/
   first_strike/缓存观测/executor 与 session 构建），组装依赖后交给 `ExecutorLoop.run()`。
@@ -247,7 +249,7 @@ require_http_url / reject_crlf`，防参数注入），共 **14 个适配器**�
   + `parse_output` 结构化提取）。
 
 CLI 执行侧的本地安全工具集仍在 `arsenal/registries/sec_tools.py`（92 个 YAML 定义、按
-`shutil.which` 可用性装载、`run_tool` 调用），供 CTF/跑分模式与 `/api/run` 只读白名单
+`shutil.which` 可用性装载、`run_tool` 调用），供执行循环与 `/api/run` 工具白名单
 （`pentest_target.ALLOWED_RECON_TOOLS`）使用。
 
 ### 2.9 工具管线与渐进披露（core/）
@@ -257,7 +259,7 @@ CLI 执行侧的本地安全工具集仍在 `arsenal/registries/sec_tools.py`（
 - `core/hooks.py`：`EventStreamHooks` 把 SDK 回调投影为事件流 + 多技能渐进披露 + 增量打分
   + `_flush_emit_buffer` 缓冲落盘（关键事件立即刷盘）；
 - `core/tool_pipeline.py`：统一工具调用管线（pre → guard → around → post 可插拔
-  middleware）：BruteGate（爆破预算）、prompt 注入防护、AutoSubmitFlag（提交铁律）、
+  middleware）：BruteGate（爆破预算）、prompt 注入防护、
   ArtifactSpill（输出外置）、L5 confine 接线等；
 - `core/agents_def.py`：Strategist/Executor/Reporter/Compactor 定义与动态 instructions；
 - `core/task_context.py`：TaskContext 执行现场 + `L5GuardrailConfig`
@@ -275,9 +277,12 @@ React 19 + TypeScript + Vite + CSS Modules（`--secai-*` Design Token，三栏�
   （EvidenceChain/PortScanResult/ToolOutputPanel/ReportPreview/LearningPanel）、sidebar
   （TargetList/TargetItem/ApprovalBadge）、primitives、theme。
 
-### 2.11 CTF 兼容（profiles/ctf_legacy + bench_platform）
+### 2.11 CTF 跑分面（已随 9_6 整体删除，历史存档）
 
-R4 H12 把 CTF 专属假设全部收敛：
+> 9_6 起 `profiles/ctf_legacy/`、`bench_platform/`、`app/`、`prompts/tsec_task.txt`
+> 已整体删除，本节仅作历史存档，所述模块均已不存在。
+
+R4 H12 曾把 CTF 专属假设全部收敛（历史描述）：
 
 - `profiles/ctf_legacy/task.py`：读 `prompts/tsec_task.txt` 模板替换凭证占位符（`build_default_task`）；
 - `profiles/ctf_legacy/platform.py`：提交铁律 `_submit_flags_if_any` / 通关机械复核
@@ -298,7 +303,7 @@ R4 H12 把 CTF 专属假设全部收敛：
 | Python | ≥ 3.11（仓库 `.venv` 为 3.13；ruff 目标 py311） |
 | Node | ≥ 20.19 或 ≥ 22.12（vite 8 engines 要求，见 `apps/web/package.json`） |
 | 系统 | Linux（bwrap 沙箱需 bubblewrap；VPN/安全 CLI 依赖 bash） |
-| 网络 | 模型网关（OpenAI 兼容）；CTF 跑分需可达 TSecBench 平台 |
+| 网络 | 模型网关（OpenAI 兼容）；内网目标需 OpenVPN |
 
 ### 3.2 安装（venv + requirements）
 
@@ -324,7 +329,7 @@ cp .env.example .env    # 真实密钥写 .env；.gitignore 已排除 .env
 | `LLM_MODEL` | | 主模型名；默认 `deepseek-chat` |
 | `ESCALATION_MODELS` | | 灾备模型池，单行 JSON：`[{"model","base_url","api_key","role"}]`，role ∈ backup/reasoning/cheap/fast/strong |
 | `DEEPSEEK_API_KEY` | | L4 联网搜索（`pentest/knowledge/web_search.py`）专用；未配置时 web_search 优雅降级「不可用」 |
-| `BENCHMARK_BASE_URL` / `BENCHMARK_TOKEN` | 跑分 | TSecBench 平台地址/凭证（托管模式由平台注入） |
+| `BENCHMARK_BASE_URL` / `BENCHMARK_TOKEN` | 已废弃 | 原 TSecBench 跑分平台凭证；9_6 跑分面删除后不再被任何代码读取（保留注释仅为历史存档） |
 | `BRUTEFORCE_MAX_CALLS` / `HINT_BUDGET_RATIO` / `SUSPEND_SECONDS` | | 成本治理（默认 20 / 0.35 / 2700） |
 | `MODEL_SWITCH_TURNS` / `MODEL_SELF_RESCUE_MAX` | | 模型惰性治理（默认 6 / 2） |
 | `VPN_CONFIG` / `VPN_AUTH` / `VPN_CMD` | 内网 | OpenVPN 完整内容 / 账密 / 命令 |
@@ -348,12 +353,14 @@ npm run build      # 产物 apps/web/dist（server 以 SPA fallback 托管）
 - 真实联调：前端 `apps/web/src/runtime/appRuntime.ts` 的 `DEMO_MODE` 翻 `false`，
   配好 `LLM_API_KEY` 后 `POST /api/run` 走真实执行 runner（ScopeCheck→审批→只读工具→黑板）。
 
-### 3.5 启动 CTF 跑分/通用 CLI（legacy 面）
+### 3.5 启动方式（面向实战）
+
+启动 Web 控制面后，经 `/api/run` 提交授权目标，由 `harness.SessionManager` 驱动
+`pentest_target.py` 循环逐目标执行（ScopeCheck → 审批门 → 工具白名单 → 黑板），
+事件实时经 mux WS 推送到前端。
 
 ```bash
-.venv/bin/python -m app.main                              # 跑分模式（配了平台凭证自动进调度器）
-.venv/bin/python -m app.main "<任务描述>" [角色提示]        # 通用渗透任务
-.venv/bin/python -m app.main --resume                     # 从上次 checkpoint 续跑
+.venv/bin/python -m server.main --port 8700    # 起后端（9_6 起唯一执行入口）
 ```
 
 （本地安全 CLI 工具可用性/安装：`python -m arsenal.registries.sec_tools list|missing|install`。）
@@ -385,7 +392,7 @@ e2e 用例为单目标 `127.0.0.1` 只读侦察，预算收敛（≤3 轮 / ≤9
 
 - `core/events.py`：进程级 `BUS`（内存历史 + 订阅者分发），事件经
   `core/hooks.py` 的 `EventStreamHooks` 投影发射；
-- SQLite 落库：CTF/CLI 面 `adapters/db.py`（`data/agent.db`，tasks/events 表，WAL，
+- SQLite 落库：`adapters/db.py`（`data/agent.db`，tasks/events 表，WAL，
   线程安全：每线程连接 + 写锁）；pentest 面 `pentest/blackboard/store.py` 的 `events` 表
   （ApprovalGate 审批记录等 R3 审计落库）；
 - `events.jsonl` 仅人读留痕（崩溃现场保护除外）；关键事件（flag/阶段切换/网络异常/agent_end/
@@ -509,21 +516,18 @@ SECAI/
 │   └── learning/            #   L6 学习层（models/store/distiller/retriever/metrics）
 ├── sandbox/                 # L5 沙箱：backend(协议) / policy(词表) / bubblewrap / selfcheck
 ├── profiles/                # 任务画像族
-│   ├── ctf_legacy/          #   CTF 收敛：task.py（默认任务书）+ platform.py（提交/终局）
 │   └── practical_pentest/   #   config.yaml + report/（纯函数报告引擎 + YAML 模板）
+│                             #   （9_6 注：ctf_legacy/ 已随 CTF 跑分面整体删除）
 ├── core/                    # 事件总线 / hooks / 工具管线 / Agent 定义 / 上下文管理
 │   ├── events.py            #   EventBus + BUS（进程级）
 │   ├── tool_pipeline.py     #   统一工具调用管线（middleware）
 │   ├── hooks.py / agents_def.py / task_context.py / context_manager.py / charter.py / memory.py
 ├── tools/domains/           # 执行工具按域拆分（exec/web/knowledge/payload/seccli/… + registry）
 ├── runtime/                 # model_pool / model_fallback / budget / stuck / reporting / log / …
-├── bench_platform/          # platform_client(单例) / platform_tools / scheduler(纯函数调度)
 ├── adapters/                # config（env/模型）/ db（SQLite data/agent.db）
 ├── arsenal/                 # 声明式资产库：roles(17)/skills(97)/tools(92 CLI)/vulns/pocs/
 │                             # knowledge/payloads + registries
 ├── demo_tools.py            # re-export shim（R1 后收敛为兼容导出层）
-├── app/                     # legacy：main.py（跑分调度编排，506 行）+ server.py（SSE 服务）
-├── prompts/tsec_task.txt    # 跑分任务模板
 ├── scripts/gate.sh          # 质量门（ruff + tests/unit + tests/replay，无网）
 ├── docs/                    # SECAI架构设计文档 / USER_GUIDE / DEBT_LEDGER 等
 ├── tests/                   # unit（含 runner/pentest/knowledge/learning/sandbox）+

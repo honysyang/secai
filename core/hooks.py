@@ -579,7 +579,7 @@ class EventStreamHooks(RunHooks):
         self._prompt_hashes: dict = {}
 
     def _emit(self, kind: str, **data):
-        # 保留文件留痕（向后兼容，main.py 读 events.jsonl 的地方不变）
+        # 保留文件留痕（向后兼容，事件消费者读 events.jsonl 的口径不变）
         entry = {"kind": kind, "ts": round(time.time(), 1), "code": self.code, **data}
         line = json.dumps(entry, ensure_ascii=False)
         _log_event(self.code, kind, data)

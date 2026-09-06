@@ -5,8 +5,8 @@ R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
 - _python_traceback_hint：python3 脚本报错提炼（shell 后置 hint）
 - think / checkpoint / set_phase：执行者决策缓冲 / 里程碑存档 / 阶段切换
 
-（提交铁律：shell/http_request 等工具返回前机械扫描 flag 并自动提交，已由
-  core.tool_pipeline 的 AutoSubmitFlagMiddleware / ArtifactSpillMiddleware 统一处理。）
+（9_6 注：原提交铁律 AutoSubmitFlagMiddleware 已随 CTF 跑分面删除；超大输出仍由
+  core.tool_pipeline 的 ArtifactSpillMiddleware 统一外置。）
 """
 from __future__ import annotations
 

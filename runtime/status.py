@@ -42,9 +42,9 @@ PHASE_DEFS = {
         "next": "post（已拿到权限/读文件能力后切换）",
     },
     "post": {
-        "goal": "后利用拿 flag",
-        "focus": "目标导向：先读 /flag、/flag.txt、/etc/passwd、已知真实文件名；读不到则深入 includes/config.php 拿数据库配置连库查、读合同/文档内容、环境变量。拿到 flag 后 submit_flag，通关 close。",
-        "next": "（终态，达成后 finalize）",
+        "goal": "后利用拿成果（flag/敏感数据/权限证据）",
+        "focus": "目标导向：先读 /flag、/flag.txt、/etc/passwd、已知真实文件名；读不到则深入 includes/config.php 拿数据库配置连库查、读合同/文档内容、环境变量。拿到 flag 后立即写入黑板留证并继续验证其真实性与完整性。",
+        "next": "（终态，达成后由 Strategist 收尾复盘）",
     },
 }
 

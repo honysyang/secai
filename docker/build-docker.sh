@@ -43,7 +43,7 @@ cat <<EOF
   docker run --rm -it --env-file .env -v "\$(pwd)/data:/app/data" \\
       --cap-add NET_ADMIN --device /dev/net/tun ${IMAGE_NAME}:${IMAGE_TAG}
 
-  # 启动 Web 监控前端（访问 http://localhost:8000）
+  # 启动 Web 监控前端（访问 http://localhost:8000；9_6 起 app 包已删除，入口为 server.main）
   docker run --rm -it -p 8000:8000 --env-file .env -v "\$(pwd)/data:/app/data" \\
-      ${IMAGE_NAME}:${IMAGE_TAG} python3 -m app.server
+      ${IMAGE_NAME}:${IMAGE_TAG} python3 -m server.main --port 8000
 EOF

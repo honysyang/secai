@@ -1,13 +1,9 @@
-"""run_task 编排支撑（原 app/main.py run_task 内嵌段按职责抽离）。
+"""run_task 编排支撑（立法 / 战报两大入口编排段）。
 
-app.main.run_task 被 tests/test_core.py 的 AST 结构测试锁定（主循环 while True /
-_run_one / _endgame_sweep 调用 / 最终 return 必须物理存在于 main.py），故本文件承载
-其两大「入口编排段」：
 - legislate_charter：战略家立法 + 规划（全局一次 + 同任务幂等缓存复用）；
 - finalize_report：报告者收尾（战报后台生成 + 落 field_notes + 四指标看板）。
 
-等价变换：逻辑与原 run_task 内嵌段逐行对应；global_model_pool 经
-harness.runner.pool 的 set/get 句柄读写，避免模块间循环 import。
+global_model_pool 经 harness.runner.pool 的 set/get 句柄读写，避免模块间循环 import。
 """
 from __future__ import annotations
 

@@ -1,6 +1,5 @@
 """Artifacts 域：超长输出外置 / 文件读写（artifacts/ 全文存取）。
 
-R1 纯搬家：自 demo_tools.py 按功能域拆出，业务逻辑零改动。
 - read_artifact：读取 artifacts/ 外置全文（可分段）
 - write_file：把内容写入工作目录文件（相对路径校验）
 - _spill_output：旧兼容——超长输出落盘 artifacts/ 并返回预览（供未接入管线的只读工具用）
@@ -15,7 +14,6 @@ from agents import RunContextWrapper, function_tool
 
 from core.task_context import TaskContext
 from core.tool_pipeline import DEFAULT_PIPELINE, with_pipeline
-from profiles.ctf_legacy.platform import _submit_flags_if_any
 from tools.domains._base import _guard_output
 
 ARTIFACT_SPILL_THRESHOLD = 4000  # 工具输出超过此字符数才外置到 artifacts/
@@ -27,11 +25,9 @@ def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     已接入管线的工具由 ArtifactSpillMiddleware 统一处理，本函数保留给未接入
     管线的只读工具（distinguish / run_tool / read_artifact 等）使用。
     """
-    submit_note = _submit_flags_if_any(ctx, text)  # 先扫全文 flag 再截断
     guard_note = _guard_output(text)               # 先扫全文注入特征再截断
-    note = "\n".join(x for x in (submit_note, guard_note) if x)
     if len(text) <= ARTIFACT_SPILL_THRESHOLD:
-        return text + (f"\n{note}" if note else "")
+        return text + (f"\n{guard_note}" if guard_note else "")
     c = ctx.context
     art_dir = c.workdir / "artifacts"
     art_dir.mkdir(exist_ok=True)
@@ -39,8 +35,8 @@ def _spill_output(ctx: RunContextWrapper[TaskContext], text: str) -> str:
     (art_dir / f"{art_id}.txt").write_text(text, encoding="utf-8")
     tail = (f"\n...[已截断，全文 {len(text)} 字符保存到 artifacts/{art_id}.txt]"
             + f"\n[用 read_artifact {art_id} 读取全文]")
-    if note:
-        tail += f"\n{note}"
+    if guard_note:
+        tail += f"\n{guard_note}"
     return text[:ARTIFACT_SPILL_THRESHOLD] + tail
 
 

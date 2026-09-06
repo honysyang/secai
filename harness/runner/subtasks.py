@@ -1,11 +1,9 @@
-"""后台子任务三闸门调度（原 app/main.py 子任务函数按职责搬离）。
+"""后台子任务三闸门调度。
 
 - _run_subtasks：并发启动 pending 子任务（asyncio.Task 后台化，不阻塞主循环），
   每子任务携带独立 SubtaskBudget（token/turn/墙上时间任一耗尽即停）；
 - _reap_subtasks：非阻塞收割已完成子任务，返回结果摘要供主循环注入下一轮 input；
 - _cancel_all_subtasks：取消并等待所有后台子任务（第三道闸门，父任务收尾统一回收）。
-
-等价变换搬移：逻辑与 app.main 时代完全一致，只把模块级常量一并带至本文件。
 """
 from __future__ import annotations
 
@@ -168,9 +166,8 @@ async def _run_subtasks(ctx, pending, challenge_workdir: Path, brief: str,
                 # 合并子任务 token 用量到父任务（原子累加）
                 for k in ("input", "output", "total", "requests"):
                     ctx.token_usage[k] = ctx.token_usage.get(k, 0) + sub_ctx.token_usage.get(k, 0)
-                # R4：子任务 flag 不 append 进父 correct_flags——flag 计数以平台
-                # correct_flag_count 为唯一真相源（_is_completed 已按平台复核），
-                # 避免双轨记账与平台不一致；子任务 flag 仍可见于黑板 subtask:<id>。
+                # 9_6 注：子任务 flag 不 append 进父 correct_flags——
+                # flag 结果以黑板 subtask:<id> 与 finish_subtask 结构化结论为准。
                 # 关闭子任务 session（修补 6：连接/句柄生命周期闭环）
                 try:
                     sub_session.close()

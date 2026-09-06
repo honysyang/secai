@@ -45,11 +45,6 @@ class _FakePool:
         return None
 
 
-class _FakeClient:
-    def get_hint(self, code):
-        return ""
-
-
 class _FakeSession:
     """父 session 替身：记录 close 调用。"""
 
@@ -93,7 +88,7 @@ class CleanupSubSqliteTest(unittest.TestCase):
             challenge_workdir=self.challenge_dir,
             sessions_dir=self.sessions_dir,
             session=_FakeSession(), executor=_FakeExecutor(),
-            model_pool=_FakePool(), client=_FakeClient(),
+            model_pool=_FakePool(),
             hooks=None, outer_hooks=None, difficulty="", db=None,
         )
 

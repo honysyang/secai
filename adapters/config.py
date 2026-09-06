@@ -5,10 +5,10 @@
 - DeepSeek 等 OpenAI 兼容后端没有官方 trace endpoint，必须关闭向 OpenAI 平台上报。
 
 说明：
-    为了使 `python -m app.main --help` 及无 API Key 的启动阶段能够正常加载，
-    `_client` 与 `MODEL` 采用延迟初始化。`MODEL` 是一个 agents SDK 兼容的 `Model`
-    代理；首次调用 `get_response` / `stream_response` 时才创建 `AsyncOpenAI` 实例。
-    未配置 API Key 时只有真正调用 LLM 才会报错。
+    模块导入阶段不要求 API Key 必须存在：`_client` 与 `MODEL` 采用延迟初始化。
+    `MODEL` 是一个 agents SDK 兼容的 `Model` 代理；首次调用 `get_response` /
+    `stream_response` 时才创建 `AsyncOpenAI` 实例。未配置 API Key 时只有真正
+    调用 LLM 才会报错。
 """
 import json
 import os
@@ -36,11 +36,7 @@ VPN_CMD = os.getenv("VPN_CMD", "openvpn").strip()
 VPN_CONFIG = os.getenv("VPN_CONFIG", "").strip()
 VPN_AUTH = os.getenv("VPN_AUTH", "").strip()
 
-# 靶场平台（TSecBench）——跑分任务的认证凭证
-BENCHMARK_BASE_URL = os.getenv("BENCHMARK_BASE_URL", "").rstrip("/")
-BENCHMARK_TOKEN = os.getenv("BENCHMARK_TOKEN", "")
-
-# 成本治理（爆破/hint 预算、换脑、挂起）已抽离到 budget.py
+# 成本治理（爆破预算、换脑、挂起）已抽离到 runtime/budget.py（9_6 起平台 hint 预算随跑分面移除）
 
 # 延迟初始化：避免模块一导入阶段就要求 API Key 必须存在。
 _client = None

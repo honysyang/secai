@@ -2,6 +2,10 @@
 
 > SECAI-PT v4（SECAI「破阵」终极执行计划 v4 全量实施后）技术架构与工程设计说明
 > 版本：v4.0 ｜ 更新：2026-09-06 ｜ 与代码现状同步
+> 9_6 重要注：本文档中所有关于 CTF 跑分面（`app/`、`bench_platform/`、
+> `profiles/ctf_legacy/`、`prompts/tsec_task.txt`、TSecBench 平台协议）的描述均为
+> **历史存档**——该执行面已随 9_6 改造整体删除，第 6/13 章所述模块均已不存在，
+> 仓库现仅保留授权渗透 Web 面（`server/` + `pentest_target.py`）。
 
 ---
 

@@ -1,7 +1,7 @@
 """ExecutorLoop 直驱单测（SECAI-PT R1 验收：≥8 条，fake 依赖注入）。
 
-用 fake state/clock/scorer/events/model_pool/executor/hooks/session/client 构造
-ExecutorLoop，不触 LLM/平台/真实文件系统（field_notes 落盘 patch 到临时目录），
+用 fake state/clock/scorer/events/model_pool/executor/hooks/session 构造
+ExecutorLoop，不触 LLM/真实文件系统（field_notes 落盘 patch 到临时目录），
 直驱 _pre_step/_step/_post_step 与 run() 完成 pre/step/post 一轮，
 断言 RunnerState 状态迁移与事件（进程级 BUS + hooks）输出。
 
@@ -120,15 +120,6 @@ class FakeSession:
         self.closed = True
 
 
-class FakeClient:
-    def __init__(self):
-        self.hint_calls = []
-
-    def get_hint(self, code: str) -> str:
-        self.hint_calls.append(code)
-        return f"hint-for-{code}"
-
-
 # ---------------------------------------------------------------------------
 # 构造 helper
 # ---------------------------------------------------------------------------
@@ -152,7 +143,7 @@ class ExecutorLoopTest(unittest.TestCase):
 
     # -- helpers ------------------------------------------------------------
     def _loop(self, ctx=None, state=None, *, clock=None, pool=None, executor=None,
-              hooks=None, session=None, client=None, events=None, scorer=None,
+              hooks=None, session=None, events=None, scorer=None,
               tools=None, difficulty: str = "", code: str = "t1", **kw) -> ExecutorLoop:
         clock = clock or FakeClock(1000.0)
         ctx = ctx or _make_ctx(self.tmp, clock_now=clock.monotonic())
@@ -163,7 +154,7 @@ class ExecutorLoopTest(unittest.TestCase):
             challenge_workdir=self.tmp / "challenge",
             sessions_dir=self.tmp / "sessions",
             session=session or FakeSession(), executor=executor or FakeExecutor(),
-            model_pool=pool or FakeModelPool(), client=client or FakeClient(),
+            model_pool=pool or FakeModelPool(),
             hooks=hooks or FakeHooks(), outer_hooks=FakeHooks(),
             difficulty=difficulty, db=None,
             clock=clock, events=events, scorer=scorer, tools=tools, **kw)

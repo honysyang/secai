@@ -64,11 +64,6 @@ class _FakePool:
         return None
 
 
-class _FakeClient:
-    def get_hint(self, code):
-        return ""
-
-
 class _FakeSession:
     def close(self):
         pass
@@ -124,7 +119,7 @@ class StuckReplayWindowTest(unittest.TestCase):
             challenge_workdir=self.challenge_dir,
             sessions_dir=self.sessions_dir,
             session=_FakeSession(), executor=_FakeExecutor(),
-            model_pool=_FakePool(), client=_FakeClient(),
+            model_pool=_FakePool(),
             hooks=None, outer_hooks=None, difficulty="", db=None,
         )
 

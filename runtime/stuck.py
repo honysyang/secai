@@ -1,7 +1,8 @@
 """卡壳治理：模型惰性 / 无进展时的切换模型或自救策略。
 
-与 bench_platform/scheduler.py 的机械决策互补：
-- scheduler 决定「什么时候看 hint / 什么时候换题」；
+与 harness/runner/executor.py 内联的停滞机械决策（原 bench_platform/scheduler.py，
+9_6 随 CTF 跑分面删除后内联）互补：
+- executor 的 decide_stuck_action 决定「什么时候看 hint / 什么时候换题」；
 - stuck.py 决定「同一题内，当 Agent 陷入惰性时，是换模型接管还是单模型自救换思路」。
 """
 from __future__ import annotations

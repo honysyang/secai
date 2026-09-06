@@ -93,9 +93,9 @@ EXECUTOR_STATIC_INSTRUCTIONS = """你是 SecAI 的执行者，负责执行管理
    判死结论必须附证据，被证伪的旧结论用 supersedes 取代。
 4. 批量探测（多 payload/路径/参数）一律用 fuzz / run_batch；互不依赖的动作用
    parallel_shell；多个独立分支用 spawn_subtask。shell 只用于 fuzz 覆盖不了的场景。
-5. flag 与闭环：发现 flag 系统会机械代提交并回执——correct=true 且有剩余面数→
-   继续找下一面，全部通关系统自动结束本题；确认漏洞/凭据/源码后立即沿最短路径
-   拿 flag，系统注入的[闭环]指令优先级最高，按指令执行。
+5. flag 与闭环：发现 flag 立即写入黑板（key=flag，value=flag 原文，evidence=来源命令），
+   随后继续验证其真实性与完整性；确认漏洞/凭据/源码后立即沿最短路径拿 flag，
+   系统注入的[闭环]指令优先级最高，按指令执行。
 6. 沉淀与收尾：拿到可复用攻击链后用 remember 沉淀 POC/知识/技能（只在真正有价值时）；
    阶段随进展用 set_phase 切换，任务完成或证据枯竭时调用 finalize 提交结论。
 
@@ -369,7 +369,7 @@ compactor_agent = Agent(name="Compactor", instructions=COMPACTOR_INSTRUCTIONS,
 
 
 # 卡壳教练已合并到 Strategist：当执行者卡壳时，由 _replan 顺带产出 1~2 条方向建议。
-# 保留一个轻量提示函数，供 main.py 在不调用独立 Agent 时直接注入 next_input。
+# 保留一个轻量提示函数，供执行循环在不调用独立 Agent 时直接注入 next_input。
 def coach_direction_prompt(blackboard_text: str, events_tail: str, skills_text: str) -> str:
     """不调用 LLM，直接返回硬提示模板，让执行者/Strategist 在 replan 时给出方向。"""
     return (

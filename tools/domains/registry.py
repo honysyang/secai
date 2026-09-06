@@ -12,9 +12,7 @@ import json
 
 from agents import RunContextWrapper, function_tool
 
-from bench_platform import platform_tools
 from core.task_context import TaskContext
-from profiles.ctf_legacy.platform import finalize
 from tools.domains.artifacts import read_artifact, write_file
 from tools.domains.blackboard import blackboard
 from tools.domains.exec import checkpoint, http_request, parallel_shell, run_batch, set_phase, shell, think
@@ -45,7 +43,6 @@ _TOOL_SPECS = [
     (http_request, True, ()),
     (read_artifact, True, ()),
     (write_file, True, ()),
-    (finalize, True, ()),
     (checkpoint, True, ()),
     (think, True, ()),
     (todo_add, True, ()),
@@ -74,8 +71,8 @@ _TOOL_SPECS = [
     (get_knowledge, False, ("knowledge",)),
     (connect_vpn, False, ("vpn",)),
 ]
-# 平台工具（platform_tools 导入）：统一归入 platform 组，非核心
-_TOOL_SPECS += [(t, False, ("platform",)) for t in platform_tools.PLATFORM_TOOLS]
+# 注：9_6 起平台编排工具组（platform，原 bench_platform/platform_tools）随 CTF 跑分面整体删除，
+# TOOL_GROUPS 不再含 platform 组；停滞机械决策已内联 harness/runner/executor.py。
 
 _BASE_TOOLS = [t for t, _, _ in _TOOL_SPECS]
 # 核心工具名（enable_tool/list_disabled_tools 为控制工具，单独挂载、不参与分组）
@@ -142,12 +139,12 @@ _gate = _tool_gate
 ALL_TOOLS = _BASE_TOOLS + [enable_tool, list_disabled_tools]
 
 
-def build_default_tools(groups=("platform", "vpn", "seccli", "web", "poc", "vuln", "knowledge")) -> set:
+def build_default_tools(groups=("vpn", "seccli", "web", "poc", "vuln", "knowledge")) -> set:
     """构建「初始启用工具集」= 核心工具 + 指定工具组。
 
-    用于 main.py 跑分任务初始化 ctx.enabled_tools：核心工具常驻，平台/VPN/安全CLI
-    以及 web/poc/vuln/knowledge 等组一次性挂齐，避免运行时 enable_tool 变动工具 schema
-    破坏前缀缓存。剩余未启用的工具仍可用 enable_tool 挂载（逻辑闸保留兼容）。
+    核心工具常驻，VPN/安全CLI 以及 web/poc/vuln/knowledge 等组一次性挂齐，
+    避免运行时 enable_tool 变动工具 schema 破坏前缀缓存。剩余未启用的工具
+    仍可用 enable_tool 挂载（逻辑闸保留兼容）。
     """
     enabled = set(CORE_TOOL_NAMES)
     for g in groups:

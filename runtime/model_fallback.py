@@ -4,7 +4,7 @@
 与单题 Executor 内部的自有模型池灾备（_run_single_challenge 主循环内）区分：
 Executor 在单题 while 循环内自行切换模型，外层 Agent 用本函数兜底。
 
-独立成 runtime 层模块，避免 main.py 与 runtime/stuck.py 之间循环导入。
+独立成 runtime 层模块，避免外层编排与 runtime/stuck.py 之间循环导入。
 """
 from __future__ import annotations
 

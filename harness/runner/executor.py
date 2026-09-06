@@ -1,21 +1,15 @@
-"""ExecutorLoop：单题执行循环的类化实现（原 app/main.py `_run_single_challenge` 等价变换）。
+"""ExecutorLoop：单题执行循环的类化实现。
 
-原实现把「pre/step/post」写成三个内嵌 async 闭包，通过 nonlocal 捕获
-switched / outcome / death_reason / intervention_count / hint_used / coach_used /
-turn_count / next_input 在闭包间穿梭，无法脱离 main 测试。本模块将其变换为：
+pre/step/post 三段主循环 + 机械治理（墙钟/token 预算、模型切换/自救、破局复盘、
+子任务调度/收割、清理与收尾报告），全部依赖构造注入（state/clock/events/scorer/
+tools/model_pool/hooks），单测可用 fake 替身直驱 _pre_step/_step/_post_step
+断言状态迁移与事件，无需真实 LLM/时间。
 
-- RunnerState（harness/runner/state.py）：全部 nonlocal cell 变量 → 数据类字段；
-- ExecutorLoop：循环控制 + _pre_step/_step/_post_step 三个可直驱方法；
-- run_single_challenge()：保留原 _run_single_challenge 的对外签名与 setup 流程
-  （工作区/派任/黑板回注/工具裁剪/first_strike/缓存观测/executor 与 session 构建），
-  组装依赖后交给 ExecutorLoop.run()。
-
-等价变换红线：零业务改动。run() 的主循环、熔断、干预、子任务调度/收割、
-清理与收尾报告流程与原 main.py 逐行对应。
+停滞机械决策（原 bench_platform/scheduler.py 的等价纯函数，9_6 随 CTF 跑分面
+删除后内联至本模块）与 runtime/stuck.py 的模型惰性检测互补。
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time
@@ -29,8 +23,6 @@ import adapters.db as db_mod
 import runtime.stuck as stuck_mod
 from adapters.config import FAST_MODEL_NAME
 from arsenal.registries.role_registry import assign_role
-from bench_platform.platform_client import PlatformClient
-from bench_platform.scheduler import SINGLE_EMPTY_TURNS, decide_stuck_action
 from core.agents_def import EXECUTOR_DYNAMIC_PREFIX, _build_dynamic_context, _prompt_hash, build_executor
 from core.context_manager import compact_if_needed
 from core.events import BUS
@@ -57,7 +49,6 @@ from harness.runner.subtasks import (
 from runtime.budget import (
     COST_LIMITS,
     HINT_BUDGET_RATIO,
-    HINT_GRACE_TURNS,
     MAX_STUCK_INTERVENTIONS,
     SUSPEND_SECONDS,
     WALLCLOCK_BUDGET,
@@ -77,6 +68,48 @@ ENABLE_COACH = os.getenv("ENABLE_COACH", "false").lower() in ("1", "true", "yes"
 ENABLE_PLAN_MODE = os.getenv("ENABLE_PLAN_MODE", "false").lower() in ("1", "true", "yes")
 STRONG_MODEL_MAX_TURNS = 3  # 强模型（破局）每题目最多轮数，超限切回快模型
 # 单题「自救+切换模型+hint+replan」累计干预上限见 runtime.budget.MAX_STUCK_INTERVENTIONS（B4 收口）
+
+# ================= 停滞机械决策（原 bench_platform/scheduler.py 等价纯函数，9_6 内联） =================
+# 轮次预算按难度分级（easy≤12 / medium≤20 / hard≤25 的 hint/skip 分档）。
+# 针对 cloud 类题目（azure/s3/blob/sas/storage），结果通常二元、死磕收益低，
+# hint/skip 阈值整体再提前一档。
+_HINT_EARLY_TURNS = 2
+_SKIP_EARLY_TURNS = 4
+_HINT_DIFF_BUDGET = {
+    "easy":   {"hint": 4,  "skip": 8},
+    "medium": {"hint": 6,  "skip": 12},
+    "hard":   {"hint": 8,  "skip": 18},
+}
+_DEFAULT_HINT_BUDGET = {"hint": 6, "skip": 12}   # 难度未知时的兜底
+SINGLE_EMPTY_TURNS = 4   # 单题连续 N 轮无工具调用 → 机械换题（空转也放弃，与难度无关）
+
+# 触发「提前放弃」的题目指纹关键词（云存储 / SaaS / 二元结果类）
+# 注意：不要加入过于宽泛的词（如 container），避免误触发普通 Web 题
+_EARLY_HINT_KEYWORDS = ("azure", "azurite", "blob", "sas", "s3", "lambda",
+                        "firebase", "supabase", "aws storage", "gcp", "google cloud")
+
+
+def decide_stuck_action(zero_gain_turns: int, hint_used: bool,
+                        difficulty: str = "", task_text: str = "") -> str:
+    """单题停滞决策：'hint' 看提示 / 'skip' 换题 / 'continue' 继续。
+
+    优先级：先看 hint（一次），看完仍无进展到更大阈值才换题。
+    阈值按题目难度分级（easy/medium/hard），难题给更多轮次。
+    若题目描述/指纹命中云存储等二元结果类关键词，hint/skip 阈值整体提前。
+    """
+    task_lower = str(task_text).lower()
+    is_cloud_like = any(kw in task_lower for kw in _EARLY_HINT_KEYWORDS)
+
+    budget = _HINT_DIFF_BUDGET.get(str(difficulty).lower(), _DEFAULT_HINT_BUDGET).copy()
+    if is_cloud_like:
+        budget["hint"] = max(2, budget["hint"] - _HINT_EARLY_TURNS)
+        budget["skip"] = max(4, budget["skip"] - _SKIP_EARLY_TURNS)
+
+    if zero_gain_turns >= budget["skip"]:
+        return "skip"
+    if zero_gain_turns >= budget["hint"] and not hint_used:
+        return "hint"
+    return "continue"
 
 
 class _SystemClock:
@@ -98,11 +131,11 @@ def _max_interventions(difficulty: str) -> int:
 def _tool_groups_for(role_name: str, desc: str) -> tuple:
     """按题型返回初始工具组，减少无关工具干扰（配合 build_default_tools）。
 
-    原则：核心工具常驻；平台编排/VPN 始终保留；二进制/协议/Pwn 题不挂 web 组
+    原则：核心工具常驻；VPN + 安全 CLI 始终保留；二进制/协议/Pwn 题不挂 web 组
     （distinguish/web_search 对二进制帮助有限），其余题型挂 web 组做差分实验。
     """
     text = f"{role_name or ''} {desc or ''}".lower()
-    groups = ["platform", "vpn", "seccli"]  # 平台编排 + VPN + 安全 CLI（run_tool）
+    groups = ["vpn", "seccli"]  # VPN + 安全 CLI（run_tool）
     if any(k in text for k in ("二进制", "协议", "pwn", "reverse", "逆向", "f1", "f2")):
         return tuple(groups)  # 二进制/协议题：去掉 web 组，避免差分实验/联网干扰
     groups.append("web")       # Web/通用题：distinguish + web_search
@@ -112,9 +145,9 @@ def _tool_groups_for(role_name: str, desc: str) -> tuple:
 class ExecutorLoop:
     """单题完整渗透循环：_pre_step → (_step)* → _post_step → 清理/收尾。
 
-    依赖全部构造注入（state/clock/events/scorer/tools/model_pool/hooks/client），
+    依赖全部构造注入（state/clock/events/scorer/tools/model_pool/hooks），
     单测可用 fake 替身直驱 _pre_step/_step/_post_step 断言状态迁移与事件，
-    无需真实 LLM/平台/时间。
+    无需真实 LLM/时间。
     """
 
     def __init__(
@@ -137,7 +170,6 @@ class ExecutorLoop:
         executor,
         # 编排依赖（注入替身即得可测回路）
         model_pool,
-        client: PlatformClient,
         hooks,                  # 题级事件 hooks（事件发射/落盘出口）
         outer_hooks=None,       # 外层 generic hooks（fork_analyst 读事件历史用）
         difficulty: str = "",
@@ -162,7 +194,6 @@ class ExecutorLoop:
         self.session = session
         self.executor = executor
         self.model_pool = model_pool
-        self.client = client
         self.hooks = hooks
         self.outer_hooks = outer_hooks
         self.difficulty = difficulty
@@ -435,28 +466,10 @@ class ExecutorLoop:
                     self.suspend_tokens_map):
                 action = "hint"
         if action == "hint":
-            try:
-                hint = await asyncio.to_thread(self.client.get_hint, self.code)
-            except Exception as e:
-                hint = f"（获取提示失败：{str(e)[:120]}）"
-            self.state.hint_used = True
-            self.ctx.zero_gain_turns = 0
-            self.ctx.hint_grace_active = True
-            self.state.intervention_count += 1
-            self.ctx.blackboard["hint_directive"] = {
-                "value": hint, "status": "confirmed", "ts": int(time.time()),
-                "verified": True, "evidence": "platform_hint",
-            }
-            log_info(f"  [hint] 单题 {self.code} 看提示（已写入 hint_directive）")
-            return False, (
-                f"【系统法令】平台提示已写入黑板 hint_directive，具有最高优先级。\n"
-                f"原文：{hint}\n\n"
-                f"接下来 {HINT_GRACE_TURNS} 轮你的每个动作必须直接验证该提示中的断言，"
-                f"与提示无关的侦察/扫描将被系统判为零增量。"), ""
+            # 9_6 随 CTF 跑分面删除：平台 hint 客户端已不存在，停滞直接走 skip 判死
+            log_warn(f"[skip] 单题 {self.code} 停滞达 hint 阈值但平台 hint 已随跑分面移除，按换题处理")
+            action = "skip"
 
-        if self.state.hint_used and self.ctx.zero_gain_turns >= HINT_GRACE_TURNS:
-            log_warn(f"[hint-stale] 单题 {self.code} hint 后 {HINT_GRACE_TURNS} 轮无转化，机械换题")
-            return True, "", "hint_stale"
         if action == "skip":
             failed_paths = sum(
                 1 for v in self.ctx.blackboard.values()
@@ -672,46 +685,36 @@ class ExecutorLoop:
 
 async def run_single_challenge(code: str, desc: str, addrs: list, charter: str,
                                task: str, global_plan: str, hooks, workdir: Path,
-                               client: PlatformClient, difficulty: str = "",
-                               flag_total: int = 1, flag_done: int = 0,
+                               difficulty: str = "",
                                model_pool: ModelPool | None = None) -> str:
-    """对一道题执行完整渗透循环，返回 outcome：solved / stuck / fatal（原 _run_single_challenge）。
+    """对一道题执行完整渗透循环，返回 outcome：solved / stuck / fatal。
 
-    单题独立 context + 独立 session；停滞时机械看 hint / 换题（调度器决策），
-    选题/换题/看 hint 不由 LLM 自觉——这是报告 P0-4 的核心修复。
-
-    等价变换：setup 段原样保留，闭包状态机由 ExecutorLoop + RunnerState 承接。
+    单题独立 context + 独立 session；停滞时机械决策（原调度器纯函数已内联本模块），
+    选题/换题不由 LLM 自觉。
     """
-    # 题级独立工作区：3 槽并发下每题独立 events/session/artifacts，避免交错
+    # 题级独立工作区：并发下每题独立 events/session/artifacts，避免交错
     challenge_workdir = workdir / f"worker_{code}"
     challenge_workdir.mkdir(parents=True, exist_ok=True)
     challenge_hooks = EventStreamHooks(challenge_workdir, code)
     sessions_dir = workdir / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
 
-    role = assign_role(code, desc)  # 题级派任（P0-5：按 unique_code 前缀 + 描述）
+    role = assign_role(code, desc)  # 题级派任（按 unique_code 前缀 + 描述）
     log_info(f"== 单题 {code}：派任 {role['role']} ==")
-    log_info(f"单题 {code} 目标：{desc.strip()[:150]}，flag 目标 {flag_total} 面（已拿 {flag_done}）")
+    log_info(f"单题 {code} 目标：{desc.strip()[:150]}")
     ctx = TaskContext(workdir=challenge_workdir, disclosed_skills=list(role["playbooks"]),
                       task=task, charter=charter, role=role)
     ctx.blackboard = _load_blackboard(challenge_workdir)  # 回注上次尝试进度（挂起/重试）
     # 按题型动态裁剪初始工具集：减少无关工具对 Agent 注意力的干扰
     ctx.enabled_tools = build_default_tools(groups=_tool_groups_for(role.get("role", ""), desc))
-    # 调度器独占编排工具：单题循环里 Agent 不得自己选题/启动/关闭容器，避免破坏调度器追踪
-    for t in ("check_vpn", "list_challenges", "start_challenge", "close_challenge"):
-        ctx.enabled_tools.discard(t)
     ctx.current_code = code
     ctx.plan = global_plan
     sol_hint = load_solution_hint(code, desc)
     brief = (f"# 任务书\n{task}\n\n"
              f"# 当前题目（只打这道题）\n"
-             f"- unique_code: {code}\n- 描述: {desc}\n- 容器地址: {addrs}\n"
-             f"- flag 进度：已拿 {flag_done}/{flag_total} 面"
-             f"（多 flag 题须逐面提交；系统提交回执会告知剩余面数）\n\n")
+             f"- unique_code: {code}\n- 描述: {desc}\n- 容器地址: {addrs}\n\n")
     if sol_hint:
         brief += (f"# 历史成功解法参考（同类题，可优先尝试）\n{sol_hint}\n\n")
-    brief += ("选题/换题/看 hint 由系统调度负责，你只专注攻击本题容器；"
-              "不要自己调用 list_challenges / start_challenge / close_challenge。")
     # 模型灾备池：执行者优先 FAST_MODEL（deepseek-v4-flash），glm 兜底。
     # 传入 model_pool 表示由外层统一分配（全局共享，避免每题重建）；
     # 未传入则兜底创建独立池（兼容单测/旧调用）。
@@ -773,7 +776,7 @@ async def run_single_challenge(code: str, desc: str, addrs: list, charter: str,
         global_plan=global_plan, role=role, field_notes=field_notes,
         challenge_workdir=challenge_workdir, sessions_dir=sessions_dir,
         session=session, executor=executor,
-        model_pool=model_pool, client=client, hooks=challenge_hooks,
+        model_pool=model_pool, hooks=challenge_hooks,
         outer_hooks=hooks, difficulty=difficulty, db=db,
     )
     return await loop.run()

@@ -5,8 +5,8 @@
 # 范围说明：
 # - ruff 检查 R2-R5 受控架构路径（pentest/profiles/harness/sandbox/scripts +
 #   gate 实际运行的测试路径 tests/unit、tests/replay）。仓库存在历史存量违规
-#   （core/tools/arsenal/bench_platform 等 R0 基线即白名单哲学），不在本门内；
-#   新增代码必须通过本门。tests/e2e（有 key 才跑）不在本门内。
+#   （core/tools/arsenal 等 R0 基线即白名单哲学；bench_platform 已随 9_6 跑分面删除），
+#   不在本门内；新增代码必须通过本门。tests/e2e（有 key 才跑）不在本门内。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

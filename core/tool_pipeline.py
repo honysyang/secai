@@ -1,7 +1,7 @@
 """统一工具调用管线（Tool Pipeline）。
 
 把分散在 demo_tools.py / hooks.py 中的横切关注点（爆破预算、prompt injection 防护、
-payload 台账、增量打分、网络不可达检测、自动提交 flag）收敛成可插拔的 middleware，
+payload 台账、增量打分、网络不可达检测）收敛成可插拔的 middleware，
 让新增工具、新增安全策略、新增观测点都只需要加一行配置。
 
 管线顺序：
@@ -10,7 +10,7 @@ payload 台账、增量打分、网络不可达检测、自动提交 flag）收�
 pre  可修改参数或注入上下文；
 guard 可拒绝执行并返回拦截消息；
 around 包装真实工具执行（用于超时、取消、资源隔离）；
-post 观测/修改结果并触发副作用（如渐进披露、提交 flag）。
+post 观测/修改结果并触发副作用（如渐进披露）。
 """
 from __future__ import annotations
 
@@ -65,10 +65,6 @@ class ToolMiddleware(ABC):
         return result
 
 
-# 默认管线实例化时绑定提交函数；避免循环导入，这里只做占位。
-SubmitFn = Callable[[RunContextWrapper[TaskContext], str], str | None]
-
-
 # ---------------------------------------------------------------------------
 # 内置 Middleware
 # ---------------------------------------------------------------------------
@@ -96,16 +92,12 @@ class ArtifactSpillMiddleware(ToolMiddleware):
 
     async def post(self, ctx, tool, args, result):
         text = str(result)
-        # 延迟导入 demo_tools 中的提交/注入扫描函数，避免循环导入
+        # 延迟导入 demo_tools 中的注入扫描函数，避免循环导入
         try:
-            from demo_tools import _guard_output, _submit_flags_if_any
+            from demo_tools import _guard_output
         except Exception:
-            _submit_flags_if_any, _guard_output = None, None
+            _guard_output = None
         notes = []
-        if _submit_flags_if_any is not None:
-            note = _submit_flags_if_any(ctx, text)
-            if note:
-                notes.append(note)
         if _guard_output is not None:
             note = _guard_output(text)
             if note:
@@ -165,21 +157,6 @@ class NetworkUnreachableMiddleware(ToolMiddleware):
     async def post(self, ctx, tool, args, result):
         if _is_network_unreachable(result):
             ctx.context.turn_net_fail = True
-        return result
-
-
-class AutoSubmitFlagMiddleware(ToolMiddleware):
-    """自动扫描工具输出中的 flag 并尝试提交（铁律提交）。"""
-    name = "auto_submit_flag"
-
-    def __init__(self, submit_fn: SubmitFn | None = None):
-        self.submit_fn = submit_fn
-
-    async def post(self, ctx, tool, args, result):
-        if self.submit_fn is not None:
-            note = self.submit_fn(ctx, result)
-            if note:
-                return result + "\n" + note
         return result
 
 
@@ -524,7 +501,6 @@ DEFAULT_PIPELINE = ToolPipeline([
     PayloadLedgerMiddleware(),
     ProgressScorerMiddleware(),
     NetworkUnreachableMiddleware(),
-    AutoSubmitFlagMiddleware(),
 ])
 # R3：L5 护栏中间件挂入默认管线（无 l5_guardrail 配置时透传，存量零扰动）
 DEFAULT_PIPELINE.add(ScopeGuardMiddleware())

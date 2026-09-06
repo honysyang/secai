@@ -101,8 +101,8 @@ RUN if [ "$SEC_TOOLS_FULL" = "1" ]; then \
         pip install --no-cache-dir angr slither-analyzer mythril || true; \
     fi
 
-# 8000 端口供 app.server（实时可视化前端）使用；默认 CMD 仍是跑分入口 app.main
-# 托管模式下平台可覆盖 CMD，默认仍进入跑分入口
+# 8000 端口供 server（实时可视化前端 + API）使用；9_6 起 CTF 跑分入口 app.main 已删除，
+# 默认 CMD 改为实战 Web 面入口（可用 --port 覆盖）
 EXPOSE 8000
 ENTRYPOINT ["python3"]
-CMD ["-m", "app.main"]
+CMD ["-m", "server.main", "--port", "8000"]

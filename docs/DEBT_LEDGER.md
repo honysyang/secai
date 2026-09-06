@@ -2,7 +2,9 @@
 
 - 来源：`/home/kali/task/doc/9_5_SECAI_优秀Harness改造计划_v1.md §1.2` H1-H13
 - 状态标注：✅ 已结清 / 🔄 进行中 / ⬜ 未开始
-- 更新：9_5 终极执行计划 v4（R0-R6）
+- 更新：9_5 终极执行计划 v4（R0-R6）；9_6 注：CTF 跑分面（app/、bench_platform/、
+  profiles/ctf_legacy/、prompts/tsec_task.txt）已整体删除，下表 H1/H2/H12 等涉及
+  跑分面的「负责批次」描述为历史存档，所述模块均已不存在。
 
 | 编号 | 债务 | 状态 | 负责批次 |
 |---|---|---|---|

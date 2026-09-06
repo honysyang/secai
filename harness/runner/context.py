@@ -1,12 +1,11 @@
-"""单题上下文辅助（原 app/main.py 上下文函数按职责搬离）。
+"""单题上下文辅助。
 
 - 战地笔记（field_notes.md）读写与按题检索：_load_field_notes / load_notes_for /
   _append_mechanical_note（零 LLM 机械沉淀）
 - 黑板载入与情报合并：_load_blackboard / _merge_subtask_intel
 - 破局复盘与软干预教练：_replan / _coach（fork_analyst 一次性强模型分析）
 
-全部为纯搬移等价变换，不改业务语义；数据路径与 app.main 时代保持一致
-（DATA_DIR 仍为仓库根的 data/ 目录）。
+数据路径仍为仓库根的 data/ 目录。
 """
 from __future__ import annotations
 
