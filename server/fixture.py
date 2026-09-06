@@ -342,6 +342,31 @@ def _compose_c(state: "AppState") -> None:
         sid, "tool/output", tool="http-probe", ok=True,
         output="HTTP/1.1 200 OK · 响应头核查：未带 Content-Security-Policy → 低危缺失项单独成证。",
     )
+
+    # 渗透链路（link 事件，与真实 runner pentest_target._link_node/_link_edge 同构）：
+    # 意图根 → 侦察资产 → 确认事实 → 漏洞。供前端「渗透」探索链路 DAG 数据源。
+    def _ln(kind: str, nid: str, key: str, label: str, detail: str = "", status: str = "open") -> None:
+        state.emit_event(sid, "link", variant="node",
+                         node={"id": nid, "kind": kind, "key": key, "label": label,
+                               "detail": detail, "status": status})
+
+    def _le(frm: str, to: str) -> None:
+        state.emit_event(sid, "link", variant="edge", edge={"from": frm, "to": to})
+
+    _ln("intent", "intent-brief", "brief", "对 vulnapp.example 授权渗透", "确认一个已确认漏洞即可收尾", "confirmed")
+    _ln("asset", "asset-vulnapp", "vulnapp.example", "vulnapp.example（目标）", "8080/http, 8443/https Tomcat 9.0.78", "confirmed")
+    _ln("fact", "fact-port8080", "port-8080", "8080/http Tomcat 9.0.78 开放", "port-scan：8080/tcp open http", "confirmed")
+    _ln("fact", "fact-actuator", "actuator-env", "/actuator/env 未授权返回配置键", "curl GET /actuator/env → 200，propertySources 泄露", "confirmed")
+    _ln("fact", "fact-cve-fail", "cve-42793", "CVE-2023-42793 特征不匹配", "无 /manager 且无 .war 上传面 → 排除", "falsified")
+    _ln("vuln", "vuln-actuator", "vuln-actuator", "Spring Boot Actuator 未授权访问", "/actuator/env 泄露配置键（数据库地址/用户）", "confirmed")
+    _ln("vuln", "vuln-version", "vuln-version", "Tomcat 版本信息泄露", "8443/8080 暴露 9.0.78 banner", "confirmed")
+    _le("intent-brief", "asset-vulnapp")
+    _le("asset-vulnapp", "fact-port8080")
+    _le("fact-port8080", "fact-actuator")
+    _le("fact-actuator", "vuln-actuator")
+    _le("asset-vulnapp", "fact-cve-fail")
+    _le("fact-cve-fail", "vuln-version")
+
     state.emit_event(
         sid, "message", role="assistant",
         content="结论收敛：确认 1 条高价值 finding（Actuator 未授权）、1 条中危（管理端口带版本暴露）、1 条低危（缺 CSP）。已生成结构化报告投影。",

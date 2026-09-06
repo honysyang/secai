@@ -11,6 +11,7 @@ import type { RespondDecision } from './ApprovalCard.tsx'
 import { ApprovalCard } from './ApprovalCard.tsx'
 import { ChatView } from './ChatView.tsx'
 import { InputBar } from './InputBar.tsx'
+import { LinkView } from './LinkView.tsx'
 import { TraceView } from './TraceView.tsx'
 import css from './ConversationView.module.css'
 
@@ -66,8 +67,8 @@ function ConversationHeader({
   onView,
 }: {
   session: SessionSnapshot
-  view: 'chat' | 'trace'
-  onView: (view: 'chat' | 'trace') => void
+  view: 'chat' | 'trace' | 'link'
+  onView: (view: 'chat' | 'trace' | 'link') => void
 }) {
   const usage = useMemo(() => deriveUsage(session.events), [session.events])
   const status = statusLabel(session.status)
@@ -112,6 +113,16 @@ function ConversationHeader({
         >
           轨迹
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={view === 'link'}
+          className={css.viewTab}
+          data-active={view === 'link' || undefined}
+          onClick={() => onView('link')}
+        >
+          渗透
+        </button>
       </div>
     </div>
   )
@@ -119,7 +130,7 @@ function ConversationHeader({
 
 export function ConversationView({ session, onSubmit, onRespond, onNewTask }: ConversationViewProps) {
   const [approvalsOpen, setApprovalsOpen] = useState(false)
-  const [view, setView] = useState<'chat' | 'trace'>('chat')
+  const [view, setView] = useState<'chat' | 'trace' | 'link'>('chat')
   const gate = inputGate(session)
   const approvals = session?.pendingApprovals ?? []
   const hasApprovals = approvals.length > 0
@@ -132,6 +143,8 @@ export function ConversationView({ session, onSubmit, onRespond, onNewTask }: Co
       <div className={css.scrollBody}>
         {view === 'trace' && session !== null ? (
           <TraceView events={session.events} />
+        ) : view === 'link' && session !== null ? (
+          <LinkView events={session.events} />
         ) : (
           <ChatView
             events={session?.events ?? []}

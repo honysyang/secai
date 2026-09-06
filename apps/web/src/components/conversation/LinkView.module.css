@@ -1,0 +1,200 @@
+/* LinkView：渗透链路 DAG 视图样式（test.jpg 探索链路）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--secai-alias-border-l1);
+  font-size: 12px;
+}
+
+.metric {
+  color: var(--secai-alias-label-secondary);
+}
+
+.metric[data-tone='error'] {
+  color: var(--secai-alias-state-error-primary);
+  font-weight: 600;
+}
+
+.metric[data-tone='dim'] {
+  color: var(--secai-alias-label-tertiary);
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background:
+    radial-gradient(circle, var(--secai-alias-border-l1) 1px, transparent 1px) 0 0 / 24px 24px;
+}
+
+.canvas {
+  position: relative;
+  margin: 16px;
+}
+
+.svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--secai-alias-border-l2);
+  stroke-width: 1.5;
+}
+
+.cardWrap {
+  position: absolute;
+}
+
+.card {
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 10px;
+  background: var(--secai-alias-bg-base);
+  box-shadow: var(--secai-alias-shadow-lv1);
+  overflow: hidden;
+}
+
+.card[data-kind='intent'] {
+  border-left: 3px solid var(--secai-alias-brand-primary);
+}
+
+.card[data-kind='asset'] {
+  border-left: 3px solid var(--secai-alias-label-tertiary);
+}
+
+.card[data-kind='fact'] {
+  border-left: 3px solid var(--secai-alias-state-warn-label);
+}
+
+.card[data-kind='vuln'] {
+  border-left: 3px solid var(--secai-alias-state-error-primary);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.kindTag {
+  flex: none;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-tertiary);
+}
+
+.cardTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--secai-alias-label-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardDetail {
+  margin: 0;
+  padding: 0 10px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--secai-alias-label-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.statusLabel {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--secai-alias-bg-base);
+  border: 1px solid var(--secai-alias-border-l1);
+  color: var(--secai-alias-label-tertiary);
+}
+
+.statusLabel[data-status='confirmed'] {
+  color: var(--secai-alias-state-success-primary);
+  border-color: var(--secai-alias-state-success-tertiary);
+}
+
+.statusLabel[data-status='falsified'] {
+  color: var(--secai-alias-label-tertiary);
+}
+
+/* 进行中脉冲点 */
+.pulse {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--secai-alias-brand-primary);
+  animation: linkPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes linkPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.statusDot {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.statusDot[data-status='confirmed'] {
+  background: var(--secai-alias-state-success-tertiary);
+  color: var(--secai-alias-state-success-primary);
+}
+
+.statusDot[data-status='falsified'] {
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-tertiary);
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  font-size: 14px;
+  color: var(--secai-alias-label-tertiary);
+  text-align: center;
+  line-height: 1.6;
+}
