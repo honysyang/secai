@@ -14,7 +14,7 @@
  *   在 sessionManager 合流前以空态呈现。
  */
 
-import type { HostFrame, MuxFrame, TaskBrief } from '../connection/api.ts'
+import type { HostFrame, MuxFrame, TaskBrief, AssetEntry, RiskEntry, ReportEntry } from '../connection/api.ts'
 import type { ConnectionState } from '../connection/connection.ts'
 import { ApiClient, createConnection } from '../connection/connection.ts'
 import { Engagement } from './engagement.ts'
@@ -29,13 +29,23 @@ export const DEMO_MODE = true
 /** 真实模式的本地聚合 engagement id（会话 header 的 engagementId 匹配此值才登记）。 */
 const LIVE_ENGAGEMENT_ID = 'live-engagement'
 
+/** 顶层导航路由：工作台 = 对话面板，资产/风险/报告 = 独立管理视图。 */
+export type RouteKey = 'workbench' | 'assets' | 'risks' | 'reports'
+
 export type LinkState = 'demo' | 'connecting' | 'connected' | 'reconnecting'
 
-/** 顶层快照：聚合视图 + 选中会话 + 连接徽章。 */
+/** 顶层快照：聚合视图 + 选中会话 + 连接徽章 + 当前路由 + 全局清单。 */
 export interface AppSnapshot {
   engagement: EngagementSnapshot
   selectedId: string | null
   link: LinkState
+  route: RouteKey
+  /** 资产管理视图数据（host/assets 帧）。 */
+  assets: readonly AssetEntry[]
+  /** 风险管理视图数据（host/risks 帧）。 */
+  risks: readonly RiskEntry[]
+  /** 报告管理视图数据（host/reports 帧）。 */
+  reports: readonly ReportEntry[]
 }
 
 type AppListener = (snapshot: AppSnapshot) => void
@@ -46,6 +56,14 @@ export class AppRuntime {
   private linkValue: LinkState
   /** LLM key 配置状态（describe 握手后落账；demo 模式保持 null = 未知）。 */
   private llmValue: boolean | null = null
+  /** 当前顶层路由（默认工作台 = 对话面板）。 */
+  private routeValue: RouteKey = 'workbench'
+  /** 资产管理视图数据（host/assets 帧落账）。 */
+  private assetsValue: readonly AssetEntry[] = []
+  /** 风险管理视图数据（host/risks 帧落账）。 */
+  private risksValue: readonly RiskEntry[] = []
+  /** 报告管理视图数据（host/reports 帧落账）。 */
+  private reportsValue: readonly ReportEntry[] = []
   private readonly listeners = new Set<AppListener>()
 
   /** LLM 配置状态探针（NewEngagementModal 提交前校验用；响应式经快照订阅）。 */
@@ -125,6 +143,23 @@ export class AppRuntime {
     // 但该路径不触发 Engagement.touch()——AppRuntime 的 AppSnapshot 因此永不
     // 失效，App 层 useSyncExternalStore 拿不到新快照（UI 卡空态）。这里统一
     // 补一次 touch：缓存置 null + 向 App 监听器重投最新快照。
+    // 全局清单帧（assets/risks/reports）在 engagement 层之上独立落账。
+    switch (frame.type) {
+      case 'host/assets':
+        this.assetsValue = frame.assets
+        this.touch()
+        return
+      case 'host/risks':
+        this.risksValue = frame.risks
+        this.touch()
+        return
+      case 'host/reports':
+        this.reportsValue = frame.reports
+        this.touch()
+        return
+      default:
+        break
+    }
     this.engagement.applyHostFrame(frame)
     this.touch()
   }
@@ -132,7 +167,28 @@ export class AppRuntime {
   select(sessionId: string | null): void {
     if (this.selectedId === sessionId) return
     this.selectedId = sessionId
+    // 选中会话即回工作台（对话面板）
+    this.routeValue = 'workbench'
     this.touch()
+  }
+
+  /** 切换顶层导航路由。 */
+  setRoute(route: RouteKey): void {
+    if (this.routeValue === route) return
+    this.routeValue = route
+    this.touch()
+  }
+
+  /**
+   * 智能提交：有选中会话 → steer 指令；无会话 → 用自然语言作任务书 run。
+   * 用户可在对话框直接下达任务，无需先打开「新建任务」弹窗。
+   */
+  async submitOrSend(text: string): Promise<void> {
+    if (this.selectedId !== null) {
+      this.send(text)
+      return
+    }
+    await this.run({ allowedTargets: [text] })
   }
 
   /**
@@ -233,7 +289,10 @@ export class AppRuntime {
       engagement: this.engagement.snapshot(),
       selectedId: this.selectedId,
       link: this.linkValue,
-      llmConfigured: this.llmValue,
+      route: this.routeValue,
+      assets: this.assetsValue,
+      risks: this.risksValue,
+      reports: this.reportsValue,
     }
   }
 

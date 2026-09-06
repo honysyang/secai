@@ -1,16 +1,17 @@
-// App：顶层接线（复刻版主框架）。AppRuntime 为 module 级单例（start/stop
+// App：顶层接线（dsh 复刻版主框架）。AppRuntime 为 module 级单例（start/stop
 // 幂等，挂 window 供调试/联调探针），App 组件经 useSyncExternalStore 订阅
-// 快照，把数据以 props 分发给三栏（SidebarPane / ConversationView /
-// DetailsView）；用户动作（select/send/respond/run）回调 runtime。
-// 侧栏展开偏好 = App 层 state（sidebarOpen），连同「新建任务」弹窗开关
-// 一起下传（AppFrame 负责窄屏 rail 几何，sidebarOpen 只管宽屏收展）。
+// 快照；顶部分发由 snapshot.route 驱动（工作台 = 对话面板；资产/风险/报告 =
+// 独立管理视图），与选中会话解耦。用户动作（select/submitOrSend/respond/run）
+// 回调 runtime。侧栏展开偏好 = App 层 state（sidebarOpen），「新建任务」弹窗
+// 开关同层下传（AppFrame 负责窄屏 rail 几何，sidebarOpen 只管宽屏收展）。
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { useThemeControl } from './components/theme/theme.ts'
 import { AppFrame } from './components/layout/AppFrame.tsx'
 import { SidebarPane } from './components/sidebar/SidebarPane.tsx'
 import { ConversationView } from './components/conversation/ConversationView.tsx'
-import { DetailsView } from './components/details/DetailsView.tsx'
+import { AssetPanel } from './components/panels/AssetPanel.tsx'
+import { RiskPanel } from './components/panels/RiskPanel.tsx'
+import { ReportPanel } from './components/panels/ReportPanel.tsx'
 import { NewEngagementModal } from './components/engagement/NewEngagementModal.tsx'
 import { AppRuntime } from './runtime/appRuntime.ts'
 import type { TaskBrief } from './connection/api.ts'
@@ -24,46 +25,58 @@ if (typeof window !== 'undefined') {
 }
 
 export default function App() {
-  const theme = useThemeControl()
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [newEngagementOpen, setNewEngagementOpen] = useState(false)
 
-  // StrictMode 开发态双挂载：卸载即回收首个 effect 的副作用（start/stop 幂等）
-  useEffect(() => runtime.stop, [])
+  // 生命周期：挂载即启动（幂等），卸载才回收（StrictMode 双挂载：
+  // mount1 已由模块级 start 启动 → unmount stop → mount2 重新 start，
+  // 保证 demo 泵在重挂载后继续投帧）。
+  useEffect(() => {
+    runtime.start()
+    return () => runtime.stop()
+  }, [])
 
   const snapshot = useSyncExternalStore(runtime.subscribe, runtime.snapshot, runtime.snapshot)
   const session = snapshot.engagement.sessions.find((item) => item.sessionId === snapshot.selectedId) ?? null
+
+  // 路由分发：工作台对话面板 / 资产管理 / 风险管理 / 报告管理
+  const center =
+    snapshot.route === 'assets' ? (
+      <AssetPanel assets={snapshot.assets} />
+    ) : snapshot.route === 'risks' ? (
+      <RiskPanel risks={snapshot.risks} />
+    ) : snapshot.route === 'reports' ? (
+      <ReportPanel reports={snapshot.reports} />
+    ) : (
+      <ConversationView
+        session={session}
+        onSubmit={(text) => runtime.submitOrSend(text)}
+        onRespond={(rpcId, decision, comment) => runtime.respond(rpcId, decision, comment)}
+        onNewTask={() => setNewEngagementOpen(true)}
+      />
+    )
 
   return (
     <AppFrame
       sidebarOpen={sidebarOpen}
       sidebar={
         <SidebarPane
-          theme={theme}
           engagement={snapshot.engagement}
           selectedId={snapshot.selectedId}
           link={snapshot.link}
-          llmConfigured={snapshot.llmConfigured}
+          route={snapshot.route}
+          onRoute={(route) => runtime.setRoute(route)}
           collapsed={!sidebarOpen}
           onToggle={() => setSidebarOpen((open) => !open)}
           onSelect={(sessionId) => runtime.select(sessionId)}
-          onNewEngagement={() => setNewEngagementOpen(true)}
         />
       }
-      conversation={
-        <ConversationView
-          session={session}
-          onSend={(text) => runtime.send(text)}
-          onRespond={(rpcId, decision, comment) => runtime.respond(rpcId, decision, comment)}
-        />
-      }
-      details={<DetailsView session={session} />}
+      conversation={center}
     >
       <NewEngagementModal
         open={newEngagementOpen}
         onClose={() => setNewEngagementOpen(false)}
         onSubmit={async (brief: TaskBrief) => runtime.run(brief)}
-        runtime={runtime}
       />
     </AppFrame>
   )

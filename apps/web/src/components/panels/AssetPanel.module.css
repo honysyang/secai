@@ -1,0 +1,115 @@
+/* AssetPanel：资产管理视图样式。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 20px 24px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.header {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--secai-alias-label-primary);
+}
+
+.count {
+  font-size: 13px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 12px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.th {
+  position: sticky;
+  top: 0;
+  padding: 10px 12px;
+  text-align: left;
+  font-weight: 500;
+  color: var(--secai-alias-label-secondary);
+  background: var(--secai-alias-bg-base);
+  border-bottom: 1px solid var(--secai-alias-border-l2);
+  white-space: nowrap;
+}
+
+.tr:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.target {
+  padding: 10px 12px;
+  font-weight: 500;
+  color: var(--secai-alias-label-primary);
+  white-space: nowrap;
+}
+
+.td {
+  padding: 10px 12px;
+  color: var(--secai-alias-label-secondary);
+  vertical-align: top;
+}
+
+.kind {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  background: var(--secai-alias-interactive-bg-active);
+  color: var(--secai-alias-label-primary);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-secondary);
+}
+
+.time {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--secai-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  font-size: 14px;
+  color: var(--secai-alias-label-tertiary);
+  text-align: center;
+  line-height: 1.6;
+}

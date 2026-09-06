@@ -113,6 +113,53 @@
   color: var(--secai-alias-label-caption);
 }
 
+.intensityRow {
+  display: flex;
+  gap: 8px;
+}
+
+.intensity {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 12px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.intensity:hover:not(:disabled):not(.intensityActive) {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.intensityActive {
+  border-color: var(--secai-alias-state-business-primary);
+  background: var(--secai-alias-state-business-tertiary);
+}
+
+.intensity:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.intensityLabel {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  color: var(--secai-alias-label-primary);
+}
+
+.intensityHint {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--secai-alias-label-caption);
+}
+
 .error {
   padding: 8px 12px;
   border-radius: 10px;

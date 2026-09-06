@@ -1,0 +1,105 @@
+/* RiskPanel：风险管理视图样式。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 20px 24px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.header {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--secai-alias-label-primary);
+}
+
+.count {
+  font-size: 13px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 10px;
+  background: var(--secai-alias-bg-base);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--secai-alias-label-primary);
+  line-height: 1.4;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.target {
+  color: var(--secai-alias-label-secondary);
+}
+
+.status {
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-secondary);
+}
+
+.status[data-status='open'] {
+  background: var(--secai-alias-interactive-bg-hover-danger);
+  color: var(--secai-alias-state-error-primary);
+}
+
+.status[data-status='mitigating'] {
+  background: var(--secai-alias-state-warn-tertiary);
+  color: var(--secai-alias-state-warn-label);
+}
+
+.time {
+  color: var(--secai-alias-label-tertiary);
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  font-size: 14px;
+  color: var(--secai-alias-label-tertiary);
+  text-align: center;
+  line-height: 1.6;
+}

@@ -1,4 +1,4 @@
-/* 三栏壳（复刻 dsh ui-layout AppFrame.module.css）：
+/* 两栏壳（复刻 dsh ui-layout AppFrame.module.css，去掉右栏）：
    grid 轨道 + 分隔条。收起/展开在轨道上做过渡（--secai-transition-duration-slow），
    拖拽时 data-dragging 挂起过渡，避免列边脱离指针。 */
 
@@ -37,21 +37,8 @@
   overflow: hidden;
 }
 
-.detailsCol {
-  min-width: 0;
-  overflow: hidden;
-  border-left: 1px solid var(--secai-alias-border-l2);
-}
-
-/* details 归零时子树保持挂载在 0 宽，边框不得画出 1px 接缝；
-   收起的 sidebar 保留带边框的 56px rail，规则不适用。 */
-.frame[data-details-collapsed] .detailsCol {
-  border-left: none;
-}
-
 /* 分隔条是帧的子元素（列裁剪 overflow）：8px 命中条跨栏界居中，
-   内联 left 定位，浮于列内容之上。details 侧中部多一个可见
-   12x32 pill（--secai-alias-button-floating-fill），hover 显形。 */
+   内联 left 定位，浮于列内容之上。 */
 .handle {
   position: absolute;
   top: 0;
@@ -61,7 +48,7 @@
   cursor: col-resize;
   z-index: 2;
   touch-action: none;
-  /* 与轨道同曲线，收起/展开时 pill 贴着移动的边框；拖拽时暂停。 */
+  /* 与轨道同曲线，收起/展开时贴着移动的边框；拖拽时暂停。 */
   transition: left var(--secai-transition-duration-slow) var(--secai-ease-in-out);
 }
 
@@ -73,35 +60,4 @@
   .handle {
     transition: none;
   }
-}
-
-.handle[data-side='details']::after {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 12px;
-  height: 32px;
-  border-radius: 10px;
-  box-sizing: border-box;
-  background: var(--secai-alias-button-floating-fill);
-  border: 1px solid var(--secai-alias-border-l2-darkmode-thin);
-  /* hover  affordance：指针越过 details 列、命中条本身或拖拽时才显形。 */
-  opacity: 0;
-  transition:
-    opacity var(--secai-transition-duration-slow) var(--secai-ease-in-out),
-    background var(--secai-transition-duration-slow) var(--secai-ease-in-out);
-}
-
-.detailsCol:hover ~ .handle[data-side='details']::after,
-.handle[data-side='details']:hover::after,
-.handle[data-side='details'][data-dragging='true']::after {
-  opacity: 1;
-}
-
-.handle[data-side='details']:hover::after,
-.handle[data-side='details'][data-dragging='true']::after {
-  background: var(--secai-alias-button-floating-hover);
-  border-color: var(--secai-alias-border-l3);
 }

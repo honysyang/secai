@@ -1,0 +1,132 @@
+/* ReportPanel：报告管理视图样式。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 20px 24px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.header {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--secai-alias-label-primary);
+}
+
+.count {
+  font-size: 13px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--secai-alias-border-l1);
+  border-radius: 12px;
+  background: var(--secai-alias-bg-base);
+}
+
+.cardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cardTitle {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--secai-alias-label-primary);
+  line-height: 1.4;
+}
+
+.status {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-secondary);
+}
+
+.status[data-status='ready'] {
+  background: var(--secai-alias-state-success-tertiary);
+  color: var(--secai-alias-state-success-primary);
+}
+
+.cardMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.sevCounts {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.sevCount {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-secondary);
+}
+
+.sevCount[data-sev='critical'] {
+  background: var(--secai-alias-interactive-bg-hover-danger);
+  color: var(--secai-alias-state-error-primary);
+}
+
+.sevCount[data-sev='high'] {
+  background: var(--secai-alias-state-warn-tertiary);
+  color: var(--secai-alias-state-warn-label);
+}
+
+.sevCount[data-sev='medium'] {
+  background: var(--secai-alias-state-business-tertiary);
+  color: var(--secai-alias-state-business-primary);
+}
+
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 40px;
+  font-size: 14px;
+  color: var(--secai-alias-label-tertiary);
+  text-align: center;
+  line-height: 1.6;
+}

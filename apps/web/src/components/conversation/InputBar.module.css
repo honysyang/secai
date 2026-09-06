@@ -10,7 +10,7 @@
   padding: 0 16px 8px;
 }
 
-/* 禁用态提示条（无会话/终态原因）。 */
+/* 禁用态提示条（无会话/终态原因）；error 态红字。 */
 .notice {
   width: 100%;
   max-width: var(--secai-composer-card-max-width);
@@ -21,6 +21,11 @@
   color: var(--secai-alias-label-secondary);
   font-size: 12px;
   line-height: 18px;
+}
+
+.notice[data-tone='error'] {
+  background: var(--secai-alias-interactive-bg-hover-danger);
+  color: var(--secai-alias-state-error-primary);
 }
 
 .card {

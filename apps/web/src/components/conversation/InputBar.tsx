@@ -3,6 +3,7 @@
 // 卡片 radius22 + 1px l2-darkmode-thin 边 + input-major 底 + shadow lv2；
 // scroll 盒 max-height 14 行；发送钮 34px 圆（info-fill 蓝 + 白箭头），
 // 空文本 opacity .4。Enter 发送 / Shift+Enter 换行 / IME 合成期 Enter 不发送。
+// 左侧 + 按钮 = 打开「新建任务」弹窗（RunSessionModal）。
 
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
@@ -11,7 +12,11 @@ import css from './InputBar.module.css'
 export interface InputBarProps {
   disabled: boolean
   disabledReason: string
-  onSend: (text: string) => void
+  /** 输入框占位提示（无会话时 = 直接下达任务）。 */
+  placeholder?: string
+  onSend: (text: string) => void | Promise<void>
+  /** 打开「新建任务」弹窗。 */
+  onNewTask?: (() => void) | undefined
 }
 
 /** 发送箭头（dsh 图标路径，白 glyph）。 */
@@ -35,8 +40,9 @@ function PlusIcon() {
   )
 }
 
-export function InputBar({ disabled, disabledReason, onSend }: InputBarProps) {
+export function InputBar({ disabled, disabledReason, placeholder, onSend, onNewTask }: InputBarProps) {
   const [draft, setDraft] = useState('')
+  const [error, setError] = useState('')
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   // IME 合成守卫：拼音选字期的 Enter 不得发送
   const composingRef = useRef(false)
@@ -53,8 +59,13 @@ export function InputBar({ disabled, disabledReason, onSend }: InputBarProps) {
 
   const submit = (): void => {
     if (disabled || empty) return
-    onSend(draft.trim())
+    const text = draft.trim()
     setDraft('')
+    setError('')
+    // 失败不静默：行内呈现（如 demo 模式下 run 不可用）
+    Promise.resolve(onSend(text)).catch((cause) => {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    })
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -71,6 +82,9 @@ export function InputBar({ disabled, disabledReason, onSend }: InputBarProps) {
       {disabled && disabledReason !== '' && (
         <div className={css.notice} role="status">{disabledReason}</div>
       )}
+      {!disabled && error !== '' && (
+        <div className={css.notice} data-tone="error" role="alert">{error}</div>
+      )}
       <div className={css.card} data-composer-card>
         <div className={css.scroll} data-input-scroll>
           <textarea
@@ -79,7 +93,7 @@ export function InputBar({ disabled, disabledReason, onSend }: InputBarProps) {
             value={draft}
             rows={1}
             disabled={disabled}
-            placeholder={disabled ? '' : '向该目标下达指令（Enter 发送，Shift+Enter 换行）'}
+            placeholder={disabled ? '' : (placeholder ?? '向该目标下达指令（Enter 发送，Shift+Enter 换行）')}
             aria-label="指令输入"
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
@@ -89,8 +103,14 @@ export function InputBar({ disabled, disabledReason, onSend }: InputBarProps) {
         </div>
         <div className={css.row}>
           <div className={css.tools}>
-            {/* 预留工具位（dsh 为 + 命令菜单；SECAI 暂无命令体系，占位视觉） */}
-            <button type="button" className={css.add} aria-label="工具（预留）" disabled={disabled} tabIndex={-1}>
+            {/* + 按钮：打开「新建任务」弹窗 */}
+            <button
+              type="button"
+              className={css.add}
+              aria-label="新建任务"
+              disabled={disabled}
+              onClick={onNewTask}
+            >
               <PlusIcon />
             </button>
           </div>

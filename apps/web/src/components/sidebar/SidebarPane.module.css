@@ -102,51 +102,68 @@
   color: var(--secai-alias-label-primary);
 }
 
-/* 新建任务钮：38px 条、12px 圆角、elevated 填充（dsh New Session 规格）；rail 态变 36px 图标钮。 */
-.newSession {
+/* 导航菜单：纵向按钮列，激活项高亮。 */
+.navMenu {
   flex: none;
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.navItem {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 38px;
-  padding: 8px 16px;
-  margin: 0 2px 8px;
-  box-sizing: border-box;
-  border: 1px solid var(--secai-alias-border-l2);
-  border-radius: 12px;
-  background: var(--secai-alias-button-elevated-fill);
-  color: var(--secai-alias-label-primary);
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--secai-alias-label-secondary);
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
   cursor: pointer;
+  text-align: left;
   overflow: hidden;
 }
 
-.newSession:hover {
-  background: var(--secai-alias-button-floating-hover);
+.navItem:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-primary);
 }
 
-.root[data-collapsed] .newSession {
-  align-self: flex-start;
+.navItemActive,
+.navItemActive:hover {
+  background: var(--secai-alias-interactive-bg-active);
+  color: var(--secai-alias-label-primary);
+}
+
+.navIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.navLabel {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.root[data-collapsed] .navMenu {
+  align-items: flex-start;
+}
+
+.root[data-collapsed] .navItem {
   width: 36px;
   height: 36px;
   padding: 0;
-  margin: 0 0 12px;
-  gap: 0;
-  border-color: transparent;
-  background: transparent;
-}
-
-.root[data-collapsed] .newSession:hover {
-  background: var(--secai-alias-interactive-bg-hover);
-}
-
-.newSessionLabel {
-  max-width: 200px;
-  overflow: hidden;
-  white-space: nowrap;
+  justify-content: center;
 }
 
 /* 目标列表区：填满控制区与 footer 之间，负边距让滚动条贴侧栏边。 */
@@ -168,7 +185,7 @@
   color: var(--secai-alias-label-tertiary);
 }
 
-/* footer：连接徽章 + 外观设置区。 */
+/* footer：连接状态徽章。 */
 .footArea {
   flex: none;
   display: flex;

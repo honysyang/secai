@@ -17,9 +17,12 @@
 import type {
   ApprovalRequest,
   ApprovalResolution,
+  AssetEntry,
   HostFrame,
   MuxFrame,
   QueueItem,
+  ReportEntry,
+  RiskEntry,
   SessionHeader,
 } from '../connection/api.ts'
 
@@ -66,6 +69,80 @@ const queueB: QueueItem[] = [
 const queueC: QueueItem[] = [
   { id: 'h-c1', hypothesisId: 'hyp-c1', statement: 'Actuator 未授权暴露内部端点', status: 'validated', priority: 9, attempts: 3 },
   { id: 'h-c2', hypothesisId: 'hyp-c2', statement: 'Tomcat 管理口存在弱口令', status: 'falsified', priority: 6, attempts: 2 },
+]
+
+/** 资产清单（host/assets 帧，资产管理视图数据源）。 */
+const demoAssets: AssetEntry[] = [
+  {
+    id: 'asset-a', target: '10.10.5.2 · demo.ine.local', kind: 'linux-server',
+    os: 'Ubuntu 22.04', services: ['ssh', 'http', 'https', 'http-alt'],
+    ports: [22, 80, 443, 8000],
+    firstSeenAt: iso(120_000), lastSeenAt: iso(2_000),
+    sessionId: A, engagementId: DEMO_ENGAGEMENT_ID,
+  },
+  {
+    id: 'asset-b', target: '10.10.5.0/24 · 8 台存活', kind: 'network-segment',
+    services: ['ssh', 'smb'], ports: [22, 445],
+    firstSeenAt: iso(180_000), lastSeenAt: iso(60_000),
+    sessionId: B, engagementId: DEMO_ENGAGEMENT_ID,
+  },
+  {
+    id: 'asset-c', target: 'vulnapp.example', kind: 'web-app',
+    os: 'Linux', services: ['http', 'https'],
+    ports: [8080, 8443],
+    firstSeenAt: iso(300_000), lastSeenAt: iso(120_000),
+    sessionId: C, engagementId: DEMO_ENGAGEMENT_ID,
+  },
+]
+
+/** 风险清单（host/risks 帧，风险管理视图数据源）。 */
+const demoRisks: RiskEntry[] = [
+  {
+    id: 'risk-c1', title: 'Spring Boot Actuator 未授权访问', severity: 'high',
+    target: 'vulnapp.example', status: 'open', discoveredAt: iso(240_000),
+    sessionId: C, engagementId: DEMO_ENGAGEMENT_ID,
+    evidence: ['GET /actuator/env → 200', 'propertySources 含 systemProperties/applicationConfig'],
+  },
+  {
+    id: 'risk-c2', title: 'Tomcat 版本信息泄露', severity: 'medium',
+    target: 'vulnapp.example', status: 'open', discoveredAt: iso(300_000),
+    sessionId: C, engagementId: DEMO_ENGAGEMENT_ID,
+    evidence: ['Server: Apache-Coyote/1.1', '错误页版本戳'],
+  },
+  {
+    id: 'risk-b1', title: '10.10.5.12 SSH 弱口令（backup / Backup#2024）', severity: 'critical',
+    target: '10.10.5.12', status: 'mitigating', discoveredAt: iso(60_000),
+    sessionId: B, engagementId: DEMO_ENGAGEMENT_ID,
+    evidence: ['hydra 命中 1/2', '单主机 5/s 限速执行'],
+  },
+  {
+    id: 'risk-b2', title: '10.10.5.23 SSH 弱口令（admin / ChangeMe123）', severity: 'critical',
+    target: '10.10.5.23', status: 'open', discoveredAt: iso(60_000),
+    sessionId: B, engagementId: DEMO_ENGAGEMENT_ID,
+    evidence: ['hydra 命中 2/2', '单主机 5/s 限速执行'],
+  },
+  {
+    id: 'risk-a1', title: '8000/Jetty 默认上下文未授权端点', severity: 'medium',
+    target: 'demo.ine.local', status: 'open', discoveredAt: iso(90_000),
+    sessionId: A, engagementId: DEMO_ENGAGEMENT_ID,
+    evidence: ['8000/tcp open http Jetty 11.0.15'],
+  },
+]
+
+/** 报告清单（host/reports 帧，报告管理视图数据源）。 */
+const demoReports: ReportEntry[] = [
+  {
+    id: 'report-c', engagementId: DEMO_ENGAGEMENT_ID,
+    title: 'vulnapp.example 授权渗透测试报告',
+    status: 'ready', generatedAt: iso(120_000), findingsCount: 3,
+    severityCounts: { high: 1, medium: 1, low: 1 },
+  },
+  {
+    id: 'report-b', engagementId: DEMO_ENGAGEMENT_ID,
+    title: '10.10.5.0/24 横向侦察报告',
+    status: 'drafting', findingsCount: 2,
+    severityCounts: { critical: 2 },
+  },
 ]
 
 /** 单会话帧队列：同一会话 FIFO，seq/projection-seq 单调。
@@ -209,6 +286,10 @@ class DemoDriver implements DemoController {
     }
     // C 会话收尾：mux 流稳定后 host 置 completed
     this.later(cursor + 500, () => this.host.applyHostFrame({ type: 'host/session-status', sessionId: C, status: 'completed' }))
+    // 资产/风险/报告管理视图数据源（host 级投影帧，与 session 帧交错注入）
+    this.later(cursor + 700, () => this.host.applyHostFrame({ type: 'host/assets', assets: demoAssets }))
+    this.later(cursor + 800, () => this.host.applyHostFrame({ type: 'host/risks', risks: demoRisks }))
+    this.later(cursor + 900, () => this.host.applyHostFrame({ type: 'host/reports', reports: demoReports }))
   }
 
   private composeA(feed: SessionFeed): void {
@@ -432,14 +513,15 @@ class DemoDriver implements DemoController {
   send(sessionId: string, text: string): void {
     const feed = this.actives.get(sessionId)
     if (feed === undefined) return
-    feed.event('message', { role: 'user', content: text })
+    // 运行期 live 即时投递（event() 入 pending 队列，初始排水后无人消费）。
+    feed.live('message', { role: 'user', content: text })
     const replies = [
       `收到指令「${text}」。已纳入当前验证队列，完成后回报证据与结论。`,
       `收到「${text}」——该路径在授权范围内，转入验证并留证。`,
       `理解：「${text}」。涉及的动作级别未超出任务书约束，开始执行。`,
     ]
     const reply = replies[Math.floor(Math.random() * replies.length)]!
-    this.later(1_200, () => feed.event('message', { role: 'assistant', content: reply }))
+    this.later(1_200, () => feed.live('message', { role: 'assistant', content: reply }))
   }
 }
 

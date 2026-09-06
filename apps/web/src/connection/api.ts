@@ -36,6 +36,48 @@ export type RpcResult<T> = { ok: true; result: T } | { ok: false; error: RpcErro
 
 // ───────────────────────── 领域类型 ─────────────────────────
 
+/** 严重级别（对齐 runtime/projections.ts Severity，跨层复用同一类型）。 */
+export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info'
+
+/** 资产条目：授权目标经侦察/指纹识别后的结构化视图。 */
+export interface AssetEntry {
+  id: string
+  target: string
+  kind: string
+  os?: string
+  services: string[]
+  ports: number[]
+  firstSeenAt: string
+  lastSeenAt: string
+  sessionId?: string
+  engagementId?: string
+}
+
+/** 风险条目：confirmed 级 finding 聚合 + 处理状态。 */
+export interface RiskEntry {
+  id: string
+  title: string
+  severity: Severity
+  target?: string
+  status: 'open' | 'mitigating' | 'accepted' | 'resolved'
+  discoveredAt: string
+  sessionId?: string
+  engagementId?: string
+  evidence?: string[]
+}
+
+/** 报告条目：渗透报告元信息（R5 报告引擎产出物）。 */
+export interface ReportEntry {
+  id: string
+  engagementId: string
+  title: string
+  status: 'drafting' | 'ready'
+  generatedAt?: string
+  findingsCount: number
+  severityCounts?: Record<string, number>
+  artifacts?: ArtifactMeta[]
+}
+
 /** 会话状态（目标行圆点 = idle/running/awaiting_approval/completed/…）。 */
 export type SessionStatus =
   | 'idle'
@@ -138,6 +180,9 @@ export type HostFrame =
   | { type: 'host/session-removed'; sessionId: string }
   | { type: 'host/session-status'; sessionId: string; status: SessionStatus }
   | { type: 'host/engagement-changed'; engagementId: string }
+  | { type: 'host/assets'; assets: AssetEntry[] }
+  | { type: 'host/risks'; risks: RiskEntry[] }
+  | { type: 'host/reports'; reports: ReportEntry[] }
   | { type: 'stream/error'; message: string }
 
 // ───────────────────────── RPC 方法表（server/api.py 对齐） ─────────────────────────
@@ -207,6 +252,12 @@ export interface ApiMethodMap {
   listArtifacts: { request: { engagementId: string }; response: { artifacts: ArtifactMeta[] } }
   /** 导出走原始文件流（成功非 JSON 信封），不能用 call()——见 downloadReport helper。 */
   exportReport: { request: { engagementId: string; format: 'md' | 'json' }; response: Blob }
+  /** 资产管理视图：授权目标的结构化清单（R4 攻击面投影聚合）。 */
+  assets: { request: Record<string, never>; response: { assets: AssetEntry[] } }
+  /** 风险管理视图：confirmed findings 聚合 + 处理状态。 */
+  risks: { request: Record<string, never>; response: { risks: RiskEntry[] } }
+  /** 报告管理视图：报告元信息列表（含产物下载入口）。 */
+  reports: { request: Record<string, never>; response: { reports: ReportEntry[] } }
 }
 
 export type ApiMethodName = keyof ApiMethodMap
@@ -222,6 +273,9 @@ export const API_METHODS: readonly ApiMethodName[] = [
   'report',
   'listArtifacts',
   'exportReport',
+  'assets',
+  'risks',
+  'reports',
 ]
 
 // ───────────────────────── 报告文件导出（绕过 JSON 信封） ─────────────────────────

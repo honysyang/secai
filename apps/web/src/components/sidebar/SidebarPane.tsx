@@ -1,32 +1,79 @@
 // SidebarPane：侧栏壳（复刻 dsh ui-sidebar SidebarRoot）。
-// 结构：logo 行（品牌字标 + 侧栏收起钮）→ 新建任务钮 → 目标列表区 →
-// footer（连接状态徽章 + 外观 ThemeSwitcher 三方块）。
-// 收起态（collapsed）：logo 行缩成 36px 圆形展开钮、新建钮变 36px 图标钮、
-// 列表与 footer 隐藏（dsh 有 rail 列表，SECAI 目标行 rail 化成本高，本期隐藏）。
+// 结构：logo 行（品牌字标 + 侧栏收起钮）→ 导航菜单（工作台/资产/风险/报告）
+// → 目标会话列表 → footer（连接状态徽章）。「新建任务」由输入栏 + 按钮触发，
+// 侧栏不再携带新建钮。
+// 收起态（collapsed）：logo 行缩成 36px 圆形展开钮、菜单变图标、列表与
+// footer 隐藏。
 
 import type { EngagementSnapshot } from '../../runtime/engagement.ts'
-import type { LinkState } from '../../runtime/appRuntime.ts'
-import type { ThemeControl } from '../theme/theme.ts'
-import { ThemeSwitcher } from '../theme/ThemeSwitcher.tsx'
+import type { LinkState, RouteKey } from '../../runtime/appRuntime.ts'
 import { TargetItem } from './TargetItem.tsx'
 import css from './SidebarPane.module.css'
 
 export interface SidebarPaneProps {
-  theme: ThemeControl
   engagement: EngagementSnapshot
   selectedId: string | null
   /** 连接状态徽章（demo/connecting/connected/reconnecting）。 */
   link: LinkState
-  /**
-   * LLM API Key 配置状态（describe 握手结果）：null = 未知（握手未完成），
-   * true/false = 服务端明示。sidebar footer 渲染 LLM 状态徽章。
-   */
-  llmConfigured: boolean | null
+  /** 当前顶层路由（导航菜单高亮）。 */
+  route: RouteKey
   collapsed: boolean
   onToggle: () => void
   onSelect: (sessionId: string) => void
-  /** 打开「新建任务」弹窗。 */
-  onNewEngagement: () => void
+  /** 切换导航路由。 */
+  onRoute: (route: RouteKey) => void
+}
+
+/** 导航菜单项定义。 */
+const NAV_ITEMS: ReadonlyArray<{ key: RouteKey; label: string; icon: (active: boolean) => React.ReactNode }> = [
+  { key: 'workbench', label: '工作台', icon: () => <WorkbenchIcon /> },
+  { key: 'assets', label: '资产', icon: () => <AssetsIcon /> },
+  { key: 'risks', label: '风险', icon: () => <RisksIcon /> },
+  { key: 'reports', label: '报告', icon: () => <ReportsIcon /> },
+]
+
+function WorkbenchIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="1.6" y="2.4" width="12.8" height="11.2" rx="2.2" />
+      <path d="M5.8 2.4v11.2" />
+    </svg>
+  )
+}
+
+function AssetsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="2" y="2" width="5" height="5" rx="1" />
+      <rect x="9" y="2" width="5" height="5" rx="1" />
+      <rect x="2" y="9" width="5" height="5" rx="1" />
+      <rect x="9" y="9" width="5" height="5" rx="1" />
+    </svg>
+  )
+}
+
+function RisksIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 1.8L14.5 13.5H1.5L8 1.8Z" />
+      <path d="M8 6.5v3.5" />
+      <circle cx="8" cy="12" r="0.5" fill="currentColor" />
+    </svg>
+  )
+}
+
+function ReportsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 1.8h5.5L13 5.3v9H4V1.8Z" />
+      <path d="M9.5 1.8v3.5H13" />
+      <path d="M6 8.5h4M6 11h4" />
+    </svg>
+  )
 }
 
 /** 连接状态徽章文案与圆点色。 */
@@ -63,26 +110,17 @@ function PanelLeftIcon() {
   )
 }
 
-function PlusIcon({ size = 14 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor"
-      strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-      <path d="M8 2.8v10.4M2.8 8h10.4" />
-    </svg>
-  )
-}
-
 export function SidebarPane({
-  theme, engagement, selectedId, link, collapsed, onToggle, onSelect, onNewEngagement,
+  engagement, selectedId, link, route, collapsed, onToggle, onSelect, onRoute,
 }: SidebarPaneProps) {
   const badge = linkPresentation(link)
   return (
     <div className={css.root} data-collapsed={collapsed || undefined}>
       <div className={css.logoRow}>
         {!collapsed && (
-          <button type="button" className={css.brandButton} aria-label="SECAI·PT 新建任务" onClick={onNewEngagement}>
+          <div className={css.brandWord}>
             <BrandWordmark />
-          </button>
+          </div>
         )}
         <button
           type="button"
@@ -94,15 +132,21 @@ export function SidebarPane({
         </button>
       </div>
 
-      <button
-        type="button"
-        className={css.newSession}
-        aria-label="新建任务"
-        onClick={onNewEngagement}
-      >
-        <PlusIcon size={collapsed ? 18 : 14} />
-        {!collapsed && <span className={css.newSessionLabel}>新建任务</span>}
-      </button>
+      {/* 导航菜单 */}
+      <nav className={css.navMenu} aria-label="主导航">
+        {NAV_ITEMS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={`${css.navItem} ${route === item.key ? css.navItemActive : ''}`}
+            aria-current={route === item.key ? 'page' : undefined}
+            onClick={() => onRoute(item.key)}
+          >
+            <span className={css.navIcon}>{item.icon(route === item.key)}</span>
+            {!collapsed && <span className={css.navLabel}>{item.label}</span>}
+          </button>
+        ))}
+      </nav>
 
       {!collapsed && (
         <div className={css.regionArea}>
@@ -127,7 +171,6 @@ export function SidebarPane({
             <span className={css.linkDot} aria-hidden="true" />
             {badge.label}
           </div>
-          <ThemeSwitcher control={theme} />
         </div>
       )}
     </div>
