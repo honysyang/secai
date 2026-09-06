@@ -27,6 +27,7 @@ from server.api import (
     api_steer,
     api_targets,
 )
+from server.auth import AuthMiddleware, load_api_keys
 from server.fixture import install_demo
 from server.state import AppState
 from server.static import spa
@@ -60,6 +61,8 @@ def create_app() -> Starlette:
             await state.close()
 
     app = Starlette(routes=ROUTES, lifespan=lifespan)
+    # API Key 鉴权包在最外层：SECAI_API_KEYS 未设置/为空 → 空集 → 完全放行（向后兼容）
+    app.add_middleware(AuthMiddleware, api_keys=load_api_keys())
     app.state.state = state
     return app
 
