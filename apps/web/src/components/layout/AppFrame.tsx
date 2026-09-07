@@ -1,5 +1,5 @@
 /**
- * SECAI 三栏壳（复刻 dsh ui-layout AppFrame）。
+ * SECAI 两栏壳（复刻 dsh ui-layout AppFrame）。
  *
  * - 轨道宽 = computeColumns(视口, 侧栏偏好) 的决议，内联写
  *   grid-template-columns；一个分隔条做指针捕获 + rAF 节流上报 dx，
@@ -7,7 +7,7 @@
  * - 让步链（columns.ts）：sidebar 永不让步，剩余宽度全归中心栏。
  * - 窄屏（<1024px）sidebar 自动收成 56px rail；rail 态下隐藏分隔条，
  *   点 rail 的展开钮可手动回宽（narrowExpanded）。
- * - 三列内容由调用方以 slot 注入（sidebar / rightPanel / conversation），
+ * - 两列内容由调用方以 slot 注入（sidebar / conversation），
  *   本组件只负责壳 + 拖拽几何，不感知业务数据。
  */
 
@@ -19,10 +19,10 @@ import css from './AppFrame.module.css'
 export interface AppFrameProps {
   sidebar: ReactNode
   conversation: ReactNode
-  /** 顶部栏 slot（只覆盖中栏区域）。 */
+  /** 顶部栏 slot（跨整栏宽）。 */
   header?: ReactNode
-  /** 对话管理栏 slot（工作台路由时传入，渲染在侧栏与中栏之间）。 */
-  rightPanel?: ReactNode
+  /** 工作台路由标记（侧栏含会话管理时用宽区间）。 */
+  workbench?: boolean
   /** 穿透渲染的全局覆盖层（Modal 等 portal 内容之外的非 portal 浮层）。 */
   children?: ReactNode
   /** 侧栏展开偏好（false = 收起成 rail）。 */
@@ -90,7 +90,7 @@ function DragHandle(props: {
   )
 }
 
-export function AppFrame({ sidebar, conversation, header = null, rightPanel = null, children = null, sidebarOpen }: AppFrameProps) {
+export function AppFrame({ sidebar, conversation, header = null, workbench = false, children = null, sidebarOpen }: AppFrameProps) {
   const frameRef = useRef<HTMLDivElement | null>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
   const [sidebarPref, setSidebarPref] = useState(SIDEBAR_DEFAULT)
@@ -128,7 +128,7 @@ export function AppFrame({ sidebar, conversation, header = null, rightPanel = nu
     ? 0
     : sidebarPref === 0 ? SIDEBAR_DEFAULT : sidebarPref
 
-  const cols = computeColumns(viewport, sidebarPreference)
+  const cols = computeColumns(viewport, sidebarPreference, workbench)
   const colsRef = useRef(cols)
   colsRef.current = cols
 
@@ -150,13 +150,12 @@ export function AppFrame({ sidebar, conversation, header = null, rightPanel = nu
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-dragging={dragging || undefined}
       style={{
-        gridTemplateColumns: `${cols.sidebar}px ${rightPanel !== null ? '280px' : '0px'} minmax(0, 1fr)`,
+        gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr)`,
         gridTemplateRows: `${HEADER_HEIGHT}px minmax(0, 1fr)`,
       }}
     >
       {header !== null && <header className={css.header}>{header}</header>}
       <aside className={css.sidebarCol}>{sidebar}</aside>
-      {rightPanel !== null && <aside className={css.leftPanelCol}>{rightPanel}</aside>}
       <main className={css.centerCol}>{conversation}</main>
       {children}
       {/* rail 态侧栏定宽 56，无分隔条（dsh：collapsed 无 handle）；顶栏占位下推 */}

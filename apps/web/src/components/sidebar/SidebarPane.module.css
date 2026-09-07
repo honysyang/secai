@@ -167,6 +167,15 @@
   justify-content: center;
 }
 
+/* 会话管理区（内嵌 ConversationPanel，占 regionArea 主体）。 */
+.convSection {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* 目标列表区：填满控制区与 footer 之间，负边距让滚动条贴侧栏边。 */
 .regionArea {
   flex: 1;

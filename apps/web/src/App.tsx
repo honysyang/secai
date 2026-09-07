@@ -15,7 +15,6 @@ import { ReportPanel } from './components/panels/ReportPanel.tsx'
 import { ArsenalPanel } from './components/panels/ArsenalPanel.tsx'
 import { SkillsPanel } from './components/panels/SkillsPanel.tsx'
 import { KnowledgePanel } from './components/panels/KnowledgePanel.tsx'
-import { ConversationPanel } from './components/panels/ConversationPanel.tsx'
 import { NewEngagementWizard } from './components/engagement/NewEngagementWizard.tsx'
 import { ToastHost } from './components/primitives/Toast.tsx'
 import { CommandPalette } from './components/primitives/CommandPalette.tsx'
@@ -166,21 +165,16 @@ export default function App() {
           collapsed={!sidebarOpen}
           onToggle={() => setSidebarOpen((open) => !open)}
           onSelect={(sessionId) => runtime.select(sessionId)}
+          tasks={snapshot.tasks}
+          activeTaskId={snapshot.activeTaskId}
+          onSelectTask={(engagementId) => runtime.selectTask(engagementId)}
+          onNewTask={() => setNewEngagementOpen(true)}
+          onRenameTask={(engagementId, title) => runtime.renameTask(engagementId, title)}
+          onDeleteTask={(engagementId) => runtime.deleteTask(engagementId)}
         />
       }
       conversation={center}
-      rightPanel={
-        snapshot.route === 'workbench' ? (
-          <ConversationPanel
-            tasks={snapshot.tasks}
-            activeTaskId={snapshot.activeTaskId}
-            onSelect={(engagementId) => runtime.selectTask(engagementId)}
-            onNewTask={() => setNewEngagementOpen(true)}
-            onRename={(engagementId, title) => runtime.renameTask(engagementId, title)}
-            onDelete={(engagementId) => runtime.deleteTask(engagementId)}
-          />
-        ) : null
-      }
+      workbench={snapshot.route === 'workbench'}
     >
       <NewEngagementWizard
         open={newEngagementOpen}

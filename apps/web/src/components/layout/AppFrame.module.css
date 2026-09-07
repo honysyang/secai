@@ -12,9 +12,9 @@
   transition: grid-template-columns var(--secai-transition-duration-slow) var(--secai-ease-in-out);
 }
 
-/* 顶部栏：只覆盖中栏（侧栏与对话管理栏上方不显示，避免重复品牌）。 */
+/* 顶部栏：跨整栏宽（侧栏 + 中栏上方）。 */
 .header {
-  grid-column: 3;
+  grid-column: 1 / -1;
   grid-row: 1;
   min-width: 0;
   display: flex;
@@ -24,8 +24,9 @@
   border-bottom: 1px solid var(--secai-alias-border-l1);
 }
 
-/* 侧栏：通顶（grid-row 1/-1）。 */
+/* 侧栏：通顶（grid-row 1/-1），第 1 列。 */
 .sidebarCol {
+  grid-column: 1;
   grid-row: 1 / -1;
   min-width: 0;
   overflow: hidden;
@@ -33,18 +34,9 @@
   border-right: 1px solid var(--secai-alias-border-l1);
 }
 
-/* 对话管理栏：侧栏与中栏之间，通顶。 */
-.leftPanelCol {
-  grid-row: 1 / -1;
-  width: 280px;
-  min-width: 0;
-  overflow: hidden;
-  background: var(--secai-alias-bg-base);
-  border-right: 1px solid var(--secai-alias-border-l2);
-}
-
-/* 中栏：内容区。 */
+/* 中栏：内容区，第 2 列。 */
 .centerCol {
+  grid-column: 2;
   grid-row: 2;
   min-width: 0;
   display: flex;
