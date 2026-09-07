@@ -76,11 +76,12 @@ export default function App() {
     <AppFrame
       sidebarOpen={sidebarOpen}
       header={
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', height: HEADER_HEIGHT, fontSize: 13, color: 'var(--secai-alias-text-2)' }}>
-          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--secai-alias-text-1)' }}>SECAI·PT</span>
-          <span>渗透测试智能体系统</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '0 20px', height: HEADER_HEIGHT, fontSize: 13, color: 'var(--secai-alias-label-secondary)' }}>
+          <span style={{ fontWeight: 600, fontSize: 13, color: 'var(--secai-alias-label-primary)' }}>
+            {sidebarOpen ? '' : 'SECAI·PT'}
+          </span>
           <span style={{ flex: 1 }} />
-          <span style={{ fontSize: 12 }}>v4.0</span>
+          <span style={{ fontSize: 11, color: 'var(--secai-alias-label-caption)', fontWeight: 500 }}>v4.0</span>
         </div>
       }
       sidebar={

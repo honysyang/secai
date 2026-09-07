@@ -121,12 +121,13 @@
   border-radius: 8px;
   background: transparent;
   color: var(--secai-alias-label-secondary);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   line-height: 22px;
   cursor: pointer;
   text-align: left;
   overflow: hidden;
+  transition: background 0.12s, color 0.12s;
 }
 
 .navItem:hover {
@@ -136,7 +137,7 @@
 
 .navItemActive,
 .navItemActive:hover {
-  background: var(--secai-alias-interactive-bg-active);
+  background: var(--secai-specific-sidebar-nav-item-active);
   color: var(--secai-alias-label-primary);
 }
 
@@ -206,17 +207,18 @@
   color: var(--secai-alias-label-tertiary);
 }
 
-/* 行几何：32px 高、radius 8、padding 0 8px；前导槽 16x20 放状态点。 */
+/* 行几何：34px 高、radius 8、padding 0 8px；前导槽 16x20 放状态点。 */
 .sessionRow {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 32px;
+  height: 34px;
   padding: 0 8px;
   border-radius: 8px;
   cursor: pointer;
   overflow: hidden;
   color: var(--secai-alias-label-primary);
+  transition: background 0.12s;
 }
 
 .sessionRow:hover {
@@ -239,7 +241,7 @@
 .title {
   min-width: 0;
   flex: 1;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 20px;
   white-space: nowrap;
   overflow: hidden;

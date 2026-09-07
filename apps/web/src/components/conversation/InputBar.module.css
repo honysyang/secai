@@ -33,19 +33,25 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
   max-width: var(--secai-composer-card-max-width);
-  padding-top: 10px;
+  padding-top: 12px;
   border: 1px solid var(--secai-alias-border-l2-darkmode-thin);
-  border-radius: 22px;
+  border-radius: 16px;
   background: var(--secai-specific-input-major);
   box-shadow: var(--secai-alias-shadow-lv2);
-  font-size: 16px;
-  line-height: 24px;
+  font-size: 15px;
+  line-height: 22px;
+  transition: border-color 0.15s, box-shadow 0.15s;
   /*  elevated 面：内部 scroll 一旦滚动，thumb 用 l2 对 */
   --secai-scrollbar-thumb: var(--secai-alias-scrollbar-bg-l2);
   --secai-scrollbar-thumb-hover: var(--secai-alias-scrollbar-hover-l2);
+}
+
+.card:focus-within {
+  border-color: var(--secai-alias-state-business-primary);
+  box-shadow: var(--secai-alias-shadow-lv2), 0 0 0 3px rgba(65, 118, 230, 0.08);
 }
 
 /* 草稿滚动盒：14 行上限（唯一滚动盒；textarea 自动增高由 JS 撑开）。 */
@@ -130,20 +136,19 @@
   cursor: default;
 }
 
-/* 发送主钮：34px 圆，info-fill 蓝 + 白箭头；空文本 opacity .4。 */
+/* 发送主钮：36px 圆，info-fill 蓝 + 白箭头；空文本 opacity .4。 */
 .primary {
   display: grid;
   place-items: center;
   flex: none;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   border: none;
   border-radius: 999px;
   background: var(--secai-alias-button-info-fill);
   color: #fff;
   cursor: pointer;
-  transition: background-color 100ms ease;
-  transform: translateY(-2px);
+  transition: background-color 100ms ease, transform 100ms ease;
 }
 
 .primary:hover:not(:disabled) {

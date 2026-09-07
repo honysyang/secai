@@ -12,9 +12,9 @@
   transition: grid-template-columns var(--secai-transition-duration-slow) var(--secai-ease-in-out);
 }
 
-/* 顶部栏：跨整栏宽（含侧栏上方），独立一行。 */
+/* 顶部栏：只覆盖中栏（侧栏与对话管理栏上方不显示，避免重复品牌）。 */
 .header {
-  grid-column: 1 / -1;
+  grid-column: 3;
   grid-row: 1;
   min-width: 0;
   display: flex;
@@ -36,7 +36,7 @@
 }
 
 .sidebarCol {
-  grid-row: 2;
+  grid-row: 1 / -1;
   min-width: 0;
   overflow: hidden;
   background: var(--secai-specific-sidebar-fill);
@@ -51,14 +51,14 @@
   overflow: hidden;
 }
 
-/* 左侧对话管理栏（260px 定宽）：侧栏与中栏之间 */
+/* 左侧对话管理栏（280px 定宽）：侧栏与中栏之间，通顶 */
 .leftPanelCol {
-  grid-row: 2;
-  width: 260px;
+  grid-row: 1 / -1;
+  width: 280px;
   min-width: 0;
   overflow: hidden;
   background: var(--secai-alias-bg-base);
-  border-right: 1px solid var(--secai-alias-border-l1);
+  border-right: 1px solid var(--secai-alias-border-l2);
 }
 
 /* 分隔条是帧的子元素（列裁剪 overflow）：8px 命中条跨栏界居中，

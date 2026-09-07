@@ -150,7 +150,7 @@
   font-weight: 600;
 }
 
-/* 对话/轨迹视图切换（分段控件）。 */
+/* 对话/轨迹/渗透视图切换（分段控件）。 */
 .viewToggle {
   flex: none;
   display: inline-flex;
@@ -162,13 +162,14 @@
 .viewTab {
   border: none;
   border-radius: 6px;
-  padding: 2px 12px;
+  padding: 3px 14px;
   background: transparent;
   font: inherit;
   font-size: 12px;
   line-height: 18px;
   color: var(--secai-alias-label-secondary);
   cursor: pointer;
+  transition: color 0.12s;
 }
 
 .viewTab:hover {
