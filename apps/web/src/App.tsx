@@ -15,6 +15,7 @@ import { ReportPanel } from './components/panels/ReportPanel.tsx'
 import { ArsenalPanel } from './components/panels/ArsenalPanel.tsx'
 import { SkillsPanel } from './components/panels/SkillsPanel.tsx'
 import { KnowledgePanel } from './components/panels/KnowledgePanel.tsx'
+import { TaskPanel } from './components/panels/TaskPanel.tsx'
 import { NewEngagementModal } from './components/engagement/NewEngagementModal.tsx'
 import { AppRuntime } from './runtime/appRuntime.ts'
 import type { TaskBrief } from './connection/api.ts'
@@ -86,18 +87,27 @@ export default function App() {
         <SidebarPane
           engagement={snapshot.engagement}
           selectedId={snapshot.selectedId}
-          tasks={snapshot.tasks}
-          activeTaskId={snapshot.activeTaskId}
           link={snapshot.link}
           route={snapshot.route}
           onRoute={(route) => runtime.setRoute(route)}
           collapsed={!sidebarOpen}
           onToggle={() => setSidebarOpen((open) => !open)}
           onSelect={(sessionId) => runtime.select(sessionId)}
-          onSelectTask={(engagementId) => runtime.selectTask(engagementId)}
         />
       }
       conversation={center}
+      rightPanel={
+        snapshot.route === 'workbench' ? (
+          <TaskPanel
+            tasks={snapshot.tasks}
+            activeTaskId={snapshot.activeTaskId}
+            onSelect={(engagementId) => runtime.selectTask(engagementId)}
+            onNewTask={() => setNewEngagementOpen(true)}
+            onRename={(engagementId, title) => runtime.renameTask(engagementId, title)}
+            onDelete={(engagementId) => runtime.deleteTask(engagementId)}
+          />
+        ) : null
+      }
     >
       <NewEngagementModal
         open={newEngagementOpen}

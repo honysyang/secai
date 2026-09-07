@@ -448,6 +448,35 @@ export class AppRuntime {
     this.touch()
   }
 
+  /** 重命名任务（TaskPanel）：renameEngagement RPC → 本地 tasksValue 更新。 */
+  async renameTask(engagementId: string, title: string): Promise<void> {
+    await this.api.call('renameEngagement', { engagementId, title })
+    this.tasksValue = this.tasksValue.map((task) =>
+      task.engagementId === engagementId ? { ...task, title } : task,
+    )
+    this.touch()
+  }
+
+  /** 删除任务（TaskPanel）：deleteEngagement RPC → 本地清理集群 + tasksValue。 */
+  async deleteTask(engagementId: string): Promise<void> {
+    await this.api.call('deleteEngagement', { engagementId })
+    // 移除对应集群的全部会话
+    const cluster = this.clusters.get(engagementId)
+    if (cluster !== undefined) {
+      for (const sid of cluster.sessionIds()) {
+        if (this.selectedId === sid) this.selectedId = null
+      }
+      this.clusters.delete(engagementId)
+    }
+    this.tasksValue = this.tasksValue.filter((task) => task.engagementId !== engagementId)
+    if (this.activeTaskIdValue === engagementId) {
+      this.activeTaskIdValue = this.tasksValue[0]?.engagementId ?? null
+      this.selectedId = null
+      this.autoSelect()
+    }
+    this.touch()
+  }
+
   // ───────────────────────── 订阅 / 快照 ─────────────────────────
 
   subscribe = (listener: AppListener): (() => void) => {

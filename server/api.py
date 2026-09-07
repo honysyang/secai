@@ -116,6 +116,33 @@ async def api_engagements(request: Request) -> JSONResponse:
     return _ok(rows)
 
 
+async def api_rename_engagement(request: Request) -> JSONResponse:
+    """renameEngagement：重命名任务（engagementId + title 必填）。"""
+    payload = await _rpc_payload(request)
+    engagement_id = str(payload.get("engagementId") or "")
+    title = str(payload.get("title") or "").strip()
+    if not engagement_id or not title:
+        return _error("bad_request", "engagementId 与 title 必填")
+    state = _state(request)
+    eng = state.rename_engagement(engagement_id, title)
+    if eng is None:
+        return _error("not_found", f"未知 engagement: {engagement_id}")
+    return _ok({"engagementId": engagement_id, "title": eng.title})
+
+
+async def api_delete_engagement(request: Request) -> JSONResponse:
+    """deleteEngagement：删除任务（级联移除其全部会话）。"""
+    payload = await _rpc_payload(request)
+    engagement_id = str(payload.get("engagementId") or "")
+    if not engagement_id:
+        return _error("bad_request", "engagementId 必填")
+    state = _state(request)
+    if engagement_id not in state.engagements:
+        return _error("not_found", f"未知 engagement: {engagement_id}")
+    removed_session_ids = state.delete_engagement(engagement_id)
+    return _ok({"engagementId": engagement_id, "removedSessionIds": removed_session_ids})
+
+
 # ---------------------------------------------------------------------------
 # run：任务书 → 真实执行接线（无 LLM Key → 结构化错误；有 Key 才允许真实消耗）
 # ---------------------------------------------------------------------------
@@ -398,11 +425,13 @@ async def api_knowledge(request: Request) -> JSONResponse:
 __all__ = [
     "REPORT_SECTION_TITLES",
     "api_assets",
+    "api_delete_engagement",
     "api_describe",
     "api_engagements",
     "api_export_report",
     "api_knowledge",
     "api_list_artifacts",
+    "api_rename_engagement",
     "api_report",
     "api_respond",
     "api_risks",

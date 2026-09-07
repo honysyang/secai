@@ -21,11 +21,13 @@ from starlette.routing import Route, WebSocketRoute
 
 from server.api import (
     api_assets,
+    api_delete_engagement,
     api_describe,
     api_engagements,
     api_export_report,
     api_knowledge,
     api_list_artifacts,
+    api_rename_engagement,
     api_report,
     api_respond,
     api_risks,
@@ -47,6 +49,8 @@ ROUTES = [
     Route("/api/describe", api_describe, methods=["POST"]),
     Route("/api/targets", api_targets, methods=["POST"]),
     Route("/api/engagements", api_engagements, methods=["POST"]),
+    Route("/api/renameEngagement", api_rename_engagement, methods=["POST"]),
+    Route("/api/deleteEngagement", api_delete_engagement, methods=["POST"]),
     Route("/api/run", api_run, methods=["POST"]),
     Route("/api/steer", api_steer, methods=["POST"]),
     Route("/api/respond", api_respond, methods=["POST"]),

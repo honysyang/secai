@@ -21,6 +21,8 @@ export interface AppFrameProps {
   conversation: ReactNode
   /** 顶部栏 slot（跨整栏宽，含侧栏上方）。 */
   header?: ReactNode
+  /** 右侧栏 slot（工作台任务管理栏；仅工作台路由时传入）。 */
+  rightPanel?: ReactNode
   /** 穿透渲染的全局覆盖层（Modal 等 portal 内容之外的非 portal 浮层）。 */
   children?: ReactNode
   /** 侧栏展开偏好（false = 收起成 rail）。 */
@@ -88,7 +90,7 @@ function DragHandle(props: {
   )
 }
 
-export function AppFrame({ sidebar, conversation, header = null, children = null, sidebarOpen }: AppFrameProps) {
+export function AppFrame({ sidebar, conversation, header = null, rightPanel = null, children = null, sidebarOpen }: AppFrameProps) {
   const frameRef = useRef<HTMLDivElement | null>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
   const [sidebarPref, setSidebarPref] = useState(SIDEBAR_DEFAULT)
@@ -155,6 +157,7 @@ export function AppFrame({ sidebar, conversation, header = null, children = null
       {header !== null && <header className={css.header}>{header}</header>}
       <aside className={css.sidebarCol}>{sidebar}</aside>
       <main className={css.centerCol}>{conversation}</main>
+      {rightPanel !== null && <aside className={css.rightCol}>{rightPanel}</aside>}
       {children}
       {/* rail 态侧栏定宽 56，无分隔条（dsh：collapsed 无 handle）；顶栏占位下推 */}
       {!sidebarCollapsed && (

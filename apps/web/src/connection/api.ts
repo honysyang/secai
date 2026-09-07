@@ -266,6 +266,10 @@ export interface ApiMethodMap {
   skills: { request: { name?: string }; response: { skills: SkillSummary[]; skill?: SkillDetail } }
   /** 知识库管理：清单；带 id → 单条全文（渐进披露）。 */
   knowledge: { request: { id?: string }; response: { knowledge: KnowledgeSummary[]; detail?: KnowledgeDetail | null } }
+  /** 重命名任务（engagement）。 */
+  renameEngagement: { request: { engagementId: string; title: string }; response: { engagementId: string; title: string } }
+  /** 删除任务（级联移除其全部会话）。 */
+  deleteEngagement: { request: { engagementId: string }; response: { engagementId: string; removedSessionIds: string[] } }
 }
 
 /** Kill Chain 七阶段标识（server/arsenal sec_tools.kill_chain 对齐）。 */
@@ -330,6 +334,8 @@ export const API_METHODS: readonly ApiMethodName[] = [
   'tools',
   'skills',
   'knowledge',
+  'renameEngagement',
+  'deleteEngagement',
 ]
 
 // ───────────────────────── 报告文件导出（绕过 JSON 信封） ─────────────────────────

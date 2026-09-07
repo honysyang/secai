@@ -51,6 +51,15 @@
   overflow: hidden;
 }
 
+/* 右侧栏：工作台任务管理栏（320px 定宽） */
+.rightCol {
+  grid-row: 2;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--secai-alias-bg-base);
+  border-left: 1px solid var(--secai-alias-border-l1);
+}
+
 /* 分隔条是帧的子元素（列裁剪 overflow）：8px 命中条跨栏界居中，
    内联 left 定位，浮于列内容之上。 */
 .handle {

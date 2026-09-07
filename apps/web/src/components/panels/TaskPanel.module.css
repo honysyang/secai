@@ -1,0 +1,178 @@
+/* TaskPanel：工作台右侧任务管理栏样式。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--secai-alias-bg-base);
+  color: var(--secai-alias-text-1);
+  border-left: 1px solid var(--secai-alias-border-l1);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 8px;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.newBtn {
+  padding: 4px 10px;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 6px;
+  background: var(--secai-alias-bg-1);
+  color: var(--secai-alias-text-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.newBtn:hover {
+  border-color: var(--secai-alias-text-3);
+}
+
+.searchRow {
+  padding: 0 14px 8px;
+  border-bottom: 1px solid var(--secai-alias-border-l1);
+}
+
+.search {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 6px;
+  background: var(--secai-alias-bg-1);
+  color: var(--secai-alias-text-1);
+  font-size: 12px;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--secai-alias-text-3);
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.empty {
+  padding: 24px 14px;
+  text-align: center;
+  color: var(--secai-alias-text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.taskRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  font-size: 13px;
+  transition: background 0.1s;
+}
+
+.taskRow:hover {
+  background: var(--secai-alias-bg-1);
+}
+
+.taskRow[data-selected] {
+  background: var(--secai-alias-bg-1);
+  border-left-color: var(--secai-alias-text-1);
+}
+
+.slot {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.taskTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--secai-alias-text-3);
+  border-radius: 4px;
+  background: var(--secai-alias-bg-base);
+  color: var(--secai-alias-text-1);
+  font-size: 13px;
+}
+
+.renameInput:focus {
+  outline: none;
+}
+
+.countBadge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  background: var(--secai-alias-bg-1);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--secai-alias-text-3);
+}
+
+.time {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--secai-alias-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.taskRow:hover .actions {
+  opacity: 1;
+}
+
+.actionBtn {
+  padding: 2px 5px;
+  border: none;
+  background: none;
+  color: var(--secai-alias-text-3);
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.actionBtn:hover {
+  color: var(--secai-alias-text-1);
+  background: var(--secai-alias-bg-base);
+}
+
+.confirmBtn {
+  padding: 2px 5px;
+  border: none;
+  background: var(--secai-alias-error, #cf222e);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+}

@@ -235,6 +235,31 @@ class AppState:
             return "running"
         return "completed" if any(s == "completed" for s in statuses) else "failed"
 
+    def rename_engagement(self, engagement_id: str, title: str) -> EngagementRec | None:
+        """重命名任务（标题覆盖；updatedAt 刷新 + host/engagement-changed 广播）。"""
+        eng = self.engagements.get(engagement_id)
+        if eng is None:
+            return None
+        eng.title = (title or "").strip() or eng.title
+        eng.updated_at = now_iso()
+        self.hub.broadcast("host", {"type": "host/engagement-changed", "engagementId": engagement_id})
+        return eng
+
+    def delete_engagement(self, engagement_id: str) -> list[str]:
+        """删除任务：移除任务书 + 级联移除其全部会话；返回被移除的 sessionIds。"""
+        eng = self.engagements.pop(engagement_id, None)
+        if eng is None:
+            return []
+        removed_session_ids: list[str] = []
+        for sid in list(eng.session_ids):
+            if sid in self.sessions:
+                self.remove_session(sid)
+                removed_session_ids.append(sid)
+        # 空任务（无会话）也要广播变更
+        if not removed_session_ids:
+            self.hub.broadcast("host", {"type": "host/engagement-changed", "engagementId": engagement_id})
+        return removed_session_ids
+
     def _require_session(self, session_id: str) -> SessionRec:
         try:
             return self.sessions[session_id]
