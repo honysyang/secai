@@ -71,6 +71,52 @@ class ToolSpec:
     description: str = ""
     args: list[str] = field(default_factory=list)
     parameters: list[dict[str, Any]] = field(default_factory=list)
+    # Kill Chain 阶段（recon/weaponization/delivery/exploitation/installation/c2/actions）
+    kill_chain: str = "recon"
+
+
+# 工具名 → Kill Chain 阶段映射（未列出的默认 recon；只读侦察类为主）。
+_KILL_CHAIN_MAP = {
+    # 侦察
+    "nmap": "recon", "masscan": "recon", "rustscan": "recon", "fscan": "recon",
+    "httpx": "recon", "whatweb": "recon", "curl": "recon", "wafw00f": "recon",
+    "subfinder": "recon", "amass": "recon", "fierce": "recon", "dnsenum": "recon",
+    "dnslog": "recon", "gau": "recon", "waybackurls": "recon", "katana": "recon",
+    "feroxbuster": "recon", "gobuster": "recon", "dirsearch": "recon", "ffuf": "recon",
+    "arjun": "recon", "paramspider": "recon", "x8": "recon", "nbtscan": "recon",
+    "arp-scan": "recon", "enum4linux-ng": "recon", "smbmap": "recon", "rpcclient": "recon",
+    "netexec": "recon", "nikto": "recon", "nuclei": "recon", "jaeles": "recon",
+    "wpscan": "recon", "api-schema-analyzer": "recon", "graphql-scanner": "recon",
+    "fofa_search": "recon", "shodan_search": "recon", "zoomeye_search": "recon",
+    "quake_search": "recon", "searchsploit": "recon", "checksec": "recon",
+    "bloodhound": "recon", "ldapdomaindump": "recon", "cloudmapper": "recon",
+    "scout-suite": "recon", "prowler": "recon", "pacu": "recon", "kube-hunter": "recon",
+    "kube-bench": "recon", "clair": "recon", "trivy": "recon", "checkov": "recon",
+    "terrascan": "recon", "slither": "recon", "mythril": "recon",
+    # 利用（Web 漏洞 / 爆破 / 注入）
+    "sqlmap": "exploitation", "hydra": "exploitation", "john": "exploitation",
+    "hashcat": "exploitation", "hashpump": "exploitation", "xsser": "exploitation",
+    "dalfox": "exploitation", "dotdotpwn": "exploitation", "jwt-analyzer": "exploitation",
+    "lightx": "exploitation", "http-framework-test": "exploitation", "zap": "exploitation",
+    "metasploit": "exploitation", "impacket": "exploitation", "responder": "exploitation",
+    # 武器化（payload/exploit 构造）
+    "msfvenom": "weaponization", "pwntools": "weaponization", "pwninit": "weaponization",
+    "one-gadget": "weaponization", "ropgadget": "weaponization", "ropper": "weaponization",
+    "libc-database": "weaponization",
+    # 安装（持久化 / 后渗透驻留）
+    "linpeas": "installation", "execute-python-script": "installation",
+    "exec": "installation", "install-python-package": "installation",
+    # 达成目标（后渗透 / 取证 / 提取）
+    "exiftool": "actions", "steghide": "actions", "zsteg": "actions",
+    "foremost": "actions", "binwalk": "actions", "strings": "actions", "xxd": "actions",
+    "volatility3": "actions", "ghidra": "actions", "radare2": "actions", "gdb": "actions",
+    "angr": "actions", "falco": "actions",
+}
+
+# 合法 Kill Chain 阶段全集
+_KILL_CHAIN_ALL = frozenset(
+    {"recon", "weaponization", "delivery", "exploitation", "installation", "c2", "actions"}
+)
 
 
 @lru_cache(maxsize=1)
@@ -92,6 +138,10 @@ def load_specs(tools_dir: str = TOOLS_DIR) -> dict[str, ToolSpec]:
         if not name or not command:
             continue
         enabled = bool(raw.get("enabled", True))
+        # Kill Chain：YAML 显式 kill_chain 优先，其次工具名映射，默认 recon
+        kill_chain = str(raw.get("kill_chain") or "").strip().lower()
+        if kill_chain not in _KILL_CHAIN_ALL:
+            kill_chain = _KILL_CHAIN_MAP.get(name, "recon")
         spec = ToolSpec(
             name=name,
             command=command,
@@ -100,6 +150,7 @@ def load_specs(tools_dir: str = TOOLS_DIR) -> dict[str, ToolSpec]:
             description=str(raw.get("description") or "").strip(),
             args=[str(a) for a in (raw.get("args") or [])],
             parameters=[dict(x) for x in (raw.get("parameters") or []) if isinstance(x, dict)],
+            kill_chain=kill_chain,
         )
         specs[name] = spec
     return specs

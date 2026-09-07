@@ -39,6 +39,9 @@ const NAV_ITEMS: ReadonlyArray<{ key: RouteKey; label: string; icon: () => React
   { key: 'assets', label: '资产', icon: () => <AssetsIcon /> },
   { key: 'risks', label: '风险', icon: () => <RisksIcon /> },
   { key: 'reports', label: '报告', icon: () => <ReportsIcon /> },
+  { key: 'arsenal', label: '武器库', icon: () => <ArsenalIcon /> },
+  { key: 'skills', label: 'Skills', icon: () => <SkillsIcon /> },
+  { key: 'knowledge', label: '知识库', icon: () => <KnowledgeIcon /> },
 ]
 
 function WorkbenchIcon() {
@@ -81,6 +84,38 @@ function ReportsIcon() {
       <path d="M4 1.8h5.5L13 5.3v9H4V1.8Z" />
       <path d="M9.5 1.8v3.5H13" />
       <path d="M6 8.5h4M6 11h4" />
+    </svg>
+  )
+}
+
+function ArsenalIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M2.2 13.8L13.8 2.2" />
+      <path d="M11.2 2.2h2.6v2.6" />
+      <path d="M2.2 10.4v2.6h2.6" />
+      <circle cx="4.6" cy="4.6" r="1.8" />
+      <circle cx="11.4" cy="11.4" r="1.8" />
+    </svg>
+  )
+}
+
+function SkillsIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 1.8l1.8 3.7 4.1.6-3 2.9.7 4.1L8 11l-3.6 1.9.7-4.1-3-2.9 4.1-.6L8 1.8Z" />
+    </svg>
+  )
+}
+
+function KnowledgeIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+      strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 2.2h8.5L13 3.7v10.1H3V2.2Z" />
+      <path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3.5" />
     </svg>
   )
 }

@@ -331,19 +331,86 @@ async def api_update_risk(request: Request) -> JSONResponse:
     return _ok({"risk": entry})
 
 
+# ---------------------------------------------------------------------------
+# 武器库 / Skills / 知识库（前端管理视图数据源，arsenal 注册表直读）
+# ---------------------------------------------------------------------------
+async def api_tools(request: Request) -> JSONResponse:
+    """tools：武器库全量清单（按 Kill Chain 阶段分类 + 本机安装状态）。"""
+    from arsenal.registries import sec_tools
+
+    rows = []
+    for spec in sec_tools.load_specs().values():
+        if not spec.enabled:
+            continue
+        rows.append(
+            {
+                "name": spec.name,
+                "command": spec.command,
+                "killChain": spec.kill_chain,
+                "installed": sec_tools.is_installed(spec),
+                "shortDescription": spec.short_description,
+                "description": spec.description,
+                "args": list(spec.args),
+            }
+        )
+    return _ok({"tools": rows})
+
+
+async def api_skills(request: Request) -> JSONResponse:
+    """skills：技能清单（管理视图）；带 name → 单技能全文（渐进披露）。"""
+    from arsenal.registries import skill_registry
+
+    payload = await _rpc_payload(request)
+    name = str(payload.get("name") or "").strip()
+    if name:
+        skill = skill_registry.get_skill(name)
+        if skill is None:
+            return _error("not_found", f"未知技能: {name}")
+        return _ok(
+            {
+                "skill": {
+                    "name": skill.name,
+                    "category": skill.category,
+                    "displayName": skill.display_name,
+                    "description": skill.description,
+                    "triggers": list(skill.triggers),
+                    "body": skill.body,
+                }
+            }
+        )
+    return _ok({"skills": skill_registry.find_skills("", limit=500)})
+
+
+async def api_knowledge(request: Request) -> JSONResponse:
+    """knowledge：知识库清单；带 id → 单条全文（渐进披露）。"""
+    from arsenal.registries import knowledge_registry
+
+    payload = await _rpc_payload(request)
+    kid = str(payload.get("id") or "").strip()
+    if kid:
+        item = knowledge_registry.get_knowledge(kid)
+        if item is None:
+            return _error("not_found", f"未知知识条目: {kid}")
+        return _ok({"knowledge": [], "detail": item})
+    return _ok({"knowledge": knowledge_registry.list_knowledge(), "detail": None})
+
+
 __all__ = [
     "REPORT_SECTION_TITLES",
     "api_assets",
     "api_describe",
     "api_engagements",
     "api_export_report",
+    "api_knowledge",
     "api_list_artifacts",
     "api_report",
     "api_respond",
     "api_risks",
     "api_run",
+    "api_skills",
     "api_steer",
     "api_targets",
+    "api_tools",
     "api_reports",
     "api_update_risk",
 ]

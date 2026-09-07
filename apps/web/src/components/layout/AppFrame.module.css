@@ -5,11 +5,23 @@
 .frame {
   position: relative; /* 锚定跨栏界的分隔条 */
   display: grid;
-  grid-template-rows: 100%;
+  grid-template-rows: 48px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
   background: var(--secai-alias-bg-base);
   transition: grid-template-columns var(--secai-transition-duration-slow) var(--secai-ease-in-out);
+}
+
+/* 顶部栏：跨整栏宽（含侧栏上方），独立一行。 */
+.header {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  background: var(--secai-specific-sidebar-fill);
+  border-bottom: 1px solid var(--secai-alias-border-l1);
 }
 
 /* 拖拽按指针节奏写宽度；缓动会让列脱离手柄。 */
@@ -24,6 +36,7 @@
 }
 
 .sidebarCol {
+  grid-row: 2;
   min-width: 0;
   overflow: hidden;
   background: var(--secai-specific-sidebar-fill);
@@ -31,6 +44,7 @@
 }
 
 .centerCol {
+  grid-row: 2;
   min-width: 0;
   display: flex;
   flex-direction: column;

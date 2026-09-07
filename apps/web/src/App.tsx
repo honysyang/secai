@@ -6,12 +6,15 @@
 // 开关同层下传（AppFrame 负责窄屏 rail 几何，sidebarOpen 只管宽屏收展）。
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
-import { AppFrame } from './components/layout/AppFrame.tsx'
+import { AppFrame, HEADER_HEIGHT } from './components/layout/AppFrame.tsx'
 import { SidebarPane } from './components/sidebar/SidebarPane.tsx'
 import { ConversationView } from './components/conversation/ConversationView.tsx'
 import { AssetPanel } from './components/panels/AssetPanel.tsx'
 import { RiskPanel } from './components/panels/RiskPanel.tsx'
 import { ReportPanel } from './components/panels/ReportPanel.tsx'
+import { ArsenalPanel } from './components/panels/ArsenalPanel.tsx'
+import { SkillsPanel } from './components/panels/SkillsPanel.tsx'
+import { KnowledgePanel } from './components/panels/KnowledgePanel.tsx'
 import { NewEngagementModal } from './components/engagement/NewEngagementModal.tsx'
 import { AppRuntime } from './runtime/appRuntime.ts'
 import type { TaskBrief } from './connection/api.ts'
@@ -53,6 +56,12 @@ export default function App() {
         reports={snapshot.reports}
         onGenerate={(engagementId) => runtime.generateReport(engagementId)}
       />
+    ) : snapshot.route === 'arsenal' ? (
+      <ArsenalPanel tools={snapshot.tools} />
+    ) : snapshot.route === 'skills' ? (
+      <SkillsPanel skills={snapshot.skills} />
+    ) : snapshot.route === 'knowledge' ? (
+      <KnowledgePanel knowledge={snapshot.knowledge} />
     ) : (
       <ConversationView
         session={session}
@@ -65,6 +74,14 @@ export default function App() {
   return (
     <AppFrame
       sidebarOpen={sidebarOpen}
+      header={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 16px', height: HEADER_HEIGHT, fontSize: 13, color: 'var(--secai-alias-text-2)' }}>
+          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--secai-alias-text-1)' }}>SECAI·PT</span>
+          <span>渗透测试智能体系统</span>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontSize: 12 }}>v4.0</span>
+        </div>
+      }
       sidebar={
         <SidebarPane
           engagement={snapshot.engagement}

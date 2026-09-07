@@ -20,14 +20,17 @@ import type {
   ReportEntry,
   SessionHeader,
   TaskBrief,
+  ToolEntry,
+  SkillSummary,
+  KnowledgeSummary,
 } from '../connection/api.ts'
 import { ApiClient, ConnectionController } from '../connection/connection.ts'
 import type { ConnectionState } from '../connection/connection.ts'
 import { Engagement } from './engagement.ts'
 import type { EngagementSnapshot } from './engagement.ts'
 
-/** 顶层导航路由：工作台 = 对话面板，资产/风险/报告 = 独立管理视图。 */
-export type RouteKey = 'workbench' | 'assets' | 'risks' | 'reports'
+/** 顶层导航路由：工作台 = 对话面板，资产/风险/报告 = 独立管理视图，武器库/Skills/知识库 = 能力管理视图。 */
+export type RouteKey = 'workbench' | 'assets' | 'risks' | 'reports' | 'arsenal' | 'skills' | 'knowledge'
 
 export type LinkState = 'connecting' | 'connected' | 'reconnecting'
 
@@ -72,6 +75,12 @@ export interface AppSnapshot {
   risks: readonly RiskEntry[]
   /** 报告管理视图数据（host/reports 帧 + bootstrap 拉取）。 */
   reports: readonly ReportEntry[]
+  /** 武器库清单（bootstrap 拉取；含 Kill Chain 阶段 + 安装状态）。 */
+  tools: readonly ToolEntry[]
+  /** Skills 清单（bootstrap 拉取）。 */
+  skills: readonly SkillSummary[]
+  /** 知识库清单（bootstrap 拉取）。 */
+  knowledge: readonly KnowledgeSummary[]
 }
 
 type AppListener = (snapshot: AppSnapshot) => void
@@ -89,6 +98,9 @@ export class AppRuntime {
   private assetsValue: readonly AssetEntry[] = []
   private risksValue: readonly RiskEntry[] = []
   private reportsValue: readonly ReportEntry[] = []
+  private toolsValue: readonly ToolEntry[] = []
+  private skillsValue: readonly SkillSummary[] = []
+  private knowledgeValue: readonly KnowledgeSummary[] = []
   private readonly listeners = new Set<AppListener>()
   private snapshotCache: AppSnapshot | null = null
   private started = false
@@ -145,12 +157,15 @@ export class AppRuntime {
   /** 握手成功后的全量引导：任务列表 + 全部目标会话 + 三类全局清单。 */
   private async bootstrap(): Promise<void> {
     try {
-      const [engagements, targets, assets, risks, reports] = await Promise.all([
+      const [engagements, targets, assets, risks, reports, tools, skills, knowledge] = await Promise.all([
         this.api.call('engagements', {}),
         this.api.call('targets', {}),
         this.api.call('assets', {}),
         this.api.call('risks', {}),
         this.api.call('reports', {}),
+        this.api.call('tools', {}),
+        this.api.call('skills', {}),
+        this.api.call('knowledge', {}),
       ])
       for (const header of targets) {
         this.registerSession(header)
@@ -159,6 +174,9 @@ export class AppRuntime {
       this.assetsValue = assets.assets
       this.risksValue = risks.risks
       this.reportsValue = reports.reports
+      this.toolsValue = tools.tools
+      this.skillsValue = skills.skills
+      this.knowledgeValue = knowledge.knowledge
       this.autoSelect()
       this.touch()
     } catch (cause) {
@@ -457,6 +475,9 @@ export class AppRuntime {
       assets: this.assetsValue,
       risks: this.risksValue,
       reports: this.reportsValue,
+      tools: this.toolsValue,
+      skills: this.skillsValue,
+      knowledge: this.knowledgeValue,
     }
   }
 

@@ -1,0 +1,172 @@
+/* ArsenalPanel：武器库视图样式（Kill Chain 阶段分组 + 工具列表）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--secai-alias-bg-base);
+  color: var(--secai-alias-text-1);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--secai-alias-border-l1);
+}
+
+.title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.subtitle {
+  font-size: 13px;
+  color: var(--secai-alias-text-3);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.search {
+  width: 220px;
+  padding: 6px 10px;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 6px;
+  background: var(--secai-alias-bg-1);
+  color: var(--secai-alias-text-1);
+  font-size: 13px;
+}
+
+.search:focus {
+  outline: none;
+  border-color: var(--secai-alias-text-3);
+}
+
+.stats {
+  display: flex;
+  gap: 12px;
+  padding: 12px 20px 0;
+}
+
+.statCard {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--secai-alias-bg-1);
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 8px;
+}
+
+.statValue {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.statLabel {
+  font-size: 12px;
+  color: var(--secai-alias-text-3);
+}
+
+.phaseChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--secai-alias-border-l1);
+}
+
+.chip {
+  padding: 5px 12px;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 999px;
+  background: var(--secai-alias-bg-1);
+  color: var(--secai-alias-text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.chip:hover {
+  border-color: var(--secai-alias-text-3);
+  color: var(--secai-alias-text-1);
+}
+
+.chipActive {
+  background: var(--secai-alias-text-1);
+  color: var(--secai-alias-bg-base);
+  border-color: var(--secai-alias-text-1);
+}
+
+.list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 20px 20px;
+}
+
+.empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--secai-alias-text-3);
+  font-size: 13px;
+}
+
+.toolRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--secai-alias-border-l1);
+  font-size: 13px;
+}
+
+.toolRow[data-installed='false'] {
+  opacity: 0.55;
+}
+
+.toolName {
+  min-width: 140px;
+  font-weight: 600;
+  font-family: var(--secai-font-mono, monospace);
+}
+
+.toolCommand {
+  min-width: 100px;
+  padding: 2px 6px;
+  background: var(--secai-alias-bg-1);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--secai-alias-text-2);
+}
+
+.toolPhase {
+  min-width: 130px;
+  font-size: 12px;
+  color: var(--secai-alias-text-3);
+}
+
+.toolStatus {
+  min-width: 70px;
+  font-size: 12px;
+}
+
+.toolStatus[data-installed='true'] {
+  color: var(--secai-alias-success, #2da44e);
+}
+
+.toolStatus[data-installed='false'] {
+  color: var(--secai-alias-text-3);
+}
+
+.toolDesc {
+  flex: 1;
+  color: var(--secai-alias-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

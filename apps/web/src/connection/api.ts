@@ -260,6 +260,54 @@ export interface ApiMethodMap {
   reports: { request: Record<string, never>; response: { reports: ReportEntry[] } }
   /** 风险人工处理状态流转（open/mitigating/accepted/resolved）。 */
   updateRisk: { request: { riskId: string; status: RiskEntry['status'] }; response: { risk: RiskEntry } }
+  /** 武器库：全部已启用工具（含 Kill Chain 阶段 + 本机安装状态）。 */
+  tools: { request: Record<string, never>; response: { tools: ToolEntry[] } }
+  /** Skills 管理：清单；带 name → 单技能全文（渐进披露）。 */
+  skills: { request: { name?: string }; response: { skills: SkillSummary[]; skill?: SkillDetail } }
+  /** 知识库管理：清单；带 id → 单条全文（渐进披露）。 */
+  knowledge: { request: { id?: string }; response: { knowledge: KnowledgeSummary[]; detail?: KnowledgeDetail | null } }
+}
+
+/** Kill Chain 七阶段标识（server/arsenal sec_tools.kill_chain 对齐）。 */
+export type KillChainPhase = 'recon' | 'weaponization' | 'delivery' | 'exploitation' | 'installation' | 'c2' | 'actions'
+
+/** 武器库工具条目（/api/tools 行）。 */
+export interface ToolEntry {
+  name: string
+  command: string
+  killChain: KillChainPhase
+  installed: boolean
+  shortDescription: string
+  description: string
+  args: string[]
+}
+
+/** Skills 清单摘要（/api/skills 无 name 时）。 */
+export interface SkillSummary {
+  name: string
+  category: string
+  description: string
+  triggers: string[]
+}
+
+/** Skills 单条详情（/api/skills 带 name 时）。 */
+export interface SkillDetail extends SkillSummary {
+  displayName: string
+  body: string
+}
+
+/** 知识库清单摘要（/api/knowledge 无 id 时）。 */
+export interface KnowledgeSummary {
+  id: string
+  desc: string
+}
+
+/** 知识库单条详情（/api/knowledge 带 id 时）。 */
+export interface KnowledgeDetail {
+  id: string
+  name: string
+  desc: string
+  all: string
 }
 
 export type ApiMethodName = keyof ApiMethodMap
@@ -279,6 +327,9 @@ export const API_METHODS: readonly ApiMethodName[] = [
   'risks',
   'reports',
   'updateRisk',
+  'tools',
+  'skills',
+  'knowledge',
 ]
 
 // ───────────────────────── 报告文件导出（绕过 JSON 信封） ─────────────────────────

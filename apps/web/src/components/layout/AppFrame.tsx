@@ -19,15 +19,21 @@ import css from './AppFrame.module.css'
 export interface AppFrameProps {
   sidebar: ReactNode
   conversation: ReactNode
+  /** 顶部栏 slot（跨整栏宽，含侧栏上方）。 */
+  header?: ReactNode
   /** 穿透渲染的全局覆盖层（Modal 等 portal 内容之外的非 portal 浮层）。 */
   children?: ReactNode
   /** 侧栏展开偏好（false = 收起成 rail）。 */
   sidebarOpen: boolean
 }
 
+/** 顶部栏高度（px）：grid-template-rows 与 handle top 偏移共用。 */
+export const HEADER_HEIGHT = 48
+
 /** 分隔条：pointer capture + rAF 节流 dx。 */
 function DragHandle(props: {
   left: number
+  top?: number
   onStart: () => void
   onDrag: (dx: number) => void
   onEnd: () => void
@@ -73,7 +79,7 @@ function DragHandle(props: {
   return (
     <div
       className={css.handle}
-      style={{ left: props.left }}
+      style={{ left: props.left, top: props.top ?? 0 }}
       data-dragging={dragging || undefined}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -82,7 +88,7 @@ function DragHandle(props: {
   )
 }
 
-export function AppFrame({ sidebar, conversation, children = null, sidebarOpen }: AppFrameProps) {
+export function AppFrame({ sidebar, conversation, header = null, children = null, sidebarOpen }: AppFrameProps) {
   const frameRef = useRef<HTMLDivElement | null>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
   const [sidebarPref, setSidebarPref] = useState(SIDEBAR_DEFAULT)
@@ -141,14 +147,24 @@ export function AppFrame({ sidebar, conversation, children = null, sidebarOpen }
       className={css.frame}
       data-sidebar-collapsed={sidebarCollapsed || undefined}
       data-dragging={dragging || undefined}
-      style={{ gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr)` }}
+      style={{
+        gridTemplateColumns: `${cols.sidebar}px minmax(0, 1fr)`,
+        gridTemplateRows: `${HEADER_HEIGHT}px minmax(0, 1fr)`,
+      }}
     >
+      {header !== null && <header className={css.header}>{header}</header>}
       <aside className={css.sidebarCol}>{sidebar}</aside>
       <main className={css.centerCol}>{conversation}</main>
       {children}
-      {/* rail 态侧栏定宽 56，无分隔条（dsh：collapsed 无 handle） */}
+      {/* rail 态侧栏定宽 56，无分隔条（dsh：collapsed 无 handle）；顶栏占位下推 */}
       {!sidebarCollapsed && (
-        <DragHandle left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />
+        <DragHandle
+          left={cols.sidebar}
+          top={HEADER_HEIGHT}
+          onStart={onSidebarStart}
+          onDrag={onSidebarDrag}
+          onEnd={onDragEnd}
+        />
       )}
     </div>
   )
