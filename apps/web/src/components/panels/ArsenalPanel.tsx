@@ -7,6 +7,7 @@
 
 import { useMemo, useState } from 'react'
 import type { KillChainPhase, ToolEntry } from '../../connection/api.ts'
+import { EmptyState } from '../primitives/EmptyState.tsx'
 import css from './ArsenalPanel.module.css'
 
 export interface ArsenalPanelProps {
@@ -104,7 +105,10 @@ export function ArsenalPanel({ tools }: ArsenalPanelProps) {
 
       <div className={css.list}>
         {filtered.length === 0 ? (
-          <div className={css.empty}>无匹配工具——调整搜索或阶段筛选。</div>
+          <EmptyState
+            title="无匹配工具"
+            description="调整搜索或阶段筛选条件。"
+          />
         ) : (
           filtered.map((tool) => (
             <div key={tool.name} className={css.toolRow} data-installed={tool.installed || undefined}>

@@ -1,0 +1,70 @@
+.wrap {
+  overflow: auto;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 10px;
+  background: var(--secai-alias-bg-layer-1);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--secai-alias-label-secondary);
+  border-bottom: 1px solid var(--secai-alias-border-l2);
+  background: var(--secai-alias-bg-layer-2);
+  white-space: nowrap;
+}
+
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable:hover {
+  color: var(--secai-alias-label-primary);
+}
+
+.thInner {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sortIcon {
+  font-size: 10px;
+  color: var(--secai-alias-state-business-primary);
+}
+
+.table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--secai-alias-border-l1);
+  color: var(--secai-alias-label-primary);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+.clickable:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.zebra {
+  background: var(--secai-alias-bg-layer-1);
+}
+
+.zebra:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}

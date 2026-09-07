@@ -1,13 +1,16 @@
 /**
- * AssetPanel：资产管理视图（r6 用户视角重设计）。
+ * AssetPanel：资产管理视图（r6 用户视角重设计 + P14 DataTable 重构）。
  * 数据 = host/assets 帧 + bootstrap 拉取（AppSnapshot.assets）。
  * 结构 = 头部（标题 + 搜索框）+ 类型筛选 chips + 统计条（总资产/端口/服务）
- * + 资产表格（目标/类型/OS/服务/端口/首末次发现）。
+ * + DataTable（目标/类型/OS/服务/端口/首末次发现）。
  */
 
 import { useMemo, useState } from 'react'
 import type { AssetEntry } from '../../connection/api.ts'
 import { formatDateTime } from '../../runtime/format.ts'
+import { DataTable } from '../primitives/DataTable.tsx'
+import type { ColumnDef } from '../primitives/DataTable.tsx'
+import { EmptyState } from '../primitives/EmptyState.tsx'
 import css from './AssetPanel.module.css'
 
 export interface AssetPanelProps {
@@ -61,6 +64,24 @@ export function AssetPanel({ assets }: AssetPanelProps) {
     })
   }, [assets, kind, query])
 
+  const columns: ColumnDef<AssetEntry>[] = [
+    { key: 'target', header: '目标', sortable: true },
+    { key: 'kind', header: '类型', render: (row) => <span className={css.kind}>{kindLabel(row.kind)}</span> },
+    { key: 'os', header: 'OS', render: (row) => row.os ?? '—' },
+    { key: 'services', header: '服务', render: (row) => (
+      <div className={css.tags}>
+        {row.services.map((svc) => <span key={svc} className={css.tag}>{svc}</span>)}
+      </div>
+    ) },
+    { key: 'ports', header: '端口', render: (row) => (
+      <div className={css.tags}>
+        {row.ports.map((port) => <span key={port} className={css.tag}>{port}</span>)}
+      </div>
+    ) },
+    { key: 'firstSeenAt', header: '首次发现', render: (row) => <span className={css.time}>{formatDateTime(row.firstSeenAt)}</span> },
+    { key: 'lastSeenAt', header: '最近更新', render: (row) => <span className={css.time}>{formatDateTime(row.lastSeenAt)}</span> },
+  ]
+
   return (
     <div className={css.root}>
       <div className={css.header}>
@@ -100,55 +121,16 @@ export function AssetPanel({ assets }: AssetPanelProps) {
 
       <div className={css.wrap}>
         {assets.length === 0 ? (
-          <div className={css.empty}>
-            暂无资产——agent 完成侦察后会在此登记授权目标的结构化信息（类型 / OS / 服务 / 端口）。
-          </div>
+          <EmptyState
+            title="暂无资产"
+            description="agent 完成侦察后会在此登记授权目标的结构化信息（类型 / OS / 服务 / 端口）。"
+          />
         ) : (
-        <table className={css.table}>
-          <thead>
-            <tr>
-              <th className={css.th}>目标</th>
-              <th className={css.th}>类型</th>
-              <th className={css.th}>OS</th>
-              <th className={css.th}>服务</th>
-              <th className={css.th}>端口</th>
-              <th className={css.th}>首次发现</th>
-              <th className={css.th}>最近更新</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((asset) => (
-              <tr key={asset.id} className={css.tr}>
-                <td className={css.target}>{asset.target}</td>
-                <td className={css.td}>
-                  <span className={css.kind}>{kindLabel(asset.kind)}</span>
-                </td>
-                <td className={css.td}>{asset.os ?? '—'}</td>
-                <td className={css.td}>
-                  <div className={css.tags}>
-                    {asset.services.map((svc) => (
-                      <span key={svc} className={css.tag}>{svc}</span>
-                    ))}
-                  </div>
-                </td>
-                <td className={css.td}>
-                  <div className={css.tags}>
-                    {asset.ports.map((port) => (
-                      <span key={port} className={css.tag}>{port}</span>
-                    ))}
-                  </div>
-                </td>
-                <td className={css.time}>{formatDateTime(asset.firstSeenAt)}</td>
-                <td className={css.time}>{formatDateTime(asset.lastSeenAt)}</td>
-              </tr>
-            ))}
-            {filtered.length === 0 && (
-              <tr>
-                <td className={css.td} colSpan={7}>无匹配资产——调整搜索词或筛选条件。</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+          <DataTable
+            columns={columns}
+            rows={filtered}
+            rowKey={(row) => row.id}
+          />
         )}
       </div>
     </div>

@@ -6,6 +6,7 @@
 
 import { useMemo, useState } from 'react'
 import type { SkillSummary } from '../../connection/api.ts'
+import { EmptyState } from '../primitives/EmptyState.tsx'
 import css from './SkillsPanel.module.css'
 
 export interface SkillsPanelProps {
@@ -71,7 +72,10 @@ export function SkillsPanel({ skills }: SkillsPanelProps) {
 
       <div className={css.grid}>
         {filtered.length === 0 ? (
-          <div className={css.empty}>无匹配技能——调整搜索或分类筛选。</div>
+          <EmptyState
+            title="无匹配技能"
+            description="调整搜索或分类筛选条件。"
+          />
         ) : (
           filtered.map((skill) => (
             <div key={skill.name} className={css.card}>

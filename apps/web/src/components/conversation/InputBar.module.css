@@ -136,6 +136,78 @@
   cursor: default;
 }
 
+/* 斜杠命令下拉 */
+.slashMenu {
+  position: absolute;
+  bottom: 100%;
+  left: 16px;
+  right: 16px;
+  margin-bottom: 4px;
+  max-width: var(--secai-composer-card-max-width);
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 10px;
+  background: var(--secai-alias-bg-layer-1);
+  box-shadow: var(--secai-alias-shadow-lv2);
+  overflow: hidden;
+  z-index: 20;
+}
+
+.slashItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.slashItem:hover,
+.slashItem[aria-selected='true'] {
+  background: var(--secai-static-blue-50);
+}
+
+body[data-secai-dark] .slashItem:hover,
+body[data-secai-dark] .slashItem[aria-selected='true'] {
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.slashCmd {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--secai-alias-state-business-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.slashLabel {
+  flex: none;
+  font-size: 13px;
+  color: var(--secai-alias-label-primary);
+}
+
+.slashHint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--secai-alias-label-tertiary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 令牌预估 */
+.tokenEstimate {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--secai-alias-label-caption);
+  padding: 0 4px;
+}
+
 /* 发送主钮：36px 圆，info-fill 蓝 + 白箭头；空文本 opacity .4。 */
 .primary {
   display: grid;

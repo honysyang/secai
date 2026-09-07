@@ -40,9 +40,23 @@ function PlusIcon() {
   )
 }
 
+/** 斜杠命令列表。 */
+const SLASH_COMMANDS = [
+  { cmd: '/scan', label: '扫描', hint: '对目标进行端口扫描' },
+  { cmd: '/exploit', label: '利用', hint: '尝试利用已知漏洞' },
+  { cmd: '/privesc', label: '提权', hint: '尝试权限提升' },
+  { cmd: '/report', label: '报告', hint: '生成渗透报告' },
+]
+
+/** 估算 token 数（约 1 token ≈ 4 字符）。 */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4)
+}
+
 export function InputBar({ disabled, disabledReason, placeholder, onSend, onNewTask }: InputBarProps) {
   const [draft, setDraft] = useState('')
   const [error, setError] = useState('')
+  const [showSlash, setShowSlash] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   // IME 合成守卫：拼音选字期的 Enter 不得发送
   const composingRef = useRef(false)
@@ -57,13 +71,22 @@ export function InputBar({ disabled, disabledReason, placeholder, onSend, onNewT
     el.style.height = `${el.scrollHeight}px`
   }, [draft])
 
+  // 斜杠命令检测
+  useEffect(() => {
+    setShowSlash(draft.startsWith('/'))
+  }, [draft])
+
   const submit = (): void => {
     if (disabled || empty) return
     const text = draft.trim()
+    // 斜杠命令展开
+    const slashCmd = SLASH_COMMANDS.find((s) => text.startsWith(s.cmd))
+    const finalText = slashCmd ? `${slashCmd.label}：${text.slice(slashCmd.cmd.length).trim()}` : text
     setDraft('')
     setError('')
+    setShowSlash(false)
     // 失败不静默：行内呈现（如 demo 模式下 run 不可用）
-    Promise.resolve(onSend(text)).catch((cause) => {
+    Promise.resolve(onSend(finalText)).catch((cause) => {
       setError(cause instanceof Error ? cause.message : String(cause))
     })
   }
@@ -77,6 +100,13 @@ export function InputBar({ disabled, disabledReason, placeholder, onSend, onNewT
     submit()
   }
 
+  const applySlash = (cmd: string): void => {
+    setDraft(cmd + ' ')
+    inputRef.current?.focus()
+  }
+
+  const tokenEstimate = estimateTokens(draft)
+
   return (
     <div className={css.root}>
       {disabled && disabledReason !== '' && (
@@ -85,6 +115,27 @@ export function InputBar({ disabled, disabledReason, placeholder, onSend, onNewT
       {!disabled && error !== '' && (
         <div className={css.notice} data-tone="error" role="alert">{error}</div>
       )}
+
+      {/* 斜杠命令下拉 */}
+      {showSlash && !disabled && (
+        <div className={css.slashMenu} role="listbox" aria-label="斜杠命令">
+          {SLASH_COMMANDS.map((s) => (
+            <button
+              key={s.cmd}
+              type="button"
+              role="option"
+              aria-selected={draft.startsWith(s.cmd)}
+              className={css.slashItem}
+              onClick={() => applySlash(s.cmd)}
+            >
+              <span className={css.slashCmd}>{s.cmd}</span>
+              <span className={css.slashLabel}>{s.label}</span>
+              <span className={css.slashHint}>{s.hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className={css.card} data-composer-card>
         <div className={css.scroll} data-input-scroll>
           <textarea
@@ -114,6 +165,12 @@ export function InputBar({ disabled, disabledReason, placeholder, onSend, onNewT
               <PlusIcon />
             </button>
           </div>
+          {/* 令牌预估 */}
+          {draft.length > 0 && (
+            <span className={css.tokenEstimate} aria-label="预估令牌数">
+              ~{tokenEstimate} tok
+            </span>
+          )}
           <div className={css.trailing}>
             <button
               type="button"

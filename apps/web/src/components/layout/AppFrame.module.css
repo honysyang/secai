@@ -24,17 +24,7 @@
   border-bottom: 1px solid var(--secai-alias-border-l1);
 }
 
-/* 拖拽按指针节奏写宽度；缓动会让列脱离手柄。 */
-.frame[data-dragging] {
-  transition: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .frame {
-    transition: none;
-  }
-}
-
+/* 侧栏：通顶（grid-row 1/-1）。 */
 .sidebarCol {
   grid-row: 1 / -1;
   min-width: 0;
@@ -43,15 +33,7 @@
   border-right: 1px solid var(--secai-alias-border-l1);
 }
 
-.centerCol {
-  grid-row: 2;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* 左侧对话管理栏（280px 定宽）：侧栏与中栏之间，通顶 */
+/* 对话管理栏：侧栏与中栏之间，通顶。 */
 .leftPanelCol {
   grid-row: 1 / -1;
   width: 280px;
@@ -59,6 +41,15 @@
   overflow: hidden;
   background: var(--secai-alias-bg-base);
   border-right: 1px solid var(--secai-alias-border-l2);
+}
+
+/* 中栏：内容区。 */
+.centerCol {
+  grid-row: 2;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* 分隔条是帧的子元素（列裁剪 overflow）：8px 命中条跨栏界居中，

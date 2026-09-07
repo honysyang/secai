@@ -12,6 +12,7 @@ import type { Severity } from '../../runtime/projections.ts'
 import { formatDateTime } from '../../runtime/format.ts'
 import { SEVERITY_LABEL } from '../details/severity.ts'
 import sevCss from '../details/severity.module.css'
+import { EmptyState } from '../primitives/EmptyState.tsx'
 import css from './RiskPanel.module.css'
 
 export interface RiskPanelProps {
@@ -145,9 +146,10 @@ export function RiskPanel({ risks, onStatusChange }: RiskPanelProps) {
 
       <div className={css.list}>
         {risks.length === 0 ? (
-          <div className={css.empty}>
-            暂无风险——agent 确认的 finding 会按严重级别聚合在此（生成报告后自动落账），支持处理状态跟踪。
-          </div>
+          <EmptyState
+            title="暂无风险"
+            description="agent 确认的 finding 会按严重级别聚合在此（生成报告后自动落账），支持处理状态跟踪。"
+          />
         ) : (
           filtered.map((risk) => (
             <RiskRow key={risk.id} risk={risk} onStatusChange={onStatusChange} />

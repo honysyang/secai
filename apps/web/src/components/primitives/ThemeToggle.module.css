@@ -1,0 +1,18 @@
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--secai-alias-label-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.toggle:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-primary);
+}

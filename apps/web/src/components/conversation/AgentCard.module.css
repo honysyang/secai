@@ -1,0 +1,75 @@
+.root {
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 10px;
+  background: var(--secai-alias-bg-layer-1);
+  overflow: hidden;
+}
+
+.root[data-state='running'] {
+  border-color: rgba(65, 118, 230, 0.3);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+}
+
+.header:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+}
+
+.name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--secai-alias-label-primary);
+}
+
+.summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--secai-alias-label-tertiary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chevron {
+  flex: none;
+  font-size: 11px;
+  color: var(--secai-alias-label-tertiary);
+}
+
+.body {
+  border-top: 1px solid var(--secai-alias-border-l1);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.empty {
+  font-size: 12px;
+  color: var(--secai-alias-label-tertiary);
+  padding: 8px 0;
+}
+
+.toolEnd {
+  font-size: 12px;
+  color: var(--secai-alias-label-secondary);
+  padding: 2px 0 2px 20px;
+}
+
+.eventLine {
+  font-size: 11px;
+  color: var(--secai-alias-label-caption);
+  padding: 2px 0 2px 20px;
+}

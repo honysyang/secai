@@ -1,0 +1,75 @@
+.host {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--secai-alias-bg-layer-1);
+  border: 1px solid var(--secai-alias-border-l2);
+  box-shadow: var(--secai-alias-shadow-lv2);
+  font-size: 13px;
+  color: var(--secai-alias-label-primary);
+  animation: toast-in 200ms var(--secai-ease-in-out);
+  transition: opacity 200ms var(--secai-ease-in-out), transform 200ms var(--secai-ease-in-out);
+}
+
+.leaving {
+  opacity: 0;
+  transform: translateX(20px);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.bar {
+  flex: none;
+  width: 4px;
+  height: 20px;
+  border-radius: 2px;
+  background: var(--secai-alias-state-business-primary);
+}
+
+.success .bar { background: var(--secai-alias-state-success-primary); }
+.warn .bar { background: var(--secai-alias-state-warn-primary); }
+.error .bar { background: var(--secai-alias-state-error-primary); }
+
+.message {
+  flex: 1;
+  min-width: 0;
+  line-height: 18px;
+}
+
+.close {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--secai-alias-label-tertiary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--secai-alias-interactive-bg-hover);
+  color: var(--secai-alias-label-primary);
+}

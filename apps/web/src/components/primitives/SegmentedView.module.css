@@ -1,0 +1,46 @@
+.root {
+  position: relative;
+  display: flex;
+  border-radius: 8px;
+  background: var(--secai-alias-interactive-bg-hover);
+  padding: 2px;
+  overflow: hidden;
+}
+
+.slider {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  border-radius: 6px;
+  background: var(--secai-static-blue-50);
+  transition: transform 200ms var(--secai-ease-in-out);
+}
+
+body[data-secai-dark] .slider {
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.option {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--secai-alias-label-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 200ms var(--secai-ease-in-out);
+  white-space: nowrap;
+}
+
+.option:hover {
+  color: var(--secai-alias-label-primary);
+}
+
+.active {
+  color: var(--secai-static-blue-600);
+}

@@ -11,6 +11,7 @@ import type { ReportEntry } from '../../connection/api.ts'
 import { downloadReport } from '../../connection/api.ts'
 import { formatDateTime } from '../../runtime/format.ts'
 import { Button } from '../primitives/Button.tsx'
+import { EmptyState } from '../primitives/EmptyState.tsx'
 import css from './ReportPanel.module.css'
 
 export interface ReportPanelProps {
@@ -147,9 +148,10 @@ export function ReportPanel({ reports, onGenerate }: ReportPanelProps) {
       </div>
 
       {reports.length === 0 ? (
-        <div className={css.empty}>
-          暂无报告——agent 完成渗透测试后在此生成可交付的 Markdown / PDF / JSON 报告；也可在任务会话中下达「生成报告」指令。
-        </div>
+        <EmptyState
+          title="暂无报告"
+          description="agent 完成渗透测试后在此生成可交付的 Markdown / PDF / JSON 报告；也可在任务会话中下达「生成报告」指令。"
+        />
       ) : (
         <div className={css.grid}>
           {filtered.map((report) => (

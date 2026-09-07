@@ -11,6 +11,7 @@ import type { SessionEvent } from '../../connection/api.ts'
 import { deriveTurns } from '../../runtime/eventTurns.ts'
 import type { TimelineTurn, TurnTool } from '../../runtime/eventTurns.ts'
 import { ToolRow } from './ToolRow.tsx'
+import { renderInlineMarkdown } from './InlineMarkdown.tsx'
 import css from './ChatView.module.css'
 
 const FOLLOW_THRESHOLD = 24
@@ -28,7 +29,7 @@ function UserRow({ text }: { text: string }) {
   return (
     <div className={css.userRow}>
       <div className={css.userStack}>
-        <div className={css.bubble}>{text}</div>
+        <div className={css.bubble}>{renderInlineMarkdown(text)}</div>
       </div>
     </div>
   )
@@ -36,7 +37,7 @@ function UserRow({ text }: { text: string }) {
 
 /** assistant 全宽 markdown 文本列（无气泡）。 */
 function AssistantRow({ text }: { text: string }) {
-  return <div className={css.assistant}>{text}</div>
+  return <div className={css.assistant}>{renderInlineMarkdown(text)}</div>
 }
 
 /** 系统小字行（子 agent 活动 / 假设推进 / steer 回执）；tone=error 红字提示。 */

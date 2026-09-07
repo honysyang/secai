@@ -6,6 +6,7 @@
 
 import { useMemo, useState } from 'react'
 import type { KnowledgeSummary } from '../../connection/api.ts'
+import { EmptyState } from '../primitives/EmptyState.tsx'
 import css from './KnowledgePanel.module.css'
 
 export interface KnowledgePanelProps {
@@ -44,7 +45,10 @@ export function KnowledgePanel({ knowledge }: KnowledgePanelProps) {
       <div className={css.body}>
         <div className={css.list}>
           {filtered.length === 0 ? (
-            <div className={css.empty}>无匹配知识——调整搜索。</div>
+            <EmptyState
+              title="无匹配知识"
+              description="调整搜索条件。"
+            />
           ) : (
             filtered.map((item) => (
               <div

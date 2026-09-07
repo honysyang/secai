@@ -26,6 +26,7 @@ import type {
   RpcRequest,
   RpcResult,
 } from './api.ts'
+import { getApiKey, notifyUnauthorized } from '../auth/apiKeyStore.ts'
 
 // ───────────────────────── HTTP RPC 客户端 ─────────────────────────
 
@@ -92,16 +93,23 @@ export class ApiClient {
       payload,
     }
     let res: Response
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    const apiKey = getApiKey()
+    if (apiKey !== null) headers['X-API-Key'] = apiKey
     try {
       res = await fetch(`${this.baseUrl}/api/${method}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.requestTimeoutMs),
       })
     } catch (cause) {
       const kind = cause instanceof DOMException && cause.name === 'TimeoutError' ? 'timeout' : 'network'
       throw new ApiTransportError(kind, `POST /api/${method} 载体失败：${errorMessage(cause)}`)
+    }
+    if (res.status === 401) {
+      notifyUnauthorized()
+      throw new ApiTransportError('http', `POST /api/${method} 未授权（401）`, 401)
     }
     if (!res.ok) {
       // HTTP 状态只表达载体层；业务错误永远是 200 信封
@@ -176,7 +184,9 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 /** 下行流地址（开发态经 vite ws proxy 指向后端 8700）。 */
 function downlinkUrl(kind: 'mux' | 'host'): string {
   const scheme = window.location.protocol === 'https:' ? 'wss://' : 'ws://'
-  return `${scheme}${window.location.host}/api/events.${kind}`
+  const apiKey = getApiKey()
+  const qs = apiKey !== null ? `?api_key=${encodeURIComponent(apiKey)}` : ''
+  return `${scheme}${window.location.host}/api/events.${kind}${qs}`
 }
 
 /**
@@ -271,7 +281,10 @@ export class ConnectionController {
       socket.onerror = () => {
         // 由 onclose 统一收口（WS 错误后必关）
       }
-      socket.onclose = () => {
+      socket.onclose = (event) => {
+        if (event.code === 4401) {
+          notifyUnauthorized()
+        }
         resolve()
       }
     })
