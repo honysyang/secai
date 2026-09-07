@@ -51,9 +51,10 @@
   overflow: hidden;
 }
 
-/* 右侧栏：工作台任务管理栏（320px 定宽） */
+/* 右侧栏：工作台对话管理栏（260px 定宽） */
 .rightCol {
   grid-row: 2;
+  width: 260px;
   min-width: 0;
   overflow: hidden;
   background: var(--secai-alias-bg-base);

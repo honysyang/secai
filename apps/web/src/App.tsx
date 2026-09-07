@@ -15,7 +15,7 @@ import { ReportPanel } from './components/panels/ReportPanel.tsx'
 import { ArsenalPanel } from './components/panels/ArsenalPanel.tsx'
 import { SkillsPanel } from './components/panels/SkillsPanel.tsx'
 import { KnowledgePanel } from './components/panels/KnowledgePanel.tsx'
-import { TaskPanel } from './components/panels/TaskPanel.tsx'
+import { ConversationPanel } from './components/panels/ConversationPanel.tsx'
 import { NewEngagementModal } from './components/engagement/NewEngagementModal.tsx'
 import { AppRuntime } from './runtime/appRuntime.ts'
 import type { TaskBrief } from './connection/api.ts'
@@ -98,7 +98,7 @@ export default function App() {
       conversation={center}
       rightPanel={
         snapshot.route === 'workbench' ? (
-          <TaskPanel
+          <ConversationPanel
             tasks={snapshot.tasks}
             activeTaskId={snapshot.activeTaskId}
             onSelect={(engagementId) => runtime.selectTask(engagementId)}
