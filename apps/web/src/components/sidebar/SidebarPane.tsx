@@ -1,15 +1,13 @@
 // SidebarPane：侧栏壳（复刻 dsh ui-sidebar SidebarRoot）。
 // 结构：logo 行（品牌字标 + 侧栏收起钮）→ 导航菜单（工作台/资产/风险/报告/
-// 武器库/Skills/知识库）→ 会话管理（新对话 + 搜索 + 时间分组对话列表）
-// → 目标会话列表（活动任务成员）→ footer（连接状态徽章）。
-// 「新建任务」由会话管理区 + 对话框触发。
+// 武器库/Skills/知识库）→ 目标会话列表（活动任务成员）→ footer（连接状态徽章）。
+// 「新建任务」由对话面板顶部「+ 新对话」按钮触发。
 // 收起态（collapsed）：logo 行缩成 36px 圆形展开钮、菜单变图标、列表与
 // footer 隐藏。
 
 import type { EngagementSnapshot } from '../../runtime/engagement.ts'
-import type { LinkState, RouteKey, TaskSummary } from '../../runtime/appRuntime.ts'
+import type { LinkState, RouteKey } from '../../runtime/appRuntime.ts'
 import { TargetItem } from './TargetItem.tsx'
-import { ConversationPanel } from '../panels/ConversationPanel.tsx'
 import css from './SidebarPane.module.css'
 
 export interface SidebarPaneProps {
@@ -24,13 +22,6 @@ export interface SidebarPaneProps {
   onSelect: (sessionId: string) => void
   /** 切换导航路由。 */
   onRoute: (route: RouteKey) => void
-  /** 会话管理（任务书列表）。 */
-  tasks: readonly TaskSummary[]
-  activeTaskId: string | null
-  onSelectTask: (engagementId: string) => void
-  onNewTask: () => void
-  onRenameTask: (engagementId: string, title: string) => void
-  onDeleteTask: (engagementId: string) => void
 }
 
 /** 导航菜单项定义。 */
@@ -154,7 +145,6 @@ function PanelLeftIcon() {
 
 export function SidebarPane({
   engagement, selectedId, link, route, collapsed, onToggle, onSelect, onRoute,
-  tasks, activeTaskId, onSelectTask, onNewTask, onRenameTask, onDeleteTask,
 }: SidebarPaneProps) {
   const badge = linkPresentation(link)
   return (
@@ -193,20 +183,6 @@ export function SidebarPane({
 
       {!collapsed && (
         <div className={css.regionArea}>
-          {/* 会话管理（仅工作台路由显示） */}
-          {route === 'workbench' && (
-            <div className={css.convSection}>
-              <ConversationPanel
-                tasks={tasks}
-                activeTaskId={activeTaskId}
-                onSelect={onSelectTask}
-                onNewTask={onNewTask}
-                onRename={onRenameTask}
-                onDelete={onDeleteTask}
-              />
-            </div>
-          )}
-
           {/* 目标会话列表（活动任务的成员目标） */}
           {engagement.sessions.length > 0 && (
             <>
@@ -221,7 +197,7 @@ export function SidebarPane({
               ))}
             </>
           )}
-          {engagement.sessions.length === 0 && route !== 'workbench' && (
+          {engagement.sessions.length === 0 && (
             <div className={css.emptyList}>暂无目标会话——在对话框输入目标，回车直接开始。</div>
           )}
         </div>

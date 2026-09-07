@@ -70,17 +70,51 @@
   background: var(--secai-alias-interactive-bg-hover-accent);
 }
 
-/* ── 顶部会话状态栏（r5/r4：目标 + 状态 + token/速率 + 视图切换） ── */
-
-.header {
+/* ── 顶部栏：新对话按钮 + 会话状态栏 ── */
+.topBar {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 20px;
+  gap: 12px;
+  padding: 6px 16px;
   border-bottom: 1px solid var(--secai-alias-border-l2);
   background: var(--secai-alias-bg-base);
   z-index: 6;
+}
+
+.newChatBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid var(--secai-alias-border-l2);
+  border-radius: 8px;
+  background: var(--secai-alias-bg-layer-1);
+  color: var(--secai-alias-label-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.newChatBtn:hover {
+  border-color: var(--secai-alias-state-business-primary);
+  background: var(--secai-static-blue-50);
+}
+
+body[data-secai-dark] .newChatBtn:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+/* ── 顶部会话状态栏（r5/r4：目标 + 状态 + token/速率 + 视图切换） ── */
+
+.header {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .headerTarget {

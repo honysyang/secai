@@ -137,9 +137,24 @@ export function ConversationView({ session, onSubmit, onRespond, onNewTask }: Co
 
   return (
     <div className={css.root}>
-      {session !== null && (
-        <ConversationHeader session={session} view={view} onView={setView} />
-      )}
+      {/* 顶部栏：新对话按钮 + 会话状态栏 */}
+      <div className={css.topBar}>
+        <button
+          type="button"
+          className={css.newChatBtn}
+          onClick={onNewTask}
+          aria-label="新建对话"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+            strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+            <path d="M8 2.8v10.4M2.8 8h10.4" />
+          </svg>
+          新对话
+        </button>
+        {session !== null && (
+          <ConversationHeader session={session} view={view} onView={setView} />
+        )}
+      </div>
       <div className={css.scrollBody}>
         {view === 'trace' && session !== null ? (
           <TraceView events={session.events} />

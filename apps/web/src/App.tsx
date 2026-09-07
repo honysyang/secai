@@ -165,12 +165,6 @@ export default function App() {
           collapsed={!sidebarOpen}
           onToggle={() => setSidebarOpen((open) => !open)}
           onSelect={(sessionId) => runtime.select(sessionId)}
-          tasks={snapshot.tasks}
-          activeTaskId={snapshot.activeTaskId}
-          onSelectTask={(engagementId) => runtime.selectTask(engagementId)}
-          onNewTask={() => setNewEngagementOpen(true)}
-          onRenameTask={(engagementId, title) => runtime.renameTask(engagementId, title)}
-          onDeleteTask={(engagementId) => runtime.deleteTask(engagementId)}
         />
       }
       conversation={center}
