@@ -51,14 +51,14 @@
   overflow: hidden;
 }
 
-/* 右侧栏：工作台对话管理栏（260px 定宽） */
-.rightCol {
+/* 左侧对话管理栏（260px 定宽）：侧栏与中栏之间 */
+.leftPanelCol {
   grid-row: 2;
   width: 260px;
   min-width: 0;
   overflow: hidden;
   background: var(--secai-alias-bg-base);
-  border-left: 1px solid var(--secai-alias-border-l1);
+  border-right: 1px solid var(--secai-alias-border-l1);
 }
 
 /* 分隔条是帧的子元素（列裁剪 overflow）：8px 命中条跨栏界居中，
