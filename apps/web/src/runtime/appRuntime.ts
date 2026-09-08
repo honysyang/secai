@@ -103,11 +103,22 @@ export class AppRuntime {
   private knowledgeValue: readonly KnowledgeSummary[] = []
   private readonly listeners = new Set<AppListener>()
   private snapshotCache: AppSnapshot | null = null
+  /** 快照版本号：每次 touch() 递增，供上层（ProtoRuntime）判断快照是否真变。 */
+  private snapshotVersion = 0
   private started = false
   private controller: ConnectionController | null = null
   /** host/engagement-changed 去抖刷新句柄（任务列表重拉）。 */
   private refreshTimer: number | null = null
   private readonly api = new ApiClient()
+  /**
+   * 冷启动先行帧缓冲：WS replay 帧可能先于 HTTP bootstrap（注册会话行头）到达，
+   * 此时 clusterOfSession 找不到归属会被丢弃。先行帧暂存这里，bootstrap 注册
+   * 完会话后按序补投，保证回放不丢。
+   */
+  private prebufferMux: MuxFrame[] = []
+  private prebufferHost: HostFrame[] = []
+  /** 一次性缓冲上限（防失控）；超限即丢弃最旧并停止缓冲。 */
+  private static readonly PREBUFFER_LIMIT = 2000
 
   /** LLM 配置状态探针（NewEngagementModal 提交前校验用；响应式经快照订阅）。 */
   get llmConfigured(): boolean | null {
@@ -170,6 +181,8 @@ export class AppRuntime {
       for (const header of targets) {
         this.registerSession(header)
       }
+      // 补投冷启动先行帧：注册完会话行头后按序回放（WS replay 曾先于 bootstrap 到达）
+      this.flushPrebuffer()
       this.tasksValue = this.summarize(engagements)
       this.assetsValue = assets.assets
       this.risksValue = risks.risks
@@ -272,11 +285,15 @@ export class AppRuntime {
 
   // ───────────────────────── 帧消费 ─────────────────────────
 
-  /** 消费 mux 流帧：按 sessionId 路由到所属任务书集群（未知会话静默丢弃）。 */
+  /** 消费 mux 流帧：按 sessionId 路由到所属任务书集群（未知会话先行缓冲，bootstrap 后补投）。 */
   applyMuxFrame(frame: MuxFrame): void {
     if (!('sessionId' in frame)) return
     const cluster = this.clusterOfSession(frame.sessionId)
-    if (cluster === undefined) return
+    if (cluster === undefined) {
+      this.prebufferMux.push(frame)
+      if (this.prebufferMux.length > AppRuntime.PREBUFFER_LIMIT) this.prebufferMux.shift()
+      return
+    }
     cluster.applyMuxFrame(frame)
     this.touch()
   }
@@ -319,6 +336,29 @@ export class AppRuntime {
     }
   }
 
+  /** 先行帧补投：bootstrap 注册完会话行头后，把冷启动期间缓冲的帧按序回放。 */
+  private flushPrebuffer(): void {
+    const mux = this.prebufferMux
+    const host = this.prebufferHost
+    this.prebufferMux = []
+    this.prebufferHost = []
+    // host 帧（session-added 等）先行，确保会话已登记
+    for (const frame of host) {
+      try {
+        this.applyHostFrame(frame)
+      } catch {
+        // 隔离：单帧失败不拖垮补投
+      }
+    }
+    for (const frame of mux) {
+      try {
+        this.applyMuxFrame(frame)
+      } catch {
+        // 隔离
+      }
+    }
+  }
+
   // ───────────────────────── 用户动作 ─────────────────────────
 
   /** 选中目标会话（会话所在任务书成为活动任务；即回工作台对话面板）。 */
@@ -333,7 +373,9 @@ export class AppRuntime {
 
   /** 选中任务（任务列表行点击）：切换活动任务并自动选中其首个目标会话。 */
   selectTask(engagementId: string): void {
-    if (this.activeTaskIdValue === engagementId && this.selectedId !== null) {
+    if (this.activeTaskIdValue === engagementId) {
+      // 已激活：自动选中首个会话（行内点会话子项后回到任务行仍可再生）
+      this.autoSelect()
       this.routeValue = 'workbench'
       this.touch()
       return
@@ -522,7 +564,13 @@ export class AppRuntime {
     this.touch()
   }
 
+  /** 当前快照版本号（touch 每次递增）。 */
+  get version(): number {
+    return this.snapshotVersion
+  }
+
   private touch(): void {
+    this.snapshotVersion += 1
     this.snapshotCache = null
     const snapshot = this.snapshot()
     for (const listener of [...this.listeners]) this.deliver(listener, snapshot)
@@ -534,5 +582,19 @@ export class AppRuntime {
     } catch (cause) {
       console.error('[secai-app] 快照监听器异常（隔离）', cause)
     }
+  }
+
+  /**
+   * 响应式读取任意快照切片（getSnapshot 语义）：每帧 touch 都会使快照缓存失效，
+   * 因此经 useSyncExternalStore(subscribe, () => pick(runtime.snapshot())) 订阅时，
+   * 切片值变化必然触发重渲染，无需改动物理订阅协议。
+   */
+  pick<T>(select: (snapshot: AppSnapshot) => T): T {
+    return select(this.snapshot())
+  }
+
+  /** 外部（如 ProtoRuntime 本地元数据变更）触发任务列表重拉 + 快照投递。 */
+  refreshTasksExternal(): void {
+    void this.refreshTasks()
   }
 }

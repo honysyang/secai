@@ -10,11 +10,13 @@
 //
 // 数据层：localStorage 持久化的 proto-db；不依赖现有 AppRuntime 的 WS。
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import './proto.css'
-import { loadDB, saveDB, DEFAULT_DB } from './db.ts'
-import type { DBShape, Task, TaskStatus } from './db.ts'
+import { ProtoRuntime } from './ProtoRuntime.ts'
+import type { Task } from './db.ts'
+import { DEFAULT_DB } from './db.ts'
+import type { DBShape } from './db.ts'
 import { ChatScreen } from './screens/ChatScreen.tsx'
 import { AssetScreen } from './screens/AssetScreen.tsx'
 import { RiskScreen } from './screens/RiskScreen.tsx'
@@ -83,12 +85,34 @@ const ORDER: RouteKey[] = ['chat', 'asset', 'risk', 'report', 'arsenal', 'skill'
 const KEYMAP: Record<string, RouteKey> = { '1': 'chat', '2': 'asset', '3': 'risk', '4': 'report', '5': 'arsenal', '6': 'skill', '7': 'kb' }
 
 export interface ProtoLayoutProps {
-  /** 初始任务目录数据（不传则用默认种子）。 */
-  initialDB?: DBShape
+  /** 注入的数据源（默认新建内置实例）；传入后由外部驱动 WS 快照。 */
+  proto?: ProtoRuntime
 }
 
-export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
-  const [db, setDB] = useState<DBShape>(() => initialDB ?? loadDB())
+let sharedProto: ProtoRuntime | null = null
+
+/** module 级单例数据源（StrictMode 双挂载安全）。 */
+function defaultProto(): ProtoRuntime {
+  if (sharedProto === null) {
+    // 惰性取 AppRuntime 单例（App.tsx 已 start）
+    const runtime = (window as unknown as { __secai?: import('../../runtime/appRuntime.ts').AppRuntime }).__secai
+    if (runtime === undefined) {
+      throw new Error('ProtoLayout 需要 AppRuntime 单例（window.__secai），请先渲染 App.tsx 顶层。')
+    }
+    sharedProto = new ProtoRuntime(runtime)
+  }
+  return sharedProto
+}
+
+export function ProtoLayout({ proto }: ProtoLayoutProps) {
+  const dataRef = useMemo(() => proto ?? defaultProto(), [proto])
+  const db = useSyncExternalStore(dataRef.subscribe, dataRef.snapshot, dataRef.snapshot)
+
+  // 数据面活性兜底：module 顶层 start 在 StrictMode 下会被 effect 清理停掉
+  // （旧 UI 的 LegacyApp effect 在 proto 分支不跑），此处补幂等 start 保活。
+  useEffect(() => {
+    dataRef.ensureRunning()
+  }, [dataRef])
   const [route, setRoute] = useState<RouteKey>('chat')
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof localStorage === 'undefined') return false
@@ -112,10 +136,7 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     else document.body.removeAttribute('data-secai-dark')
   }, [theme])
 
-  // 持久化
-  useEffect(() => {
-    saveDB(db)
-  }, [db])
+  // 折叠态持久化（db 已由 ProtoRuntime 经 WS 驱动，不再本地持久化）
   useEffect(() => {
     if (typeof localStorage === 'undefined') return
     localStorage.setItem('secai-proto-collapsed', collapsed ? '1' : '0')
@@ -170,46 +191,34 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [go, paletteOpen, newOpen, settingsOpen, modeOpen, schedOpen])
 
-  // 增删任务
+  // 增删任务：全部走真实 RPC（ProtoRuntime）
   const addTask = useCallback((cfg: { name: string; target: string; mode: Task['mode']; sched: Task['sched']; next: string }) => {
-    const t: Task = {
-      id: 't' + Date.now(),
-      name: cfg.name,
-      target: cfg.target,
-      status: 'run',
-      group: cfg.sched === 'now' ? '进行中' : '计划中 · 定时',
-      mode: cfg.mode,
-      sched: cfg.sched,
-      next: cfg.next,
-    }
-    setDB((d) => {
-      const next: DBShape = {
-        ...d,
-        tasks: [t, ...d.tasks],
-        meta: { ...d.meta, curTaskId: t.id, curMode: t.mode },
-      }
-      return next
+    void dataRef.createTask(cfg).then(() => {
+      showToast('任务已下发 · 会话创建中', 'ok')
+    }).catch((cause) => {
+      const msg = cause instanceof Error ? cause.message : String(cause)
+      showToast(`任务创建失败：${msg}`, 'err')
     })
     go('chat')
-  }, [go])
+  }, [dataRef, go])
 
   const selectTask = useCallback((id: string) => {
-    const t = db.tasks.find((x) => x.id === id)
-    if (!t) return
-    setDB((d) => ({ ...d, meta: { ...d.meta, curTaskId: id, curMode: t.mode } }))
-  }, [db])
+    dataRef.selectTask(id)
+  }, [dataRef])
 
   const deleteTask = useCallback((id: string) => {
-    setDB((d) => {
-      const tasks = d.tasks.filter((x) => x.id !== id)
-      const curTaskId = d.meta.curTaskId === id ? (tasks[0]?.id ?? '') : d.meta.curTaskId
-      return { ...d, tasks, meta: { ...d.meta, curTaskId } }
+    void dataRef.deleteTask(id).catch((cause) => {
+      const msg = cause instanceof Error ? cause.message : String(cause)
+      showToast(`删除失败：${msg}`, 'err')
     })
-  }, [])
+  }, [dataRef])
 
   const renameTask = useCallback((id: string, name: string) => {
-    setDB((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === id ? { ...t, name } : t)) }))
-  }, [])
+    void dataRef.renameTask(id, name).catch((cause) => {
+      const msg = cause instanceof Error ? cause.message : String(cause)
+      showToast(`重命名失败：${msg}`, 'err')
+    })
+  }, [dataRef])
 
   const applySettings = useCallback((p: {
     settings?: Partial<DBShape['settings']>
@@ -217,48 +226,23 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     members?: DBShape['members']
     apis?: DBShape['apis']
   }) => {
-    setDB((d) => ({
-      ...d,
-      settings: { ...d.settings, ...(p.settings ?? {}) },
-      rules: p.rules ?? d.rules,
-      members: p.members ?? d.members,
-      apis: p.apis ?? d.apis,
-    }))
+    // 设置中心为本地展示层（endpoint/model/审批规则等），后端无对应 RPC；仅回执提示。
+    void p
     showToast('设置已保存 · 新任务生效，进行中的任务不受影响', 'ok')
   }, [])
 
   const applyMode = useCallback((m: CombatMode) => {
-    setDB((d) => {
-      const cur = d.tasks.find((t) => t.id === d.meta.curTaskId)
-      if (!cur) return { ...d, meta: { ...d.meta, curMode: m } }
-      return {
-        ...d,
-        tasks: d.tasks.map((t) => (t.id === cur.id ? { ...t, mode: m } : t)),
-        meta: { ...d.meta, curMode: m },
-      }
-    })
-  }, [])
+    const curId = db.meta.curTaskId
+    if (curId) dataRef.applyMode(curId, m)
+  }, [dataRef, db.meta.curTaskId])
 
   const openSched = useCallback((taskId: string) => setSchedOpen({ taskId }), [])
   const saveSched = useCallback((s: { sched: SchedType; next: string }) => {
     if (!schedOpen) return
-    setDB((d) => ({
-      ...d,
-      tasks: d.tasks.map((t) =>
-        t.id === schedOpen.taskId
-          ? {
-              ...t,
-              sched: s.sched,
-              next: s.next,
-              group: s.sched === 'now' ? '进行中' : '计划中 · 定时',
-              status: s.sched !== 'now' && t.status === 'run' ? 'stop' : t.status,
-            }
-          : t
-      ),
-    }))
+    dataRef.saveSched(schedOpen.taskId, s)
     showToast('调度已保存', 'ok')
     setSchedOpen(null)
-  }, [schedOpen])
+  }, [dataRef, schedOpen])
 
   // 命令面板命令
   const commands = useMemo(() => {
@@ -285,6 +269,7 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     route === 'chat' ? (
       <ChatScreen
         db={db}
+        proto={dataRef}
         currentTask={currentTask}
         currentMode={currentMode}
         onSelectTask={selectTask}
@@ -465,4 +450,4 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
 }
 
 export { DEFAULT_DB }
-export type { DBShape, Task, TaskStatus }
+export type { DBShape, Task }

@@ -27,7 +27,9 @@ import { onUnauthorized } from './auth/apiKeyStore.ts'
 import type { TaskBrief } from './connection/api.ts'
 import { ProtoLayout } from './components/prototype/ProtoLayout.tsx'
 
-/** module 级单例：数据源与调度全局只此一份（StrictMode 双挂载安全）。 */
+/** module 级单例：数据源与调度全局只此一份（StrictMode 双挂载安全）。
+ *  暴露到 window.__secai 必须在 module 初始化时完成（非组件体内），
+ *  保证 ProtoLayout 首次渲染即可经 defaultProto() 取到。 */
 const runtime = new AppRuntime()
 runtime.start()
 if (typeof window !== 'undefined') {

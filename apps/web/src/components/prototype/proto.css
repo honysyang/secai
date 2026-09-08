@@ -2256,6 +2256,42 @@ body[data-secai-dark] .proto-shell {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.proto-sb-sess {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 4px 18px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.proto-sb-sess-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-3);
+  font-size: 11.5px;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.proto-sb-sess-item:hover {
+  background: var(--hover);
+  color: var(--text-2);
+}
+.proto-sb-sess-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proto-sb-sess-item .proto-dot {
+  width: 6px;
+  height: 6px;
+}
 .proto-sb-kebab {
   display: inline-flex;
   align-items: center;
