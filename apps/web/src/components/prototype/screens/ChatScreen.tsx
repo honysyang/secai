@@ -3,14 +3,20 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DBShape, Task } from '../db.ts'
+import type { CombatMode } from '../ModeModal.tsx'
+import { COMBAT_MODE_MAP, ModeBanner } from '../ModeModal.tsx'
 
 export interface ChatScreenProps {
   db: DBShape
   currentTask: Task | null
+  currentMode: CombatMode
   onSelectTask: (id: string) => void
   onDeleteTask: (id: string) => void
   onRenameTask: (id: string, name: string) => void
   onNewTask: () => void
+  onOpenSched: (taskId: string) => void
+  onOpenMode: () => void
+  onOpenSettings: () => void
 }
 
 type ViewKey = 'chat' | 'trace' | 'link'
@@ -124,7 +130,9 @@ const DEMO_TRACE: TraceItem[] = [
 
 const GROUP_ORDER: Task['group'][] = ['计划中 · 定时', '进行中', '今天', '过去七天']
 
-export function ChatScreen({ db, currentTask, onSelectTask, onDeleteTask, onRenameTask, onNewTask }: ChatScreenProps) {
+export function ChatScreen(props: ChatScreenProps) {
+  const { db, currentTask, currentMode, onSelectTask, onDeleteTask, onRenameTask, onNewTask, onOpenMode, onOpenSettings } = props
+  const onOpenSched = props.onOpenSched
   const [view, setView] = useState<ViewKey>('chat')
   const [convOpen, setConvOpen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 1280 : true)
   const [search, setSearch] = useState('')
@@ -158,9 +166,9 @@ export function ChatScreen({ db, currentTask, onSelectTask, onDeleteTask, onRena
       {/* 会话栏 */}
       <div className="proto-sess-bar">
         <span className="proto-sess-target mono">{target}</span>
-        <button className="proto-mode-chip" type="button" title="切换作战模式">
-          <span className="mc-dot" style={{ background: '#378ADD' }} />
-          渗透测试
+        <button className="proto-mode-chip" type="button" title="切换作战模式" onClick={onOpenMode}>
+          <span className="mc-dot" style={{ background: COMBAT_MODE_MAP[currentMode].c }} />
+          {COMBAT_MODE_MAP[currentMode].n}
         </button>
         <span className="proto-badge soft-ok">执行中</span>
         <span className="proto-spacer" />
@@ -186,6 +194,13 @@ export function ChatScreen({ db, currentTask, onSelectTask, onDeleteTask, onRena
           <button className={'proto-view-tab' + (view === 'link' ? ' on' : '')} type="button" onClick={() => setView('link')}>链路</button>
         </div>
       </div>
+
+      <ModeBanner
+        mode={currentMode}
+        onOpenSettings={onOpenSettings}
+        onSwitchMode={onOpenMode}
+        onApply={() => { /* 模型应用反馈由 ProtoLayout 处理  */ }}
+      />
 
       <div className="proto-chat-main">
         {convOpen && (
@@ -222,6 +237,7 @@ export function ChatScreen({ db, currentTask, onSelectTask, onDeleteTask, onRena
                       onSelect={() => onSelectTask(t.id)}
                       onDelete={() => onDeleteTask(t.id)}
                       onRename={(name) => onRenameTask(t.id, name)}
+                      onOpenSched={() => onOpenSched(t.id)}
                     />
                   ))}
                 </div>
@@ -604,12 +620,13 @@ function fmtBytes(b: number): string {
   return `${(b / 1048576).toFixed(1)} MB`
 }
 
-function TaskRow({ task, active, onSelect, onDelete, onRename }: {
+function TaskRow({ task, active, onSelect, onDelete, onRename, onOpenSched }: {
   task: Task
   active: boolean
   onSelect: () => void
   onDelete: () => void
   onRename: (name: string) => void
+  onOpenSched: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(task.name)
@@ -667,7 +684,7 @@ function TaskRow({ task, active, onSelect, onDelete, onRename }: {
           <button
             type="button"
             className="proto-sb-menu-item"
-            onClick={(e) => { e.stopPropagation(); setMenuOpen(false) }}
+            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); onOpenSched() }}
           >
             设置定时
           </button>

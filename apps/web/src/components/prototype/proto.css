@@ -2336,3 +2336,509 @@ body[data-secai-dark] .proto-shell {
   background: var(--surface-2);
   white-space: nowrap;
 }
+
+/* ============== 设置中心 ============== */
+.proto-set-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 14px 26px 0;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.proto-set-tab {
+  padding: 8px 13px;
+  font-size: 13px;
+  color: var(--text-3);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all var(--t-fast);
+}
+.proto-set-tab:hover {
+  color: var(--text-1);
+}
+.proto-set-tab.on {
+  color: var(--brand-600);
+  font-weight: 600;
+  border-bottom-color: var(--brand-600);
+}
+.proto-set-sec {
+  margin-bottom: 24px;
+}
+.proto-set-h {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.proto-set-d {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.65;
+  margin-bottom: 11px;
+}
+.proto-f-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+.proto-f-lb {
+  width: 78px;
+  font-size: 12px;
+  color: var(--text-3);
+  flex: none;
+}
+.proto-f-sel,
+.proto-f-inp {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-1);
+  font-family: inherit;
+}
+.proto-f-sel:focus,
+.proto-f-inp:focus {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px rgba(37, 99, 255, 0.12);
+}
+.proto-role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.proto-role-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  padding: 12px 13px;
+}
+.proto-rc-h {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 9px;
+}
+.proto-rc-h .proto-rc-tag {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-3);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.proto-switch {
+  width: 34px;
+  height: 19px;
+  border-radius: 19px;
+  background: var(--border-2);
+  position: relative;
+  cursor: pointer;
+  flex: none;
+  transition: background var(--t-fast);
+  border: none;
+  padding: 0;
+}
+.proto-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--t-fast);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.proto-switch.on {
+  background: var(--brand-600);
+}
+.proto-switch.on::after {
+  transform: translateX(15px);
+}
+.proto-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.proto-mode-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  padding: 12px;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+.proto-mode-card:hover {
+  border-color: var(--brand-500);
+}
+.proto-mode-card.on {
+  border-color: var(--brand-600);
+  background: var(--active);
+}
+.proto-mode-card .mc-t {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.proto-mode-card .mc-d {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.55;
+}
+.proto-rule-tb {
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  overflow: hidden;
+  font-size: 12px;
+}
+.proto-rt-head {
+  display: grid;
+  grid-template-columns: 1.35fr 1.15fr 0.85fr 0.85fr 52px;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.proto-rt-row {
+  display: grid;
+  grid-template-columns: 1.35fr 1.15fr 0.85fr 0.85fr 52px;
+  gap: 8px;
+  padding: 9px 12px;
+  border-top: 1px solid var(--border);
+  align-items: center;
+}
+.proto-rt-row:hover {
+  background: var(--hover);
+}
+.proto-rt-act {
+  color: var(--text-3);
+  font-size: 11.5px;
+  text-align: right;
+}
+.proto-badge-mini {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.proto-badge-mini.b-auto {
+  background: rgba(48, 164, 108, 0.13);
+  color: var(--ok);
+}
+.proto-badge-mini.b-appr {
+  background: rgba(245, 166, 35, 0.18);
+  color: var(--warn);
+}
+.proto-badge-mini.b-deny {
+  background: rgba(239, 68, 68, 0.11);
+  color: var(--crit);
+}
+.proto-mem-tb {
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  overflow: hidden;
+  font-size: 12px;
+}
+.proto-mem-head,
+.proto-mem-row {
+  display: grid;
+  grid-template-columns: 1.7fr 1.05fr 0.85fr 0.9fr 80px;
+  gap: 10px;
+  padding: 9px 12px;
+  align-items: center;
+}
+.proto-mem-head {
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.proto-mem-row {
+  border-top: 1px solid var(--border);
+}
+.proto-mem-row:hover {
+  background: var(--hover);
+}
+.proto-mem-u {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.proto-mem-u .mu-n {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proto-mem-u .mu-m {
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.proto-role-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.proto-role-badge.r-admin {
+  background: rgba(37, 99, 255, 0.12);
+  color: var(--brand-600);
+}
+.proto-role-badge.r-eng {
+  background: rgba(48, 164, 108, 0.13);
+  color: var(--ok);
+}
+.proto-role-badge.r-appr {
+  background: rgba(245, 166, 35, 0.18);
+  color: var(--warn);
+}
+.proto-role-badge.r-audit {
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.proto-perm-tb {
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  overflow: hidden;
+  font-size: 11.5px;
+}
+.proto-perm-head,
+.proto-perm-row {
+  display: grid;
+  grid-template-columns: 1.7fr repeat(4, 0.82fr);
+  gap: 6px;
+  padding: 8px 12px;
+  align-items: center;
+  text-align: center;
+}
+.proto-perm-head {
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.proto-perm-head span:first-child,
+.proto-perm-row span:first-child {
+  text-align: left;
+}
+.proto-perm-row {
+  border-top: 1px solid var(--border);
+}
+.proto-perm-row:hover {
+  background: var(--hover);
+}
+.proto-mark-yes {
+  color: var(--ok);
+  font-weight: 600;
+}
+.proto-mark-no {
+  color: var(--text-3);
+}
+.proto-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.proto-audit-item {
+  display: flex;
+  gap: 9px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.proto-audit-item .ai-t {
+  color: var(--text-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  flex: none;
+  padding-top: 1px;
+}
+
+/* ============== 作战模式 Modal ============== */
+.proto-mode-mb {
+  flex: none;
+  margin: 12px 24px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-l);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.proto-mb-main {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 14px;
+}
+.proto-mb-ico {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  flex: none;
+}
+.proto-mb-ico svg {
+  width: 15px;
+  height: 15px;
+}
+.proto-mb-txt {
+  flex: 1;
+  min-width: 0;
+}
+.proto-mb-n {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.proto-mb-badge {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.proto-mb-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 7px;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+.proto-mb-model::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex: none;
+}
+.proto-mb-model:hover {
+  border-color: var(--brand-500);
+  color: var(--brand-600);
+}
+.proto-mb-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.proto-mb-btn {
+  padding: 5px 11px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11.5px;
+  cursor: pointer;
+  color: var(--text-2);
+  flex: none;
+  font-family: inherit;
+}
+.proto-mb-btn:hover {
+  border-color: var(--brand-500);
+  color: var(--brand-600);
+}
+.proto-mb-btn.solid {
+  background: var(--brand-600);
+  color: #fff;
+  border-color: var(--brand-600);
+}
+.proto-mb-stats {
+  display: flex;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.proto-mb-stat {
+  flex: 1;
+  padding: 8px 14px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.proto-mb-stat:last-child {
+  border-right: none;
+}
+.proto-mb-stat .s-v {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+.proto-mb-stat .s-l {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-3);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.proto-conf-sched-tip {
+  display: flex;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: var(--r-m);
+  background: rgba(37, 99, 255, 0.07);
+  border: 1px solid rgba(37, 99, 255, 0.3);
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin-top: 11px;
+}
+.proto-conf-sched-tip svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* mode 选择卡片（在 modal body 中） */
+.proto-mode-select-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  padding: 11px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: var(--surface);
+  transition: all var(--t-fast);
+}
+.proto-mode-select-card:hover {
+  border-color: var(--brand-500);
+}
+.proto-mode-select-card.on {
+  border-color: var(--brand-600);
+  background: var(--active);
+}
+.proto-mode-select-card .sc-t {
+  font-size: 12.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.proto-mode-select-card .sc-d {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}

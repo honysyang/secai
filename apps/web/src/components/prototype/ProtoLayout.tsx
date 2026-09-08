@@ -2,13 +2,13 @@
 //
 // 顶层职责：
 // 1. 单条导航侧栏（折叠/展开，Ctrl+B 切换；localStorage 记忆）
-// 2. 顶部栏（搜索命令面板入口 + 主题切换 + 状态徽章）
+// 2. 顶部栏（搜索命令面板入口 + 设置图标 + 状态徽章）
 // 3. 中间面板路由分发（工作台/资产/风险/报告/武器库/技能/知识库 + 7 个 view）
 // 4. 命令面板 Ctrl+K + 1-7 快捷键切屏 + Esc 关闭
 // 5. 任务目录 CRUD + 新建任务向导 + 任务调度 + 主题切换 + 键盘快捷键
+// 6. 设置中心 5 tab + 作战模式 6 种 + 任务调度（即时/定时/周期）
 //
-// 数据层：localStorage 持久化的 proto-db；不依赖现有 AppRuntime 的 WS，
-// 但保留外部可注入 onSubmit/onRespond 以便后续接入。
+// 数据层：localStorage 持久化的 proto-db；不依赖现有 AppRuntime 的 WS。
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -24,7 +24,10 @@ import { SkillScreen } from './screens/SkillScreen.tsx'
 import { KbScreen } from './screens/KbScreen.tsx'
 import { CommandPalette } from './CommandPalette.tsx'
 import { NewEngagementWizard } from './NewEngagementWizard.tsx'
-import { ToastHost } from './Toast.tsx'
+import { ToastHost, showToast } from './Toast.tsx'
+import { SettingsModal, type SettingsTab } from './SettingsModal.tsx'
+import { ModeModal, type CombatMode } from './ModeModal.tsx'
+import { SchedModal, type SchedType } from './SchedModal.tsx'
 
 export type RouteKey = 'chat' | 'asset' | 'risk' | 'report' | 'arsenal' | 'skill' | 'kb'
 
@@ -93,6 +96,10 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
   })
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('model')
+  const [modeOpen, setModeOpen] = useState(false)
+  const [schedOpen, setSchedOpen] = useState<{ taskId: string } | null>(null)
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof localStorage === 'undefined') return 'light'
     const t = localStorage.getItem('secai-theme-mode')
@@ -125,6 +132,8 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     }
   }, [])
 
+  const currentMode: CombatMode = (db.meta.curMode as CombatMode) ?? 'pt'
+
   // 全局快捷键
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -142,14 +151,11 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
         return
       }
       if (e.key === 'Escape') {
-        if (paletteOpen) {
-          setPaletteOpen(false)
-          return
-        }
-        if (newOpen) {
-          setNewOpen(false)
-          return
-        }
+        if (paletteOpen) { setPaletteOpen(false); return }
+        if (newOpen) { setNewOpen(false); return }
+        if (settingsOpen) { setSettingsOpen(false); return }
+        if (modeOpen) { setModeOpen(false); return }
+        if (schedOpen) { setSchedOpen(null); return }
         return
       }
       if (isTextField) return
@@ -162,7 +168,7 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [go, paletteOpen, newOpen])
+  }, [go, paletteOpen, newOpen, settingsOpen, modeOpen, schedOpen])
 
   // 增删任务
   const addTask = useCallback((cfg: { name: string; target: string; mode: Task['mode']; sched: Task['sched']; next: string }) => {
@@ -205,6 +211,55 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     setDB((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === id ? { ...t, name } : t)) }))
   }, [])
 
+  const applySettings = useCallback((p: {
+    settings?: Partial<DBShape['settings']>
+    rules?: DBShape['rules']
+    members?: DBShape['members']
+    apis?: DBShape['apis']
+  }) => {
+    setDB((d) => ({
+      ...d,
+      settings: { ...d.settings, ...(p.settings ?? {}) },
+      rules: p.rules ?? d.rules,
+      members: p.members ?? d.members,
+      apis: p.apis ?? d.apis,
+    }))
+    showToast('设置已保存 · 新任务生效，进行中的任务不受影响', 'ok')
+  }, [])
+
+  const applyMode = useCallback((m: CombatMode) => {
+    setDB((d) => {
+      const cur = d.tasks.find((t) => t.id === d.meta.curTaskId)
+      if (!cur) return { ...d, meta: { ...d.meta, curMode: m } }
+      return {
+        ...d,
+        tasks: d.tasks.map((t) => (t.id === cur.id ? { ...t, mode: m } : t)),
+        meta: { ...d.meta, curMode: m },
+      }
+    })
+  }, [])
+
+  const openSched = useCallback((taskId: string) => setSchedOpen({ taskId }), [])
+  const saveSched = useCallback((s: { sched: SchedType; next: string }) => {
+    if (!schedOpen) return
+    setDB((d) => ({
+      ...d,
+      tasks: d.tasks.map((t) =>
+        t.id === schedOpen.taskId
+          ? {
+              ...t,
+              sched: s.sched,
+              next: s.next,
+              group: s.sched === 'now' ? '进行中' : '计划中 · 定时',
+              status: s.sched !== 'now' && t.status === 'run' ? 'stop' : t.status,
+            }
+          : t
+      ),
+    }))
+    showToast('调度已保存', 'ok')
+    setSchedOpen(null)
+  }, [schedOpen])
+
   // 命令面板命令
   const commands = useMemo(() => {
     const baseCommands: Array<{ id: string; g: string; t: string; k?: string; onRun: () => void }> = [
@@ -213,19 +268,33 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
       { id: 'act-theme', g: '操作', t: '切换明暗主题', onRun: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')) },
       { id: 'act-report', g: '操作', t: '从当前任务生成报告', onRun: () => go('report') },
       { id: 'act-collapse', g: '操作', t: collapsed ? '展开导航' : '收起导航', onRun: () => setCollapsed((c) => !c) },
+      { id: 'act-mode', g: '操作', t: '切换作战模式', onRun: () => setModeOpen(true) },
+      { id: 'act-settings', g: '操作', t: '打开设置中心', onRun: () => { setSettingsTab('model'); setSettingsOpen(true) } },
     ]
     const toolCommands = db.tasks.slice(0, 5).flatMap((t) => [
       { id: `tool-${t.id}-jump`, g: '任务', t: `打开任务：${t.name}`, onRun: () => { selectTask(t.id); go('chat') } },
+      { id: `tool-${t.id}-sched`, g: '任务', t: `设置定时：${t.name}`, onRun: () => openSched(t.id) },
     ])
     return [...baseCommands, ...toolCommands]
-  }, [collapsed, db.tasks, selectTask, go])
+  }, [collapsed, db.tasks, selectTask, go, openSched])
 
   const target = currentTask?.target ?? '—'
 
   // 当前路由对应屏幕
   const screen =
     route === 'chat' ? (
-      <ChatScreen db={db} currentTask={currentTask} onSelectTask={selectTask} onDeleteTask={deleteTask} onRenameTask={renameTask} onNewTask={() => setNewOpen(true)} />
+      <ChatScreen
+        db={db}
+        currentTask={currentTask}
+        currentMode={currentMode}
+        onSelectTask={selectTask}
+        onDeleteTask={deleteTask}
+        onRenameTask={renameTask}
+        onNewTask={() => setNewOpen(true)}
+        onOpenSched={openSched}
+        onOpenMode={() => setModeOpen(true)}
+        onOpenSettings={() => { setSettingsTab('model'); setSettingsOpen(true) }}
+      />
     ) : route === 'asset' ? (
       <AssetScreen db={db} currentTask={currentTask} />
     ) : route === 'risk' ? (
@@ -239,6 +308,8 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
     ) : (
       <KbScreen db={db} currentTask={currentTask} />
     )
+
+  const schedTargetTask = schedOpen ? db.tasks.find((t) => t.id === schedOpen.taskId) ?? null : null
 
   return (
     <div
@@ -290,7 +361,7 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
         </nav>
 
         {!collapsed && (
-          <button type="button" className="proto-user" title="用户与权限">
+          <button type="button" className="proto-user" title="用户与权限" onClick={() => { setSettingsTab('users'); setSettingsOpen(true) }}>
             <span className="avatar">张</span>
             <span className="nu-t">
               <span className="nu-n">张伟</span>
@@ -315,6 +386,17 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
                 <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
               </svg>
             )}
+          </button>
+          <button
+            className="proto-icon-btn"
+            type="button"
+            title="设置"
+            onClick={() => { setSettingsTab('model'); setSettingsOpen(true) }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5h.1a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+            </svg>
           </button>
           <span className="proto-nav-status">
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--ok)', boxShadow: '0 0 0 3px rgba(48,164,108,.18)', animation: 'proto-pulse 1.6s infinite' }} />
@@ -357,6 +439,25 @@ export function ProtoLayout({ initialDB }: ProtoLayoutProps) {
           addTask(cfg)
           setNewOpen(false)
         }}
+      />
+      <SettingsModal
+        open={settingsOpen}
+        initialTab={settingsTab}
+        db={db}
+        onClose={() => setSettingsOpen(false)}
+        onSave={applySettings}
+      />
+      <ModeModal
+        open={modeOpen}
+        current={currentMode}
+        onClose={() => setModeOpen(false)}
+        onApply={(m) => { applyMode(m); showToast('已应用推荐模型 · 仅本任务', 'ok') }}
+      />
+      <SchedModal
+        open={schedOpen !== null}
+        task={schedTargetTask}
+        onClose={() => setSchedOpen(null)}
+        onSave={saveSched}
       />
       <ToastHost />
     </div>
