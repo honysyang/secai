@@ -270,6 +270,37 @@ export interface ApiMethodMap {
   renameEngagement: { request: { engagementId: string; title: string }; response: { engagementId: string; title: string } }
   /** 删除任务（级联移除其全部会话）。 */
   deleteEngagement: { request: { engagementId: string }; response: { engagementId: string; removedSessionIds: string[] } }
+  /** 注册一条调度（kind=immediate|datetime|cron）。返回 scheduleId + 落盘条目。 */
+  scheduleEngagement: {
+    request: {
+      kind: 'immediate' | 'datetime' | 'cron'
+      title?: string
+      runAt?: string
+      cron?: string
+      run?: TaskBrief
+    }
+    response: { schedule: ScheduleEntry }
+  }
+  /** 列出全部调度记录（含 done/cancelled）。 */
+  listSchedules: { request: Record<string, never>; response: { schedules: ScheduleEntry[] } }
+  /** 取消一条 active 调度。 */
+  cancelSchedule: { request: { scheduleId: string }; response: { schedule: ScheduleEntry } }
+}
+
+/** 调度条目（后端 ScheduleRecord 镜像）。 */
+export interface ScheduleEntry {
+  scheduleId: string
+  kind: 'immediate' | 'datetime' | 'cron'
+  title: string
+  payload: TaskBrief
+  cron: string | null
+  runAt: string | null
+  status: 'pending' | 'active' | 'cancelled' | 'done'
+  nextRunAt: string | null
+  lastRunAt: string | null
+  createdAt: string
+  updatedAt: string
+  lastError: string | null
 }
 
 /** Kill Chain 七阶段标识（server/arsenal sec_tools.kill_chain 对齐）。 */
@@ -336,6 +367,9 @@ export const API_METHODS: readonly ApiMethodName[] = [
   'knowledge',
   'renameEngagement',
   'deleteEngagement',
+  'scheduleEngagement',
+  'listSchedules',
+  'cancelSchedule',
 ]
 
 // ───────────────────────── 报告文件导出（绕过 JSON 信封） ─────────────────────────

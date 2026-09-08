@@ -30,6 +30,7 @@ from typing import Any
 from core.events import BUS
 from harness.session_manager import SessionContext, SessionManager
 from server.artifacts import ArtifactsStore
+from server.scheduler import ScheduleRecord, ScheduleStore, SchedulerLoop
 
 # 产物落盘根目录（data/ 已被 .gitignore 忽略；可用 SECAI_ARTIFACTS_DIR 覆盖）
 DEFAULT_ARTIFACTS_DIR = "data/artifacts"
@@ -158,6 +159,11 @@ class AppState:
         self._closed = False
         # 审批等待者：rpcId → asyncio.Future（runner 等待 /api/respond 裁决的唤醒通道）
         self._approval_waiters: dict[str, asyncio.Future] = {}
+        # 任务调度器：SQLite 落盘 + 后台循环（独立 asyncio.Task 挂 _tick_loop 同源协程）
+        self.schedule_store = ScheduleStore()
+        self.scheduler_loop = SchedulerLoop(self.schedule_store, on_due=self._trigger_schedule)
+        # 启动时把上次活跃调度载入内存（不重启循环，由 start_scheduler 兜底）
+        self._scheduler_running = False
 
     # ------------------------------------------------------------------
     # 任务书 / 会话登记
@@ -636,6 +642,117 @@ class AppState:
         if self._ticker is None or self._ticker.done():
             self._ticker = asyncio.create_task(self._tick_loop())
 
+    def start_scheduler(self) -> None:
+        """启动调度器后台循环；幂等；重复调用不会重启任务。
+
+        把上次重启遗留的「已过期 active 调度」也补触发（容错：nextRunAt < now）。
+        """
+        if not self._scheduler_running:
+            self.scheduler_loop.start()
+            self._scheduler_running = True
+
+    async def stop_scheduler(self) -> None:
+        """停止调度器后台循环（lifespan 退出时调用）。"""
+        if self._scheduler_running:
+            await self.scheduler_loop.stop()
+            self._scheduler_running = False
+
+    # ------------------------------------------------------------------
+    # 调度器：触发一次调度记录的执行
+    # ------------------------------------------------------------------
+    async def _trigger_schedule(self, rec: ScheduleRecord) -> None:
+        """到点触发：复用 /api/run 真实执行链路，无 LLM Key 时降级为 fixture demo。
+
+        - 真实路径：有 LLM Key → state.start_run（与 /api/run 同源）；
+        - 降级路径：无 LLM Key → 装一份临时 demo engagement（避免污染 fixture 的
+          live-engagement 任务书，单独用 schedule-{id} 隔离）；
+        - 周期调度（kind=cron）：触发后 next_run_at 重算为下一次命中；
+        - 一次性调度（kind=immediate|datetime）：触发后 status='done'，不再触发。
+        """
+        import os
+        from server import fixture
+
+        run_payload = dict(rec.payload or {})
+        # 缺省目标：演示场景用 demo 域；真实场景必须由调用方提供
+        if not run_payload.get("allowedTargets") and not run_payload.get("targets"):
+            run_payload["allowedTargets"] = ["10.10.5.2"]
+        title = rec.title
+        # 不在 payload 里硬塞 title（scheduleRec.title 与 run_payload.title 解耦）
+
+        last_error: str | None = None
+        engagement_id: str | None = None
+        try:
+            if (os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip():
+                # 真实路径：调 run_pentest_target（与 api_run 完全一致）
+                from harness.runner.pentest_target import run_pentest_target
+                from server.run_spec import normalize_run_payload
+
+                spec = normalize_run_payload(run_payload)
+                meta = {
+                    "bridge": self,
+                    "brief_text": spec["brief_text"],
+                    "scope": spec["scope"],
+                    "settings": spec["settings"],
+                    "labels": spec["labels"],
+                }
+                engagement_id, _ = self.start_run(
+                    spec["title"] or title,
+                    spec["targets"],
+                    runner=run_pentest_target,
+                    labels=spec["labels"],
+                    meta=meta,
+                )
+            else:
+                # 降级：装一份独立 demo engagement（仅当 env 没装 fixture 时）
+                eng_id = f"sched-{rec.id}"
+                if eng_id not in self.engagements:
+                    self.create_engagement(title, engagement_id=eng_id)
+                    sid_a = f"sess-{rec.id}-a"
+                    sid_b = f"sess-{rec.id}-b"
+                    self.add_session(sid_a, "10.10.5.2 · demo.ine.local", eng_id, "running")
+                    self.add_session(sid_b, "10.10.5.0/24 · 横向发现", eng_id, "awaiting_approval")
+                    self.emit_event(
+                        sid_a, "message", role="system",
+                        content=f"[调度触发] {title}（无 LLM Key 演示降级）",
+                    )
+                engagement_id = eng_id
+        except Exception as exc:  # 单次失败不拖垮调度器循环
+            last_error = f"{type(exc).__name__}: {exc}"
+
+        # 推进 rec 状态
+        import time
+        now = time.time()
+        rec.last_run_at = now
+        rec.updated_at = now
+        if last_error is not None:
+            rec.last_error = last_error
+        if rec.kind == "cron":
+            try:
+                from datetime import datetime, timezone
+                from server.scheduler import _cron_next
+                nxt = _cron_next(rec.cron_expr or "", datetime.fromtimestamp(now, tz=timezone.utc))
+                rec.next_run_at = nxt.timestamp()
+                rec.status = "active"
+            except Exception as exc:
+                rec.last_error = f"cron 重算失败：{exc}"
+                rec.status = "cancelled"
+        else:
+            rec.status = "done"
+            rec.next_run_at = None
+        self.schedule_store.upsert(rec)
+        # 广播 host 帧，让订阅者看到「调度触发」事件（用于前端调度面板实时刷新）
+        self.hub.broadcast(
+            "host",
+            {
+                "type": "host/schedule-triggered",
+                "scheduleId": rec.id,
+                "engagementId": engagement_id,
+                "lastRunAt": rec.last_run_at,
+                "status": rec.status,
+                "lastError": rec.last_error,
+            },
+        )
+
     async def _tick_loop(self) -> None:
         from server import fixture  # 延迟 import：避免 fixture 双向依赖
 
@@ -663,6 +780,7 @@ class AppState:
             except (asyncio.CancelledError, Exception):
                 pass
             self._ticker = None
+        await self.stop_scheduler()
         for task in list(self._tasks):
             task.cancel()
         for task in list(self._tasks):

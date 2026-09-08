@@ -239,7 +239,7 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
   const openSched = useCallback((taskId: string) => setSchedOpen({ taskId }), [])
   const saveSched = useCallback((s: { sched: SchedType; next: string }) => {
     if (!schedOpen) return
-    dataRef.saveSched(schedOpen.taskId, s)
+    void dataRef.saveSched(schedOpen.taskId, s)
     showToast('调度已保存', 'ok')
     setSchedOpen(null)
   }, [dataRef, schedOpen])

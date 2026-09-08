@@ -33,6 +33,7 @@ from server import SERVER_NAME, SERVER_VERSION
 from server.artifacts import FORMAT_MEDIA_TYPES
 from server.fixture import APPROVAL_RPC, build_report_snapshot, respond_aftermath, steer_reply
 from server.run_spec import RunSpecError, normalize_run_payload
+from server.scheduler import ScheduleSpecError, normalize_schedule_payload
 from server.state import TERMINAL_STATUSES, now_iso
 
 # 报告章节标题（/api/report → ReportSummary.sections，R5 章节合同中文标签）
@@ -230,6 +231,45 @@ async def api_respond(request: Request) -> JSONResponse:
     if rpc_id == APPROVAL_RPC:
         respond_aftermath(state, decision)
     return _ok({})
+
+
+# ---------------------------------------------------------------------------
+# 调度器 RPC：scheduleEngagement / listSchedules / cancelSchedule
+# ---------------------------------------------------------------------------
+async def api_schedule_engagement(request: Request) -> JSONResponse:
+    """scheduleEngagement：注册一条调度（kind=immediate|datetime|cron）。"""
+    payload = await _rpc_payload(request)
+    try:
+        rec = normalize_schedule_payload(payload)
+    except ScheduleSpecError as exc:
+        return _error(exc.code, exc.message)
+    state = _state(request)
+    state.schedule_store.upsert(rec)
+    return _ok({"schedule": rec.to_dict()})
+
+
+async def api_list_schedules(request: Request) -> JSONResponse:
+    """listSchedules：列出全部调度记录（含 done/cancelled，审计可追溯）。"""
+    state = _state(request)
+    return _ok({"schedules": [rec.to_dict() for rec in state.schedule_store.list_all()]})
+
+
+async def api_cancel_schedule(request: Request) -> JSONResponse:
+    """cancelSchedule：取消一条 active 调度（一次性调度记为 cancelled 留档）。"""
+    payload = await _rpc_payload(request)
+    schedule_id = str(payload.get("scheduleId") or "")
+    if not schedule_id:
+        return _error("bad_request", "scheduleId 必填")
+    state = _state(request)
+    rec = state.schedule_store.get(schedule_id)
+    if rec is None:
+        return _error("not_found", f"未知 scheduleId: {schedule_id}")
+    import time
+    rec.status = "cancelled"
+    rec.next_run_at = None
+    rec.updated_at = time.time()
+    state.schedule_store.upsert(rec)
+    return _ok({"schedule": rec.to_dict()})
 
 
 # ---------------------------------------------------------------------------

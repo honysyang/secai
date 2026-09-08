@@ -21,17 +21,20 @@ from starlette.routing import Route, WebSocketRoute
 
 from server.api import (
     api_assets,
+    api_cancel_schedule,
     api_delete_engagement,
     api_describe,
     api_engagements,
     api_export_report,
     api_knowledge,
     api_list_artifacts,
+    api_list_schedules,
     api_rename_engagement,
     api_report,
     api_respond,
     api_risks,
     api_run,
+    api_schedule_engagement,
     api_skills,
     api_steer,
     api_targets,
@@ -54,6 +57,9 @@ ROUTES = [
     Route("/api/run", api_run, methods=["POST"]),
     Route("/api/steer", api_steer, methods=["POST"]),
     Route("/api/respond", api_respond, methods=["POST"]),
+    Route("/api/scheduleEngagement", api_schedule_engagement, methods=["POST"]),
+    Route("/api/listSchedules", api_list_schedules, methods=["POST"]),
+    Route("/api/cancelSchedule", api_cancel_schedule, methods=["POST"]),
     Route("/api/report", api_report, methods=["POST"]),
     Route("/api/listArtifacts", api_list_artifacts, methods=["POST"]),
     Route("/api/exportReport", api_export_report, methods=["POST"]),
@@ -82,6 +88,7 @@ def create_app() -> Starlette:
     @asynccontextmanager
     async def lifespan(_: Starlette):
         state.start_ticker()
+        state.start_scheduler()
         try:
             yield
         finally:

@@ -18,6 +18,7 @@ import type {
   MuxFrame,
   RiskEntry,
   ReportEntry,
+  ScheduleEntry,
   SessionHeader,
   TaskBrief,
   ToolEntry,
@@ -517,6 +518,34 @@ export class AppRuntime {
       this.autoSelect()
     }
     this.touch()
+  }
+
+  // ───────────────────────── 调度 ─────────────────────────
+
+  /** 注册调度（TaskPanel / SchedModal）：scheduleEngagement RPC。 */
+  async scheduleEngagement(req: {
+    kind: 'immediate' | 'datetime' | 'cron'
+    title?: string
+    runAt?: string
+    cron?: string
+    run?: { title?: string; allowedTargets: string[]; maxIntensity?: 'passive' | 'active' | 'aggressive' }
+  }): Promise<ScheduleEntry> {
+    const response = await this.api.call('scheduleEngagement', req)
+    this.touch()
+    return response.schedule
+  }
+
+  /** 列出全部调度。 */
+  async listSchedules(): Promise<ScheduleEntry[]> {
+    const response = await this.api.call('listSchedules', {})
+    return response.schedules
+  }
+
+  /** 取消调度。 */
+  async cancelSchedule(scheduleId: string): Promise<ScheduleEntry> {
+    const response = await this.api.call('cancelSchedule', { scheduleId })
+    this.touch()
+    return response.schedule
   }
 
   // ───────────────────────── 订阅 / 快照 ─────────────────────────

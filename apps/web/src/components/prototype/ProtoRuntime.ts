@@ -451,14 +451,42 @@ export class ProtoRuntime {
 
   // ── 任务目录动作（真实 RPC）──
 
-  /** 新建任务：即时走 run；定时/周期暂按即时创建并记录本地调度元数据（后端无 schedule RPC）。 */
+  /** 新建任务：sched=now 即时调 run；sched=date/cron 调 scheduleEngagement 走真后端调度。 */
   createTask = async (cfg: { name: string; target: string; mode: Task['mode']; sched: Task['sched']; next: string }): Promise<void> => {
-    await this.runtime.run({
-      title: cfg.name,
-      allowedTargets: [cfg.target],
-      ...(cfg.mode === 'pt' ? {} : { maxIntensity: cfg.mode === 'scan' ? 'passive' : 'active' }),
-    })
-    // run 应答后 engagementId 在快照里；记录本地模式/调度元数据
+    const allowedTargets = [cfg.target]
+    if (cfg.sched === 'now') {
+      await this.runtime.run({
+        title: cfg.name,
+        allowedTargets,
+        ...(cfg.mode === 'pt' ? {} : { maxIntensity: cfg.mode === 'scan' ? 'passive' : 'active' }),
+      })
+      const snap = this.runtime.snapshot()
+      const created = snap.tasks.find((t) => t.title === cfg.name)
+      if (created !== undefined) {
+        this.patchMeta(created.engagementId, { mode: cfg.mode, sched: cfg.sched, next: cfg.next })
+        this.selectMeta(created.engagementId, cfg.mode)
+      }
+      return
+    }
+    // 非即时：调真后端 scheduleEngagement（落盘 + 后台循环到点触发）
+    const maxIntensity = cfg.mode === 'pt' ? undefined : cfg.mode === 'scan' ? ('passive' as const) : ('active' as const)
+    const run = { title: cfg.name, allowedTargets, maxIntensity }
+    try {
+      if (cfg.sched === 'once') {
+        await this.runtime.scheduleEngagement({
+          kind: 'datetime', title: cfg.name, runAt: cfg.next, run,
+        })
+      } else if (cfg.sched === 'cron') {
+        await this.runtime.scheduleEngagement({
+          kind: 'cron', title: cfg.name, cron: cfg.next, run,
+        })
+      }
+    } catch (cause) {
+      // 调度失败：降级为即时 run（保持 UI 不断）
+      console.warn('[proto] scheduleEngagement 失败 → 降级为即时 run', cause)
+      await this.runtime.run(run)
+    }
+    // 不论走调度还是降级，engagement 可能已建好；记录模式偏好
     const snap = this.runtime.snapshot()
     const created = snap.tasks.find((t) => t.title === cfg.name)
     if (created !== undefined) {
@@ -490,9 +518,25 @@ export class ProtoRuntime {
     await this.runtime.renameTask(id, name)
   }
 
-  /** 调度保存：写本地元数据（后端无 schedule RPC；即时触发若当前软停则仅改展示分组）。 */
-  saveSched = (id: string, s: { sched: Task['sched']; next: string }): void => {
-    this.patchMeta(id, { sched: s.sched, next: s.next, stopped: s.sched !== 'now' ? true : undefined })
+  /** 调度保存：调 scheduleEngagement 走后端调度（落盘 + 后台循环到点触发）。 */
+  saveSched = async (id: string, s: { sched: Task['sched']; next: string }): Promise<void> => {
+    if (s.sched === 'now') {
+      this.patchMeta(id, { sched: 'now', next: '', stopped: undefined })
+      return
+    }
+    const target = this.runtime.snapshot().tasks.find((t) => t.engagementId === id)?.title ?? '调度任务'
+    try {
+      if (s.sched === 'once') {
+        await this.runtime.scheduleEngagement({ kind: 'datetime', title: target, runAt: s.next, run: { title: target, allowedTargets: [] } })
+      } else if (s.sched === 'cron') {
+        await this.runtime.scheduleEngagement({ kind: 'cron', title: target, cron: s.next, run: { title: target, allowedTargets: [] } })
+      }
+      this.patchMeta(id, { sched: s.sched, next: s.next, stopped: true })
+    } catch (cause) {
+      console.warn('[proto] saveSched scheduleEngagement 失败', cause)
+      // 调度失败时仍记录本地展示
+      this.patchMeta(id, { sched: s.sched, next: s.next, stopped: true })
+    }
   }
 
   /** 作战模式应用：写本地元数据（后端无作战模式语义，属前端推理策略展示）。 */
