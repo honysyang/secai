@@ -1,0 +1,105 @@
+/* SECAI·PT 破阵 Design Tokens v5.0（来自 prototype.html 的 v5.0 视觉契约）
+   品牌统一：电光蓝 #2563ff 单一主色，废弃全部 deepseek 命名
+   注入方式：通过 .proto-root 根类挂载，不污染现有 design-platform.css 的 body 全局 token。
+   适用组件：prototype 视觉的 7 屏视图 / 命令面板 / 设置中心 / 任务目录 / 附件 / Toast。 */
+
+.proto-root {
+  /* 品牌 */
+  --proto-brand-50: #eef3ff;
+  --proto-brand-100: #dbe5ff;
+  --proto-brand-500: #3b74ff;
+  --proto-brand-600: #2563ff;
+  --proto-brand-700: #1d4fd6;
+
+  /* 风险等级 */
+  --proto-crit: #e5484d;
+  --proto-crit-bg: #fdeded;
+  --proto-high: #f76b15;
+  --proto-high-bg: #fef3e8;
+  --proto-med: #d99000;
+  --proto-med-bg: #fdf6e3;
+  --proto-low: #3b82f6;
+  --proto-low-bg: #eaf2fe;
+  --proto-ok: #30a46c;
+  --proto-ok-bg: #e8f5ee;
+  --proto-warn: #f5a623;
+  --proto-warn-bg: #fdf4e0;
+
+  /* 表面 / 背景 */
+  --proto-bg: #f6f7f9;
+  --proto-surface: #ffffff;
+  --proto-surface-2: #fbfcfd;
+  --proto-rail: #ffffff;
+  --proto-sidebar: #f9fafb;
+
+  /* 边框 / 文字 */
+  --proto-border: #e6e8ec;
+  --proto-border-2: #d8dbe1;
+  --proto-text-1: #101319;
+  --proto-text-2: #4b5261;
+  --proto-text-3: #8b91a0;
+  --proto-hover: #f0f3f8;
+  --proto-active: #eef3ff;
+
+  /* 阴影 */
+  --proto-shadow-1: 0 1px 2px rgba(16, 19, 25, 0.05);
+  --proto-shadow-2: 0 8px 24px -6px rgba(16, 19, 25, 0.12);
+  --proto-shadow-3: 0 24px 64px -12px rgba(16, 19, 25, 0.24);
+
+  /* 字体 */
+  --proto-mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, monospace;
+  --proto-sans: "PingFang SC", "Microsoft YaHei", -apple-system, "Segoe UI", sans-serif;
+
+  /* 圆角 / 缓动 */
+  --proto-r-s: 6px;
+  --proto-r-m: 8px;
+  --proto-r-l: 12px;
+  --proto-r-xl: 16px;
+  --proto-t-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --proto-t-norm: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 组件复用别名（与现有 secai-alias-* 体系对齐） */
+  --proto-label-primary: var(--proto-text-1);
+  --proto-label-secondary: var(--proto-text-2);
+  --proto-label-tertiary: var(--proto-text-3);
+  --proto-bg-base: var(--proto-bg);
+  --proto-bg-layer-1: var(--proto-surface);
+  --proto-bg-layer-2: var(--proto-surface-2);
+  --proto-border-l1: var(--proto-border);
+  --proto-border-l2: var(--proto-border-2);
+  --proto-interactive-bg-hover: var(--proto-hover);
+  --proto-interactive-bg-active: var(--proto-active);
+  --proto-state-business-primary: var(--proto-brand-600);
+  --proto-shadow-lv1: var(--proto-shadow-1);
+  --proto-shadow-lv2: var(--proto-shadow-2);
+}
+
+/* 暗色模式：切换挂在 body[data-secai-dark] .proto-root */
+.proto-root,
+body[data-secai-dark] .proto-root {
+  /* 默认 light 已在 .proto-root 上定义，dark 覆盖 */
+}
+
+body[data-secai-dark] .proto-root {
+  --proto-crit-bg: #3a1418;
+  --proto-high-bg: #37200f;
+  --proto-med-bg: #33290e;
+  --proto-low-bg: #0f1e33;
+  --proto-ok-bg: #0e2a1d;
+  --proto-warn-bg: #33270d;
+  --proto-bg: #0b0d10;
+  --proto-surface: #14161a;
+  --proto-surface-2: #181b20;
+  --proto-rail: #101216;
+  --proto-sidebar: #0e1013;
+  --proto-border: #262a31;
+  --proto-border-2: #333943;
+  --proto-text-1: #e8eaee;
+  --proto-text-2: #a7aebb;
+  --proto-text-3: #6b7280;
+  --proto-hover: #1d2127;
+  --proto-active: #18233d;
+  --proto-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --proto-shadow-2: 0 8px 24px -6px rgba(0, 0, 0, 0.5);
+  --proto-shadow-3: 0 24px 64px -12px rgba(0, 0, 0, 0.7);
+}

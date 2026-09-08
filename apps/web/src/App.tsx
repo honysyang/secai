@@ -1,9 +1,9 @@
-// App：顶层接线（dsh 复刻版主框架）。AppRuntime 为 module 级单例（start/stop
-// 幂等，挂 window 供调试/联调探针），App 组件经 useSyncExternalStore 订阅
-// 快照；顶部分发由 snapshot.route 驱动（工作台 = 对话面板；资产/风险/报告 =
-// 独立管理视图），与选中会话解耦。用户动作（select/submitOrSend/respond/run）
-// 回调 runtime。侧栏展开偏好 = App 层 state（sidebarOpen），「新建任务」弹窗
-// 开关同层下传（AppFrame 负责窄屏 rail 几何，sidebarOpen 只管宽屏收展）。
+// App：顶层接线（dsh 复刻版主框架）。
+// 新默认（proto 视图）：按 prototype.html 重做的 SECAI·PT 破阵前端（ProtoLayout）。
+//// 旧 UI 入口：URL `?ui=old` 回退到 dsh 复刻版（保留完整 runtime 联接）。
+//
+// ProtoLayout 自带数据层（localStorage）、命令面板、向导、Toast；
+// 旧 UI 仍接 AppRuntime 的 WS 快照。
 
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { AppFrame, HEADER_HEIGHT } from './components/layout/AppFrame.tsx'
@@ -25,16 +25,40 @@ import { AppRuntime } from './runtime/appRuntime.ts'
 import { LoginModal } from './components/auth/LoginModal.tsx'
 import { onUnauthorized } from './auth/apiKeyStore.ts'
 import type { TaskBrief } from './connection/api.ts'
+import { ProtoLayout } from './components/prototype/ProtoLayout.tsx'
 
 /** module 级单例：数据源与调度全局只此一份（StrictMode 双挂载安全）。 */
 const runtime = new AppRuntime()
 runtime.start()
 if (typeof window !== 'undefined') {
-  // 联调探针：控制台可直查快照（api 暴露见 appRuntime.ts）
   ;(window as unknown as { __secai?: AppRuntime }).__secai = runtime
 }
 
+/** URL `?ui=old` 切回旧版 dsh 复刻界面（保留 runtime 联接）。 */
+function useUiMode(): 'proto' | 'old' {
+  const [mode, setMode] = useState<'proto' | 'old'>(() => {
+    if (typeof window === 'undefined') return 'proto'
+    const sp = new URLSearchParams(window.location.search)
+    return sp.get('ui') === 'old' ? 'old' : 'proto'
+  })
+  useEffect(() => {
+    const onPop = () => {
+        const v = new URLSearchParams(window.location.search).get('ui')
+        setMode(v === 'old' ? 'old' : 'proto')
+      }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  return mode
+}
+
 export default function App() {
+  const mode = useUiMode()
+  if (mode === 'proto') return <ProtoLayout />
+  return <LegacyApp />
+}
+
+function LegacyApp() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [newEngagementOpen, setNewEngagementOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -73,6 +97,11 @@ export default function App() {
     { id: 'nav-arsenal', label: '武器库', hint: '导航', group: '导航', keywords: ['arsenal', 'tools'], onRun: () => runtime.setRoute('arsenal') },
     { id: 'nav-skills', label: 'Skills', hint: '导航', group: '导航', keywords: ['skills', 'skill'], onRun: () => runtime.setRoute('skills') },
     { id: 'nav-knowledge', label: '知识库', hint: '导航', group: '导航', keywords: ['knowledge'], onRun: () => runtime.setRoute('knowledge') },
+    { id: 'nav-proto', label: '新版 UI（SECAI·PT 破阵）', hint: '导航', group: '导航', keywords: ['proto', '新 UI', '破阵'], onRun: () => {
+        const url = new URL(window.location.href)
+        url.searchParams.delete('ui')
+        window.location.href = url.toString()
+      } },
     // 任务
     { id: 'task-new', label: '新建任务', hint: '任务', group: '任务', keywords: ['new', 'engagement', 'run'], onRun: () => setNewEngagementOpen(true) },
     // 工具（从武器库动态生成）
@@ -84,12 +113,11 @@ export default function App() {
       keywords: [tool.name, tool.shortDescription],
       onRun: () => {
         runtime.setRoute('workbench')
-        // TODO: 预填输入框
       },
     })),
   ]
 
-  // 路由分发：工作台对话面板 / 资产管理 / 风险管理 / 报告管理
+  // 路由分发
   const center =
     snapshot.route === 'assets' ? (
       <AssetPanel assets={snapshot.assets} />

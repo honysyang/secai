@@ -7,6 +7,7 @@
 @import './theme/design-platform.css';
 @import './theme/scrollbar.css';
 @import './theme/shiki.css';
+@import './theme/prototype-tokens.css';
 
 html,
 body,
