@@ -8,7 +8,7 @@ export function AssetScreen({ db, currentTask }: { db: DBShape; currentTask: Tas
       <div className="proto-page">
         <div className="proto-page-head">
           <span className="proto-page-title">资产</span>
-          <span className="proto-page-sub">当前范围：{currentTask?.name ?? '—'} · {currentTask?.target ?? '—'}</span>
+          <span className="proto-page-sub">当前范围：{currentTask?.name ?? '—'} · {currentTask?.target ?? '—'}{currentTask?.atts && currentTask.atts.length > 0 ? ` · 授权材料 ${currentTask.atts.length} 份` : ''}</span>
         </div>
         {demo ? <DemoBody /> : <EmptyState icon="🛰️" title="该任务尚在侦察 / 计划中" desc="资产与风险数据将随智能体执行自动生成。" />}
       </div>

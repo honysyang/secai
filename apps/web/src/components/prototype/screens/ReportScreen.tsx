@@ -2,11 +2,11 @@
 import { useState } from 'react'
 import type { DBShape, Task } from '../db.ts'
 
-export function ReportScreen({ db, currentTask }: { db: DBShape; currentTask: Task | null }) {
+export function ReportScreen({ db, currentTask, onExport, onToast }: { db: DBShape; currentTask: Task | null; onExport?: (fmt: 'md' | 'json' | 'pdf') => void; onToast?: (msg: string, kind?: 'ok' | 'err') => void }) {
   const demo = currentTask?.demo === true || db.meta.curTaskId === 't3'
   return (
     <div className="proto-screen on" style={{ overflow: 'hidden' }}>
-      {demo ? <ReportDemo task={currentTask} /> : (
+      {demo ? <ReportDemo task={currentTask} onExport={onExport} onToast={onToast} /> : (
         <div className="proto-page">
           <div className="proto-empty">
             <div className="e-icon">📄</div>
@@ -19,7 +19,7 @@ export function ReportScreen({ db, currentTask }: { db: DBShape; currentTask: Ta
   )
 }
 
-function ReportDemo({ task }: { task: Task | null }) {
+function ReportDemo({ task, onExport, onToast }: { task: Task | null; onExport?: (fmt: 'md' | 'json' | 'pdf') => void; onToast?: (msg: string, kind?: 'ok' | 'err') => void }) {
   const [tab, setTab] = useState(1)
   const items = [
     { id: 1, t: '1. 执行摘要', sub: false },
@@ -49,9 +49,9 @@ function ReportDemo({ task }: { task: Task | null }) {
       </div>
       <div className="proto-doc-view">
         <div style={{ maxWidth: 780, margin: '0 auto 16px', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-          <button className="proto-btn ghost">导出 Markdown</button>
-          <button className="proto-btn ghost">导出 JSON</button>
-          <button className="proto-btn primary">导出 PDF</button>
+          <button type="button" className="proto-btn ghost" onClick={() => { onExport?.('md'); onToast?.('已导出 Markdown', 'ok') }}>导出 Markdown</button>
+          <button type="button" className="proto-btn ghost" onClick={() => { onExport?.('json'); onToast?.('已导出 JSON', 'ok') }}>导出 JSON</button>
+          <button type="button" className="proto-btn primary" onClick={() => { onExport?.('pdf'); onToast?.('已导出 PDF', 'ok') }}>导出 PDF</button>
         </div>
         <div className="proto-doc">
           <h1>{target} Web 渗透测试报告</h1>
@@ -74,6 +74,25 @@ function ReportDemo({ task }: { task: Task | null }) {
           <p>仅做理论评估未实际部署持久化后门（属 T3 禁区动作，已在方案中说明）。</p>
           <h2>4. 风险明细</h2>
           <p>共 16 项：严重 1 · 高危 3 · 中危 5 · 低危 7，逐项含证据链、CVSS 与修复建议（见风险页关联视图）。</p>
+          <h2>5. 修复建议汇总</h2>
+          <ul>
+            <li><b>立即（24h 内）</b>：禁用 Tomcat Manager 公网访问，强制修改默认账号密码，关闭 PUT 方法。</li>
+            <li><b>紧急（72h 内）</b>：迁移 /backup 目录至内网、强制轮换 .git 凭据、修复 Tomcat 8.5.x → 9.0.93+。</li>
+            <li><b>中期（30d）</b>：部署 WAF / RASP、引入 SAST/DAST 流水线、为高危动作接入审计告警。</li>
+            <li><b>长期</b>：建立凭据轮换制度、按季度复测、组织内安全意识培训。</li>
+          </ul>
+          <h2>6. 附录 · 工具清单</h2>
+          <table className="proto-table" style={{ marginTop: 8 }}>
+            <thead><tr><th>工具</th><th>阶段</th><th>用途</th><th>审批级别</th></tr></thead>
+            <tbody>
+              <tr><td className="mono">nmap</td><td>① 侦察</td><td>端口/服务发现</td><td>T1 自动</td></tr>
+              <tr><td className="mono">gobuster</td><td>① 侦察</td><td>目录枚举</td><td>T1 自动</td></tr>
+              <tr><td className="mono">hydra</td><td>④ 利用</td><td>登录爆破</td><td>T2 审批</td></tr>
+              <tr><td className="mono">sqlmap</td><td>④ 利用</td><td>SQL 注入</td><td>T2 审批</td></tr>
+              <tr><td className="mono">metasploit</td><td>④ 利用</td><td>漏洞利用框架</td><td>T3 审批</td></tr>
+              <tr><td className="mono">crackmapexec</td><td>⑥ 横向</td><td>内网凭据喷洒</td><td>T2 审批</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

@@ -8,6 +8,8 @@ export interface Command {
   g: string
   t: string
   k?: string
+  /** SVG path d=...；为空时用默认箭头。 */
+  icon?: string
   onRun: () => void
 }
 
@@ -21,6 +23,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
   const [q, setQ] = useState('')
   const [idx, setIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (open) {
@@ -67,7 +70,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
           <input ref={inputRef} className="proto-pal-input" placeholder="输入命令或搜索…" value={q} onChange={(e) => { setQ(e.target.value); setIdx(0) }} />
           <kbd>Esc</kbd>
         </div>
-        <div className="proto-pal-list">
+        <div className="proto-pal-list" ref={listRef}>
           {grouped.length === 0 && <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-3)', fontSize: 12.5 }}>无匹配结果</div>}
           {grouped.map((g, gi) => (
             <div key={gi}>
@@ -82,7 +85,7 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
                     onMouseEnter={() => setIdx(running)}
                     onClick={() => { c.onRun(); onClose() }}
                   >
-                    <svg className="pi-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l3-9 4 18 3-9h4" /></svg>
+                    <svg className="pi-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={c.icon || 'M3 12h4l3-9 4 18 3-9h4'} /></svg>
                     <span className="pi-t">{c.t}</span>
                     <span className="sp" />
                     {c.k && <kbd>{c.k}</kbd>}

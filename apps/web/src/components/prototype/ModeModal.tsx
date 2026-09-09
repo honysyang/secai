@@ -178,7 +178,7 @@ export function ModeModal({ open, current, onClose, onApply }: ModeModalProps) {
             </div>
             <div className="proto-conf-sched-tip">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
-              <span>切换模式会同步套用该模式的<b>推荐模型</b>与工具集；也可在「「设置 → 模型」」中单独调整，两者互不影响。</span>
+              <span>切换模式会同步套用该模式的<b>推荐模型</b>与工具集；也可在「设置 → 模型」中单独调整，两者互不影响。</span>
             </div>
           </div>
         </div>

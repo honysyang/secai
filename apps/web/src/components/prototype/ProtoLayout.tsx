@@ -236,7 +236,10 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
     if (curId) dataRef.applyMode(curId, m)
   }, [dataRef, db.meta.curTaskId])
 
-  const openSched = useCallback((taskId: string) => setSchedOpen({ taskId }), [])
+  const openSched = useCallback((taskId?: string) => {
+    const id = taskId ?? db.meta.curTaskId ?? db.tasks[0]?.id
+    if (id !== undefined) setSchedOpen({ taskId: id })
+  }, [db.meta.curTaskId, db.tasks])
   const saveSched = useCallback((s: { sched: SchedType; next: string }) => {
     if (!schedOpen) return
     void dataRef.saveSched(schedOpen.taskId, s)
@@ -246,18 +249,31 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
 
   // 命令面板命令
   const commands = useMemo(() => {
-    const baseCommands: Array<{ id: string; g: string; t: string; k?: string; onRun: () => void }> = [
-      ...ORDER.map((r, i) => ({ id: `nav-${r}`, g: '导航', t: `前往${VIEW_NAMES[r]}`, k: String(i + 1), onRun: () => go(r) })),
-      { id: 'act-new', g: '操作', t: '新建渗透任务', k: 'N', onRun: () => setNewOpen(true) },
-      { id: 'act-theme', g: '操作', t: '切换明暗主题', onRun: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')) },
-      { id: 'act-report', g: '操作', t: '从当前任务生成报告', onRun: () => go('report') },
-      { id: 'act-collapse', g: '操作', t: collapsed ? '展开导航' : '收起导航', onRun: () => setCollapsed((c) => !c) },
-      { id: 'act-mode', g: '操作', t: '切换作战模式', onRun: () => setModeOpen(true) },
-      { id: 'act-settings', g: '操作', t: '打开设置中心', onRun: () => { setSettingsTab('model'); setSettingsOpen(true) } },
+    const NAV_ICONS: Record<RouteKey, string> = {
+      chat: 'M3 12h4l3-9 4 18 3-9h4',
+      asset: 'M3 5h7v7H3zM14 5h7v7h-7zM3 14h7v5H3zM14 14h7v5h-7z',
+      risk: 'M12 2 4 7v10l8 5 8-5V7z',
+      report: 'M4 4h16v6H4zM4 14h16v6H4z',
+      arsenal: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z',
+      skill: 'M12 2l9 5v10l-9 5-9-5V7z',
+      kb: 'M4 4h12a4 4 0 0 1 4 4v12H8a4 4 0 0 1-4-4z',
+    }
+    const baseCommands: Array<{ id: string; g: string; t: string; k?: string; icon?: string; onRun: () => void }> = [
+      ...ORDER.map((r, i) => ({ id: `nav-${r}`, g: '导航', t: `前往${VIEW_NAMES[r]}`, k: String(i + 1), icon: NAV_ICONS[r], onRun: () => go(r) })),
+      { id: 'act-new', g: '操作', t: '新建渗透任务', k: 'N', icon: 'M12 2v20M2 12h20', onRun: () => setNewOpen(true) },
+      { id: 'act-mode', g: '操作', t: '切换作战模式', icon: 'M12 2 4 7v10l8 5 8-5V7z', onRun: () => setModeOpen(true) },
+      { id: 'act-report', g: '操作', t: '从当前任务生成报告', icon: 'M4 4h16v6H4zM4 14h16v6H4z', onRun: () => go('report') },
+      { id: 'act-collapse', g: '操作', t: collapsed ? '展开导航' : '收起导航', icon: 'M3 6h18M3 12h18M3 18h18', onRun: () => setCollapsed((c) => !c) },
+      { id: 'act-theme', g: '操作', t: '切换明暗主题', icon: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM2 12h20', onRun: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')) },
+      { id: 'act-set-model', g: '设置', t: '设置 · 模型', icon: 'M12 2a10 10 0 1 0 0 20', onRun: () => { setSettingsTab('model'); setSettingsOpen(true) } },
+      { id: 'act-set-approval', g: '设置', t: '设置 · 审批策略', icon: 'M5 11V7a5 5 0 0 1 10 0v4M3 11h14v10H3z', onRun: () => { setSettingsTab('approval'); setSettingsOpen(true) } },
+      { id: 'act-set-sched', g: '设置', t: '设置 · 调度', icon: 'M3 6h18M3 12h18M3 18h18', onRun: () => { setSettingsTab('sched'); setSettingsOpen(true) } },
+      { id: 'act-set-users', g: '设置', t: '设置 · 用户与权限', icon: 'M12 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM4 22v-3a8 8 0 0 1 16 0v3', onRun: () => { setSettingsTab('users'); setSettingsOpen(true) } },
+      { id: 'act-set-general', g: '设置', t: '设置 · 通用', icon: 'M3 4h18v6H3zM3 14h18v6H3z', onRun: () => { setSettingsTab('general'); setSettingsOpen(true) } },
     ]
     const toolCommands = db.tasks.slice(0, 5).flatMap((t) => [
-      { id: `tool-${t.id}-jump`, g: '任务', t: `打开任务：${t.name}`, onRun: () => { selectTask(t.id); go('chat') } },
-      { id: `tool-${t.id}-sched`, g: '任务', t: `设置定时：${t.name}`, onRun: () => openSched(t.id) },
+      { id: `tool-${t.id}-jump`, g: '任务', t: `打开任务：${t.name}`, icon: 'M3 12h4l3-9 4 18 3-9h4', onRun: () => { selectTask(t.id); go('chat') } },
+      { id: `tool-${t.id}-sched`, g: '任务', t: `设置定时：${t.name}`, icon: 'M3 6h18M3 12h18M3 18h18', onRun: () => openSched(t.id) },
     ])
     return [...baseCommands, ...toolCommands]
   }, [collapsed, db.tasks, selectTask, go, openSched])
@@ -283,15 +299,15 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
     ) : route === 'asset' ? (
       <AssetScreen db={db} currentTask={currentTask} />
     ) : route === 'risk' ? (
-      <RiskScreen db={db} currentTask={currentTask} />
+      <RiskScreen db={db} currentTask={currentTask} onToast={showToast} onUpdateStatus={(id, st) => { dataRef.updateRiskStatus(id, st).then(() => showToast(`风险状态已更新：${st}`, 'ok')).catch((e) => showToast(`更新失败：${e.message}`, 'err')) }} />
     ) : route === 'report' ? (
-      <ReportScreen db={db} currentTask={currentTask} />
+      <ReportScreen db={db} currentTask={currentTask} onToast={showToast} onExport={() => { if (!currentTask) return; dataRef.generateReport(currentTask.id).then(() => showToast('报告已生成 · 产物列表已刷新', 'ok')).catch((e) => showToast(`报告生成失败：${e.message}`, 'err')) }} />
     ) : route === 'arsenal' ? (
       <ArsenalScreen db={db} currentTask={currentTask} />
     ) : route === 'skill' ? (
-      <SkillScreen db={db} currentTask={currentTask} />
+      <SkillScreen db={db} currentTask={currentTask} onPillActivate={() => { setRoute('chat') }} />
     ) : (
-      <KbScreen db={db} currentTask={currentTask} />
+      <KbScreen db={db} currentTask={currentTask} onToast={showToast} />
     )
 
   const schedTargetTask = schedOpen ? db.tasks.find((t) => t.id === schedOpen.taskId) ?? null : null

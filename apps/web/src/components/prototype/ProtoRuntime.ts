@@ -518,6 +518,16 @@ export class ProtoRuntime {
     await this.runtime.renameTask(id, name)
   }
 
+  /** 风险处理状态流转（供 RiskScreen 联动）。 */
+  updateRiskStatus = async (riskId: string, status: 'open' | 'mitigating' | 'accepted' | 'resolved'): Promise<void> => {
+    await this.runtime.updateRiskStatus(riskId, status)
+  }
+
+  /** 生成报告（供 ReportScreen 导出按钮触发）。 */
+  generateReport = async (engagementId: string): Promise<void> => {
+    await this.runtime.generateReport(engagementId)
+  }
+
   /** 调度保存：调 scheduleEngagement 走后端调度（落盘 + 后台循环到点触发）。 */
   saveSched = async (id: string, s: { sched: Task['sched']; next: string }): Promise<void> => {
     if (s.sched === 'now') {

@@ -38,6 +38,7 @@ export function NewEngagementWizard({ open, onClose, onCreate }: NewEngagementWi
   const [sched, setSched] = useState<NewTaskConfig['sched']>('now')
   const [date, setDate] = useState('2026-09-10T22:00')
   const [brief, setBrief] = useState('')
+  const [wizAtts, setWizAtts] = useState<string[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -120,6 +121,32 @@ export function NewEngagementWizard({ open, onClose, onCreate }: NewEngagementWi
                 <button type="button" className="proto-chip" onClick={() => setScope(['target.example.com'])}>单域名</button>
                 <button type="button" className="proto-chip" onClick={() => setScope(['10.0.0.0/8'])}>大类内网</button>
               </div>
+              <div className="proto-f-label" style={{ marginTop: 16 }}>授权材料（可选）<span className="opt">点击或拖拽上传授权书 / 目标清单 / 字典</span></div>
+              <label
+ className="proto-up-zone"
+ onDragOver={(e) => { e.preventDefault() }}
+ onDrop={(e) => {
+   e.preventDefault()
+   const files = Array.from(e.dataTransfer.files)
+   setWizAtts((prev) => [...prev, ...files.map((f) => f.name)])
+ }}
+ >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></svg>
+                <span>点击或拖拽上传文件</span>
+                <span style={{ fontSize: 11, opacity: 0.7 }}>.txt .csv .pdf .png .jpg .pcap .har（单文件 ≤ 20MB）</span>
+                <input type="file" multiple hidden onChange={(e) => {
+                  const files = Array.from(e.target.files ?? [])
+                  setWizAtts((prev) => [...prev, ...files.map((f) => f.name)])
+                  e.target.value = ''
+                }} />
+              </label>
+              {wizAtts.length > 0 && (
+                <div className="proto-wiz-atts">
+                  {wizAtts.map((name, i) => (
+                    <span key={i} className="proto-att-chip">{name}<button type="button" onClick={() => setWizAtts(wizAtts.filter((_, j) => j !== i))}>×</button></span>
+                  ))}
+                </div>
+              )}
               <div className="proto-warn-strip">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" strokeWidth="2" strokeLinecap="round" style={{ flex: 'none', marginTop: 1 }}><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><path d="M12 9v4M12 17h.01" /></svg>
                 <span>智能体将<b>拒绝</b>对范围外目标的一切操作；排除项与时间窗可在高级设置中进一步收窄。所有动作默认留存审计日志。</span>

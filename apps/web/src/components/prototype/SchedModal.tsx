@@ -24,6 +24,9 @@ export function SchedModal({ open, task, onClose, onSave }: SchedModalProps) {
   const [type, setType] = useState<SchedType>(task?.sched ?? 'now')
   const [date, setDate] = useState('2026-09-10T22:00')
   const [cron, setCron] = useState('0 2 * * 1')
+  const [onApproval, setOnApproval] = useState('低危自动放行 · 高危挂起等待')
+  const [onConflict, setOnConflict] = useState('同一目标排队执行')
+  const [notifyOnFail, setNotifyOnFail] = useState(true)
 
   useEffect(() => {
     if (open) {
@@ -112,7 +115,7 @@ export function SchedModal({ open, task, onClose, onSave }: SchedModalProps) {
                 )}
                 <div className="proto-conf-sched-tip" style={{ background: 'rgba(245,166,35,.1)', borderColor: 'rgba(245,166,35,.35)' }}>
                   {WARN_SVG}
-                  <span>无人值守触发时若遇到需审批动作，将按<b>调度策略</b>处理：低危自动放行、高危挂起等待，超时后自动拒绝并记入审计日志。可在「「设置 → 调度」」中调整。</span>
+                  <span>无人值守触发时若遇到需审批动作，将按<b>调度策略</b>处理：低危自动放行、高危挂起等待，超时后自动拒绝并记入审计日志。可在「设置 → 调度」中调整。</span>
                 </div>
               </div>
             )}
@@ -121,7 +124,7 @@ export function SchedModal({ open, task, onClose, onSave }: SchedModalProps) {
             <div className="proto-set-h">无人值守与冲突</div>
             <div className="proto-f-row">
               <span className="proto-f-lb">遇审批</span>
-              <select className="proto-f-sel" defaultValue="低危自动放行 · 高危挂起等待">
+              <select className="proto-f-sel" value={onApproval} onChange={(e) => setOnApproval(e.target.value)}>
                 <option>低危自动放行 · 高危挂起等待</option>
                 <option>全部挂起等待</option>
                 <option>低危自动放行 · 高危跳过并继续</option>
@@ -129,7 +132,7 @@ export function SchedModal({ open, task, onClose, onSave }: SchedModalProps) {
             </div>
             <div className="proto-f-row">
               <span className="proto-f-lb">冲突处理</span>
-              <select className="proto-f-sel" defaultValue="同一目标排队执行">
+              <select className="proto-f-sel" value={onConflict} onChange={(e) => setOnConflict(e.target.value)}>
                 <option>同一目标排队执行</option>
                 <option>跳过本次</option>
                 <option>并行执行</option>
@@ -137,7 +140,7 @@ export function SchedModal({ open, task, onClose, onSave }: SchedModalProps) {
             </div>
             <div className="proto-f-row">
               <span className="proto-f-lb">失败通知</span>
-              <button className="proto-switch on" type="button" />
+              <button className={'proto-switch' + (notifyOnFail ? ' on' : '')} type="button" onClick={() => setNotifyOnFail(!notifyOnFail)} />
               <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>执行失败或超时立即通知负责人</span>
             </div>
           </div>
