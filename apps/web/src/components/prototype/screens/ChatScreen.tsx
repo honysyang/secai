@@ -488,6 +488,7 @@ function ChatInput({ onSend, onNewTask, externalText, onConsumeExternalText }: {
   const [drag, setDrag] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const pillRef = useRef<HTMLDivElement>(null)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (externalText) {
@@ -497,10 +498,21 @@ function ChatInput({ onSend, onNewTask, externalText, onConsumeExternalText }: {
   }, [externalText, onConsumeExternalText])
 
   const handleSend = () => {
-    if (!text.trim()) return
-    onSend(text.trim())
+    if (busy || !text.trim()) return
+    const payload = text.trim()
+    setBusy(true)
     setText('')
-    setFiles([])
+    try {
+      onSend(payload)
+      setFiles([])
+      // 1.5s 后解锁（普通 steer 同步；新建任务需要等 RPC 回执）
+      window.setTimeout(() => setBusy(false), 1500)
+    } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : String(cause)
+      showToast(`下发失败：${msg}`, 'err')
+      setText(payload) // 回填
+      setBusy(false)
+    }
   }
 
   return (
@@ -544,7 +556,7 @@ function ChatInput({ onSend, onNewTask, externalText, onConsumeExternalText }: {
         )}
         <textarea
           rows={1}
-          placeholder="向破阵下达指令，如「按附件中的目标清单逐项验证」…"
+          placeholder="向破阵下达指令：直接输入目标 IP/域名（如「对 demo.ine.local 做一次渗透」），或选择已有任务继续对话…"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -585,7 +597,7 @@ function ChatInput({ onSend, onNewTask, externalText, onConsumeExternalText }: {
             </svg>
           </button>
           <span className="proto-ip-hint"><kbd>Enter</kbd> 发送 · <kbd>Shift+Enter</kbd> 换行 · 可拖拽或粘贴文件</span>
-          <button type="button" className="proto-send-btn" onClick={handleSend}>
+          <button type="button" className="proto-send-btn" onClick={handleSend} disabled={busy}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" />
             </svg>

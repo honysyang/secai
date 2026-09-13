@@ -32,6 +32,7 @@ from profiles.practical_pentest.report import generate_engagement_report
 from server import SERVER_NAME, SERVER_VERSION
 from server.artifacts import FORMAT_MEDIA_TYPES
 from server.fixture import APPROVAL_RPC, build_report_snapshot, respond_aftermath, steer_reply
+from server.fixture import ENGAGEMENT_TITLE as DEMO_ENGAGEMENT_TITLE
 from server.run_spec import RunSpecError, normalize_run_payload
 from server.scheduler import ScheduleSpecError, normalize_schedule_payload
 from server.state import TERMINAL_STATUSES, now_iso
@@ -73,6 +74,15 @@ async def _rpc_payload(request: Request) -> dict[str, Any]:
 
 def _llm_key_present() -> bool:
     return bool((os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip())
+
+
+def _fixture_mode() -> bool:
+    """fixture 模式（SECAI_FIXTURE=1）：无 LLM key 时仍允许演示级 run 下发。
+
+    跑通流程：建任务书 + 每目标一条非 managed 会话（managed=False → steer 走 fixture
+    应答而非真实 runner）；不调用 harness.runner，避免缺 SDK / 网络依赖。
+    """
+    return os.getenv("SECAI_FIXTURE", "").strip().lower() in ("1", "true", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +157,37 @@ async def api_delete_engagement(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 # run：任务书 → 真实执行接线（无 LLM Key → 结构化错误；有 Key 才允许真实消耗）
 # ---------------------------------------------------------------------------
+async def _start_fixture_run(request: Request, spec: dict[str, Any]) -> JSONResponse:
+    """SECAI_FIXTURE=1 下的 run 降级路径。
+
+    不调用 harness/runner；只建任务书 + 每目标一条非 managed 会话，立刻在视图层可见。
+    后续 steer 走 fixture.steer_reply 的演示应答链路，让前端「对话→事件流→审批」全跑通。
+    """
+    import uuid
+
+    target_labels = spec.get("labels") or {}
+    eng = _state(request).create_engagement(spec.get("title") or DEMO_ENGAGEMENT_TITLE)
+    sids: list[str] = []
+    for target in spec["targets"]:
+        session_id = uuid.uuid4().hex[:12]
+        _state(request).add_session(
+            session_id,
+            target=target_labels.get(target, target),
+            engagement_id=eng.engagement_id,
+            status="running",
+            managed=False,  # 关键：让 steer 走 fixture 应答而非真实 runner
+        )
+        _state(request).emit_event(
+            session_id, "message", role="assistant",
+            content=(
+                f"任务已接受（fixture 演示模式）：授权目标 {target}。"
+                "当前会话沿用 fixture 应答链路，不消耗真实 LLM / runner。"
+            ),
+        )
+        sids.append(session_id)
+    return _ok({"engagementId": eng.engagement_id, "sessionIds": sids})
+
+
 async def api_run(request: Request) -> JSONResponse:
     payload = await _rpc_payload(request)
     try:
@@ -154,11 +195,17 @@ async def api_run(request: Request) -> JSONResponse:
     except RunSpecError as exc:
         return _error(exc.code, exc.message, exc.details)
     if not _llm_key_present():
-        return _error(
-            "llm_key_missing",
-            "未配置 LLM API Key，无法启动真实任务；离线演示请使用内置 demo engagement fixture。",
-            {"hint": "配置 LLM_API_KEY 或 OPENAI_API_KEY 后重启服务（python -m server.main --port 8700）"},
-        )
+        if not _fixture_mode():
+            return _error(
+                "llm_key_missing",
+                "未配置 LLM API Key，无法启动真实任务；离线演示请使用内置 demo engagement fixture。",
+                {"hint": "配置 LLM_API_KEY 或 OPENAI_API_KEY 后重启服务（python -m server.main --port 8700）"},
+            )
+        # fixture 降级：不依赖真实 runner；新建非 managed 会话，steer 走 fixture 应答
+        return await _start_fixture_run(request, spec)
+    if _fixture_mode():
+        # fixture 优先级最高：即便 .env 里有占位 LLM key，也走演示链路，便于离线跑通端到端
+        return await _start_fixture_run(request, spec)
     state = _state(request)
     # 延迟 import：只有真正启动真实执行才拉起 agents SDK / LLM 相关依赖
     from harness.runner.pentest_target import run_pentest_target

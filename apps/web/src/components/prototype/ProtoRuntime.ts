@@ -15,6 +15,7 @@ import type { SessionSnapshot } from '../../runtime/session.ts'
 import type { SessionEvent, ApprovalRequest } from '../../connection/api.ts'
 import { DEFAULT_DB } from './db.ts'
 import type { DBShape, Task, TaskStatus } from './db.ts'
+import { showToast } from './Toast.tsx'
 
 /** 导出 Task 的展示元数据键集合（供外部覆写）。 */
 export type { Task, TaskStatus, DBShape }
@@ -338,6 +339,21 @@ export function deriveApprovalResolutions(session: SessionSnapshot | null): Reco
  * ProtoLayout 的数据源 + 动作层：包装 AppRuntime，对外暴露 DBShape 与真实 RPC 动作。
  * UI 只与本对象交互，不再直接读写 localStorage 任务库。
  */
+function extractTargetsLite(text: string): string[] {
+  const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b(?:\/\d{1,2})?/g
+  const DOMAIN = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b/gi
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const m of text.match(IPV4) ?? []) { if (!seen.has(m)) { seen.add(m); out.push(m) } }
+  for (const m of text.match(DOMAIN) ?? []) {
+    const lower = m.toLowerCase()
+    if (lower.length > 253) continue
+    if (!seen.has(lower)) { seen.add(lower); out.push(lower) }
+    if (out.length >= 5) break
+  }
+  return out.slice(0, 5)
+}
+
 export class ProtoRuntime {
   private readonly runtime: AppRuntime
   private meta: ProtoMeta
@@ -558,9 +574,29 @@ export class ProtoRuntime {
     this.selectMeta(id, mode)
   }
 
-  /** 会话指令（steer RPC）。 */
+  /** 会话指令（steer RPC）或新建任务（无选中会话时，自动用文本作为目标 run）。
+   * 用户从对话输入框直接敲指令即可，无需先开 3 步向导。
+   *
+   * 失败时同步抛错：extractTargets 失败（无目标）应在 send 调用点立刻反馈；
+   * 网络/RPC 失败走 .catch + toast。 */
+  /** 会话指令（steer RPC）或新建任务（无选中会话时，自动用文本作为目标 run）。
+   * 用户从对话输入框直接敲指令即可，无需先打开 3 步向导。
+   *
+   * 失败时同步抛错：extractTargetsLite 失败（无目标）应在 send 调用点立刻反馈；
+   * 网络/RPC 失败走 .catch + toast。 */
   send = (text: string): void => {
-    this.runtime.submitOrSend(text)
+    const runtime = this.runtime as unknown as { submitOrSend: (t: string) => Promise<void>; selectedId: string | null }
+    if (runtime.selectedId === null) {
+      const targets = extractTargetsLite(text)
+      if (targets.length === 0) {
+        throw new Error('未能从指令中提取授权目标（需要 IP / CIDR / 域名）。请用「对 demo.ine.local 做一次渗透」这种含目标的措辞。')
+      }
+    }
+    void runtime.submitOrSend(text).catch((cause) => {
+      const msg = cause instanceof Error ? cause.message : String(cause)
+      console.warn('[secai-app] submitOrSend 失败（异步）', cause)
+      showToast(`下发失败：${msg}`, 'err')
+    })
   }
 
   /** 审批应答（respond RPC）。 */

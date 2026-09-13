@@ -35,6 +35,36 @@ export type RouteKey = 'workbench' | 'assets' | 'risks' | 'reports' | 'arsenal' 
 
 export type LinkState = 'connecting' | 'connected' | 'reconnecting'
 
+/**
+ * 从自然语言文本中提取授权目标：
+ * - CIDR：x.x.x.x/n
+ * - IPv4：x.x.x.x
+ * - 域名：含 TLD 的合法 hostname
+ * 按出现顺序去重，≤5 个。提取不到返回空数组（调用方需引导用户改写）。
+ */
+const IPV4_RE = /\b(?:\d{1,3}\.){3}\d{1,3}\b(?:\/\d{1,2})?/g
+// 域名：尾部 TLD ≥ 2 字母；最末段须为字母（非数字）才视为域名（区分于 IP）
+const DOMAIN_RE = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}\b/gi
+
+export function extractTargets(text: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (s: string) => {
+    if (!seen.has(s)) { seen.add(s); out.push(s) }
+  }
+  // IPv4（含 CIDR 后缀）
+  for (const m of text.match(IPV4_RE) ?? []) push(m)
+  // 域名（按出现顺序，去重）
+  for (const m of text.match(DOMAIN_RE) ?? []) {
+    const lower = m.toLowerCase()
+    // 排除误识别（如纯数字开头 / 过长）
+    if (lower.length > 253) continue
+    push(lower)
+    if (out.length >= 5) break
+  }
+  return out.slice(0, 5)
+}
+
 /** 任务列表行（engagement 行头投影；仿 dsh 会话列表的顶层条目）。 */
 export interface TaskSummary {
   engagementId: string
@@ -398,13 +428,28 @@ export class AppRuntime {
   /**
    * 智能提交：有选中会话 → steer 指令；无会话 → 用自然语言作任务书 run。
    * 用户可在对话框直接下达任务，无需先打开「新建任务」弹窗。
+   *
+   * 自然语言提取：
+   * - 抽取 IP / CIDR / 域名（按出现顺序去重，≤5 个）作为 targets；
+   * - 提取不到时抛「缺目标」错误，UI 提示用户改写或打开向导；
+   * - 整段 text 作 title，prefix 拼上模式（默认 pt）。
    */
   async submitOrSend(text: string): Promise<void> {
     if (this.selectedId !== null) {
       this.send(text)
       return
     }
-    await this.run({ allowedTargets: [text] })
+    const targets = extractTargets(text)
+    if (targets.length === 0) {
+      throw new Error(
+        '未能从指令中提取授权目标（需要 IP / CIDR / 域名）。请用「对 demo.ine.local 做一次渗透」这种含目标的措辞。'
+      )
+    }
+    await this.run({
+      title: text.length > 40 ? text.slice(0, 40) + '…' : text,
+      allowedTargets: targets,
+      maxIntensity: 'active',
+    })
   }
 
   /**
