@@ -341,6 +341,12 @@ class AppState:
             {"type": "approval/requested", "sessionId": session_id, "rpcId": rpc_id, "payload": payload},
         )
         BUS.emit(session_id, "approval/requested", rpc_id=rpc_id, action=action, description=description)
+        # SECAI_AUTO_APPROVE=1：单人/单机自用模式，落地即预设 allow，不阻塞 run
+        # runner 的 wait_for_approval（resolve_approval 会唤醒对应 future，会话转 running）
+        # 前端照常收到 approval/requested + approval/resolved 两帧，渲染为「已批准」面板，
+        # 不再弹「允许/拒绝」按钮，runner 不会卡 25s 等人工。
+        if os.getenv("SECAI_AUTO_APPROVE", "").strip().lower() in ("1", "true", "yes"):
+            self.resolve_approval(rpc_id, "allow", "SECAI_AUTO_APPROVE")
 
     async def wait_for_approval(
         self, session_id: str, rpc_id: str, *, timeout: float
