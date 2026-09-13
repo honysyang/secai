@@ -59,6 +59,12 @@ export function CommandPalette({ open, commands, onClose }: CommandPaletteProps)
     return () => window.removeEventListener('keydown', onKey)
   }, [open, filtered, idx, onClose])
 
+  useEffect(() => {
+    if (!open || !listRef.current) return
+    const el = listRef.current.querySelector('.proto-pal-item.on')
+    if (el && el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
+  }, [idx, open])
+
   if (!open) return null
 
   let running = -1

@@ -2,6 +2,7 @@
 // 按 prototype.html 的 demo 数据静态展示。
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { showToast } from '../Toast.tsx'
 import type { DBShape, Task } from '../db.ts'
 import type { CombatMode } from '../ModeModal.tsx'
 import { COMBAT_MODE_MAP, ModeBanner } from '../ModeModal.tsx'
@@ -28,6 +29,9 @@ export interface ChatScreenProps {
   onOpenSched: (taskId: string) => void
   onOpenMode: () => void
   onOpenSettings: () => void
+  /** 外部注入输入文本（如技能触发词点击） */
+  externalText?: string
+  onConsumeExternalText?: () => void
 }
 
 type ViewKey = 'chat' | 'trace' | 'link'
@@ -72,7 +76,7 @@ const DEMO_TRACE: TraceItem[] = [
 const GROUP_ORDER: Task['group'][] = ['计划中 · 定时', '进行中', '今天', '过去七天']
 
 export function ChatScreen(props: ChatScreenProps) {
-  const { db, proto, currentTask, currentMode, onSelectTask, onDeleteTask, onRenameTask, onNewTask, onOpenMode, onOpenSettings } = props
+  const { db, proto, currentTask, currentMode, onSelectTask, onDeleteTask, onRenameTask, onNewTask, onOpenMode, onOpenSettings, externalText, onConsumeExternalText } = props
   const onOpenSched = props.onOpenSched
   const [view, setView] = useState<ViewKey>('chat')
   const [convOpen, setConvOpen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 1280 : true)
@@ -212,7 +216,7 @@ export function ChatScreen(props: ChatScreenProps) {
                   onReject={(rpcId, comment) => proto.respond(rpcId, 'deny', comment)}
                 />
               ))}
-              <ChatInput onSend={(text) => proto.send(text)} />
+              <ChatInput onSend={(text) => proto.send(text)} onNewTask={onNewTask} externalText={externalText} onConsumeExternalText={onConsumeExternalText} />
             </div>
           </div>
 
@@ -430,6 +434,7 @@ function LinkSVG() {
             strokeWidth="1.6"
             strokeLinecap="round"
             strokeDasharray={run ? '5 4' : undefined}
+            className={run ? 'proto-ln-run' : undefined}
             markerEnd="url(#ln-arrow)"
           />
         )
@@ -458,12 +463,38 @@ function LinkSVG() {
   )
 }
 
-function ChatInput({ onSend }: { onSend: (text: string) => void }) {
+const ACCEPT_EXT = ['.txt', '.csv', '.json', '.pdf', '.png', '.jpg', '.jpeg', '.pcap', '.har']
+const MAX_BYTES = 20 * 1024 * 1024
+
+function validateFiles(list: File[]): { ok: File[]; rejected: string[] } {
+  const ok: File[] = []
+  const rejected: string[] = []
+  list.forEach((f) => {
+    const ext = '.' + (f.name.split('.').pop() ?? '').toLowerCase()
+    if (!ACCEPT_EXT.includes(ext)) {
+      rejected.push(`${f.name}（不支持的格式）`)
+    } else if (f.size > MAX_BYTES) {
+      rejected.push(`${f.name}（超过 20MB）`)
+    } else {
+      ok.push(f)
+    }
+  })
+  return { ok, rejected }
+}
+
+function ChatInput({ onSend, onNewTask, externalText, onConsumeExternalText }: { onSend: (text: string) => void; onNewTask?: () => void; externalText?: string; onConsumeExternalText?: () => void }) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<Array<{ name: string; size: number }>>([])
   const [drag, setDrag] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const pillRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (externalText) {
+      setText((prev) => (prev ? prev + ' ' + externalText : externalText))
+      onConsumeExternalText?.()
+    }
+  }, [externalText, onConsumeExternalText])
 
   const handleSend = () => {
     if (!text.trim()) return
@@ -484,7 +515,12 @@ function ChatInput({ onSend }: { onSend: (text: string) => void }) {
           e.preventDefault()
           setDrag(false)
           const list = Array.from(e.dataTransfer?.files ?? [])
-          setFiles((cur) => [...cur, ...list.map((f) => ({ name: f.name, size: f.size }))])
+          const { ok, rejected } = validateFiles(list)
+          if (rejected.length > 0) showToast(`已跳过 ${rejected.length} 个文件：${rejected.join('、')}`, 'err')
+          setFiles((cur) => {
+            const names = new Set(cur.map((f) => f.name))
+            return [...cur, ...ok.filter((f) => !names.has(f.name)).map((f) => ({ name: f.name, size: f.size }))]
+          })
         }}
       >
         <div className="proto-drop-hint">松开即可添加为附件</div>
@@ -528,12 +564,17 @@ function ChatInput({ onSend }: { onSend: (text: string) => void }) {
             })
             if (fs.length > 0) {
               e.preventDefault()
-              setFiles((cur) => [...cur, ...fs.map((f) => ({ name: f.name, size: f.size }))])
+              const { ok, rejected } = validateFiles(fs)
+              if (rejected.length > 0) showToast(`已跳过 ${rejected.length} 个文件：${rejected.join('、')}`, 'err')
+              setFiles((cur) => {
+                const names = new Set(cur.map((f) => f.name))
+                return [...cur, ...ok.filter((f) => !names.has(f.name)).map((f) => ({ name: f.name, size: f.size }))]
+              })
             }
           }}
         />
         <div className="proto-ip-row">
-          <button type="button" className="proto-ip-plus" title="新建任务">
+          <button type="button" className="proto-ip-plus" title="新建任务" onClick={onNewTask}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
               <path d="M12 5v14M5 12h14" />
             </svg>
@@ -559,7 +600,12 @@ function ChatInput({ onSend }: { onSend: (text: string) => void }) {
         accept=".txt,.csv,.json,.pdf,.png,.jpg,.jpeg,.pcap,.har"
         onChange={(e) => {
           const arr = Array.from(e.target.files ?? [])
-          setFiles((cur) => [...cur, ...arr.map((f) => ({ name: f.name, size: f.size }))])
+          const { ok, rejected } = validateFiles(arr)
+          if (rejected.length > 0) showToast(`已跳过 ${rejected.length} 个文件：${rejected.join('、')}`, 'err')
+          setFiles((cur) => {
+            const names = new Set(cur.map((f) => f.name))
+            return [...cur, ...ok.filter((f) => !names.has(f.name)).map((f) => ({ name: f.name, size: f.size }))]
+          })
           e.target.value = ''
         }}
       />

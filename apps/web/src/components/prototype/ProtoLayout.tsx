@@ -114,6 +114,7 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
     dataRef.ensureRunning()
   }, [dataRef])
   const [route, setRoute] = useState<RouteKey>('chat')
+  const [pillText, setPillText] = useState<string>('')
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     if (typeof localStorage === 'undefined') return false
     return localStorage.getItem('secai-proto-collapsed') === '1'
@@ -295,6 +296,8 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
         onOpenSched={openSched}
         onOpenMode={() => setModeOpen(true)}
         onOpenSettings={() => { setSettingsTab('model'); setSettingsOpen(true) }}
+        externalText={pillText || undefined}
+        onConsumeExternalText={() => setPillText('')}
       />
     ) : route === 'asset' ? (
       <AssetScreen db={db} currentTask={currentTask} />
@@ -305,7 +308,7 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
     ) : route === 'arsenal' ? (
       <ArsenalScreen db={db} currentTask={currentTask} />
     ) : route === 'skill' ? (
-      <SkillScreen db={db} currentTask={currentTask} onPillActivate={() => { setRoute('chat') }} />
+      <SkillScreen db={db} currentTask={currentTask} onPillActivate={(text) => { setPillText(text); setRoute('chat') }} />
     ) : (
       <KbScreen db={db} currentTask={currentTask} onToast={showToast} />
     )

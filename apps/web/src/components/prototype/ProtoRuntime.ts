@@ -30,6 +30,7 @@ export interface TaskMetaEntry {
   next?: string
   group?: Task['group']
   stopped?: boolean
+  atts?: string[]
 }
 
 export interface ProtoMeta {
@@ -134,6 +135,8 @@ export function deriveDB(snapshot: AppSnapshot, meta: ProtoMeta): DBShape {
       mode: m?.mode ?? 'pt',
       sched,
       next: m?.next ?? '',
+      demo: t.title.toLowerCase().includes('demo') || t.engagementId === 'live-engagement',
+      atts: m?.atts ?? [],
     }
   })
   return {

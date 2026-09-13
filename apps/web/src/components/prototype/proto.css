@@ -1224,6 +1224,12 @@ body[data-secai-dark] .proto-shell {
 @keyframes proto-trace-flow {
   to { background-position: 0 -10px; }
 }
+.proto-ln-run {
+  animation: proto-ln-flow 1.2s linear infinite;
+}
+@keyframes proto-ln-flow {
+  to { stroke-dashoffset: -18; }
+}
 .proto-tn.done .proto-tn-dot { background: var(--brand-500); }
 .proto-tn.run .proto-tn-dot { background: var(--ok); animation: proto-pulse 1.6s infinite; }
 .proto-tn.fail .proto-tn-dot { background: var(--crit); }
@@ -2121,6 +2127,40 @@ body[data-secai-dark] .proto-shell {
   }
   .proto-sched-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .proto-role-grid,
+  .proto-mode-grid {
+    grid-template-columns: 1fr;
+  }
+  .proto-mem-head,
+  .proto-mem-row {
+    grid-template-columns: 1fr 80px;
+  }
+  .proto-mem-head > :nth-child(3),
+  .proto-mem-head > :nth-child(4),
+  .proto-mem-row > :nth-child(3),
+  .proto-mem-row > :nth-child(4) {
+    display: none;
+  }
+  .proto-rt-head,
+  .proto-rt-row {
+    grid-template-columns: 1fr 70px 60px;
+  }
+  .proto-rt-head > :nth-child(2),
+  .proto-rt-row > :nth-child(2) {
+    display: none;
+  }
+  .proto-perm-label {
+    font-size: 11px;
+  }
+  .proto-mb-stats {
+    flex-wrap: wrap;
+  }
+  .proto-mb-stat {
+    flex: 1 1 33%;
   }
 }
 

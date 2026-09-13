@@ -3,7 +3,7 @@ import { useState } from 'react'
 import type { DBShape, Task } from '../db.ts'
 
 export function RiskScreen({ db, currentTask, onToast, onUpdateStatus }: { db: DBShape; currentTask: Task | null; onToast?: (msg: string, kind?: 'ok' | 'err') => void; onUpdateStatus?: (riskId: string, status: 'open' | 'mitigating' | 'accepted' | 'resolved') => void }) {
-  const demo = currentTask?.demo === true || db.meta.curTaskId === 't3'
+  const demo = currentTask?.demo === true || db.meta.curTaskId === 't3' || db.meta.curTaskId === 'live-engagement'
   return (
     <div className="proto-screen on">
       <div className="proto-page">
@@ -26,6 +26,7 @@ export function RiskScreen({ db, currentTask, onToast, onUpdateStatus }: { db: D
 function RiskDemo({ onToast: _onToast, onUpdateStatus }: { onToast?: (msg: string, kind?: 'ok' | 'err') => void; onUpdateStatus?: (riskId: string, status: 'open' | 'mitigating' | 'accepted' | 'resolved') => void }) {
   const [openIdx, setOpenIdx] = useState<number>(0)
   const [band, setBand] = useState<'all' | 'crit' | 'high' | 'med' | 'low' | 'info'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'mitigating' | 'accepted' | 'resolved'>('all')
   const bandMap: Record<string, string> = { crit: 'solid-crit', high: 'soft-high', med: 'soft-med', low: 'soft-low' }
   const risks = [
     { tone: 'solid-crit', title: 'Tomcat PUT 方法远程代码执行（CVE-2024-50379）', meta: 'demo.ine.local:8080 · CVSS 9.8', evidence: '[1] PUT /upload/probe.jsp → 201 Created (nmap http-put, 21:07:44)\n[2] GET /upload/probe.jsp → 200 · 执行 echo "SECAI-PROBE" 输出回显 (curl, 21:07:46)\n[3] 探测文件 5 秒后自动删除 → 404 (复验通过)', fix: '升级 Tomcat 至 9.0.86+；禁用 HTTP PUT/DELETE 方法（web.xml 中 readonly=false 移除）；在 WAF 层拦截 /upload 路径异常写入。' },
@@ -33,7 +34,11 @@ function RiskDemo({ onToast: _onToast, onUpdateStatus }: { onToast?: (msg: strin
     { tone: 'soft-high', title: 'Tomcat Manager 默认凭据（tomcat:s3cret）', meta: '10.0.8.23:8080 · CVSS 8.1', evidence: 'hydra -L users.txt -P pass.txt 10.0.8.23 http-get /manager/html\n[8080][http-get] host: 10.0.8.23  login: tomcat  password: s3cret' },
     { tone: 'soft-med', title: 'PHPSESSID Cookie 缺少 Secure 属性', meta: 'demo.ine.local · CVSS 5.3', evidence: 'Set-Cookie: PHPSESSID=…; HttpOnly  (缺少 Secure 标志)' },
   ]
-  const filtered = band === 'all' ? risks : risks.filter((r) => r.tone === bandMap[band])
+  const bandFiltered = band === 'all' ? risks : risks.filter((r) => r.tone === bandMap[band])
+  const filtered = statusFilter === 'all' ? bandFiltered : bandFiltered.filter((r) => {
+    const map: Record<string, 'open' | 'mitigating' | 'accepted' | 'resolved'> = { 待验证: 'open', 已确认: 'mitigating', 误报: 'accepted', 已修复: 'resolved' }
+    return map[(r as { status?: string }).status ?? '已确认'] === statusFilter
+  })
   return (
     <>
       <div className="proto-stat-grid">
@@ -44,11 +49,11 @@ function RiskDemo({ onToast: _onToast, onUpdateStatus }: { onToast?: (msg: strin
         <Stat label="信息 Info" value="12" color="var(--text-2)" band="var(--text-3)" />
       </div>
       <div className="proto-chips">
-        <button type="button" className="proto-chip on">全部状态</button>
-        <button type="button" className="proto-chip">待验证</button>
-        <button type="button" className="proto-chip">已确认</button>
-        <button type="button" className="proto-chip">已修复</button>
-        <button type="button" className="proto-chip">误报</button>
+        <button type="button" className={'proto-chip' + (statusFilter === 'all' ? ' on' : '')} onClick={() => setStatusFilter('all')}>全部状态</button>
+        <button type="button" className={'proto-chip' + (statusFilter === 'open' ? ' on' : '')} onClick={() => setStatusFilter('open')}>待验证</button>
+        <button type="button" className={'proto-chip' + (statusFilter === 'mitigating' ? ' on' : '')} onClick={() => setStatusFilter('mitigating')}>已确认</button>
+        <button type="button" className={'proto-chip' + (statusFilter === 'resolved' ? ' on' : '')} onClick={() => setStatusFilter('resolved')}>已修复</button>
+        <button type="button" className={'proto-chip' + (statusFilter === 'accepted' ? ' on' : '')} onClick={() => setStatusFilter('accepted')}>误报</button>
       </div>
       {filtered.map((r, i) => (
         <div key={i} className={'proto-risk-row' + (openIdx === i ? ' open' : '') + (r.tone === 'solid-crit' ? ' crit-row' : '')}>

@@ -2,6 +2,26 @@
 // 按 prototype.html 的 mStep/renderStep 复刻。
 
 import { useEffect, useRef, useState } from 'react'
+import { showToast } from './Toast.tsx'
+
+const WIZ_ACCEPT = ['.txt', '.csv', '.pdf', '.png', '.jpg', '.jpeg', '.pcap', '.har', '.json']
+const WIZ_MAX_BYTES = 20 * 1024 * 1024
+
+function wizValidate(list: File[]): { ok: File[]; rejected: string[] } {
+  const ok: File[] = []
+  const rejected: string[] = []
+  list.forEach((f) => {
+    const ext = '.' + (f.name.split('.').pop() ?? '').toLowerCase()
+    if (!WIZ_ACCEPT.includes(ext)) {
+      rejected.push(`${f.name}（不支持的格式）`)
+    } else if (f.size > WIZ_MAX_BYTES) {
+      rejected.push(`${f.name}（超过 20MB）`)
+    } else {
+      ok.push(f)
+    }
+  })
+  return { ok, rejected }
+}
 
 export interface NewTaskConfig {
   name: string
@@ -126,17 +146,27 @@ export function NewEngagementWizard({ open, onClose, onCreate }: NewEngagementWi
  className="proto-up-zone"
  onDragOver={(e) => { e.preventDefault() }}
  onDrop={(e) => {
-   e.preventDefault()
-   const files = Array.from(e.dataTransfer.files)
-   setWizAtts((prev) => [...prev, ...files.map((f) => f.name)])
- }}
+  e.preventDefault()
+  const files = Array.from(e.dataTransfer.files)
+  const { ok, rejected } = wizValidate(files)
+  if (rejected.length > 0) showToast(`已跳过 ${rejected.length} 个文件：${rejected.join('、')}`, 'err')
+  setWizAtts((prev) => {
+    const names = new Set(prev)
+    return [...prev, ...ok.map((f) => f.name).filter((n) => !names.has(n))]
+  })
+}}
  >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" /></svg>
                 <span>点击或拖拽上传文件</span>
                 <span style={{ fontSize: 11, opacity: 0.7 }}>.txt .csv .pdf .png .jpg .pcap .har（单文件 ≤ 20MB）</span>
                 <input type="file" multiple hidden onChange={(e) => {
                   const files = Array.from(e.target.files ?? [])
-                  setWizAtts((prev) => [...prev, ...files.map((f) => f.name)])
+                  const { ok, rejected } = wizValidate(files)
+                  if (rejected.length > 0) showToast(`已跳过 ${rejected.length} 个文件：${rejected.join('、')}`, 'err')
+                  setWizAtts((prev) => {
+                    const names = new Set(prev)
+                    return [...prev, ...ok.map((f) => f.name).filter((n) => !names.has(n))]
+                  })
                   e.target.value = ''
                 }} />
               </label>

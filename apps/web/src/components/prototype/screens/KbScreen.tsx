@@ -56,6 +56,115 @@ const ARTICLES: Article[] = [
       { tag: 'p', text: '资产指纹按 (host, port, banner_hash) 三元组去重；时间窗保留最新 90 天。' },
     ],
   },
+  {
+    cat: '漏洞情报',
+    t: 'CVE-2024-50379：Tomcat PUT RCE 分析',
+    m: '漏洞情报 · 09-05 · 来自任务复盘',
+    body: [
+      { tag: 'h1', text: 'CVE-2024-50379：Tomcat PUT RCE 分析' },
+      { tag: 'p', text: '漏洞情报 · 更新于 2026-09-05 · 来源：ENG-20260901-0031 复盘 · 6 个反向链接' },
+      { tag: 'h2', text: '漏洞描述' },
+      { tag: 'p', text: 'Tomcat 9.0.83 及以下版本在默认配置下，若开启 PUT 方法且未限制 readonly，攻击者可上传 JSP 文件实现远程代码执行。相关处置见【Tomcat PUT 方法远程代码执行（CVE-2024-50379）】。' },
+      { tag: 'h2', text: '利用条件' },
+      { tag: 'p', text: '需要：1) HTTP PUT 方法开启；2) web.xml 中 readonly=false；3) 可写入路径（如 /upload）。建议参考【Kill Chain 与 PTES 的融合实践】进行阶段门检查。' },
+    ],
+  },
+  {
+    cat: '漏洞情报',
+    t: 'CVE-2017-12615：Tomcat 任意文件写入',
+    m: '漏洞情报 · 09-02 · 手动创建',
+    body: [
+      { tag: 'h1', text: 'CVE-2017-12615：Tomcat 任意文件写入' },
+      { tag: 'p', text: '漏洞情报 · 更新于 2026-09-02 · 来源：手动创建 · 3 个反向链接' },
+      { tag: 'h2', text: '影响版本' },
+      { tag: 'p', text: 'Tomcat 7.0.0 - 7.0.79。Windows 环境下可通过 `PUT /xxx.jsp%20` 绕过扩展名过滤。' },
+      { tag: 'p', text: '修复建议：升级至 7.0.81+ 或禁用 PUT/DELETE 方法。证据链留存要求见【证据留存的法律边界】。' },
+    ],
+  },
+  {
+    cat: '漏洞情报',
+    t: '弱口令字典生成方法论',
+    m: '漏洞情报 · 08-25 · 智能体沉淀',
+    body: [
+      { tag: 'h1', text: '弱口令字典生成方法论' },
+      { tag: 'p', text: '漏洞情报 · 08-25 · 智能体沉淀' },
+      { tag: 'p', text: '基于目标组织信息的字典变体：年份、域名、品牌、城市拼音、员工姓名拼音。线程限制见【审批分级 T1-T4 设计原则】。' },
+    ],
+  },
+  {
+    cat: '工具手册',
+    t: 'nmap 高级扫描参数速查',
+    m: '工具手册 · 09-03 · 手动创建',
+    body: [
+      { tag: 'h1', text: 'nmap 高级扫描参数速查' },
+      { tag: 'p', text: '工具手册 · 更新于 2026-09-03 · 来源：手动创建 · 8 个反向链接' },
+      { tag: 'h2', text: '常用组合' },
+      { tag: 'p', text: '服务版本探测：`nmap -sV -sC -O target`；全端口扫描：`nmap -p- --min-rate 1000 target`。' },
+      { tag: 'p', text: 'NSE 脚本示例：`nmap --script=http-put -p8080 target`。相关审批级别见【审批分级 T1-T4 设计原则】。' },
+    ],
+  },
+  {
+    cat: '工具手册',
+    t: 'hydra 协议爆破参数详解',
+    m: '工具手册 · 08-30 · 手动创建',
+    body: [
+      { tag: 'h1', text: 'hydra 协议爆破参数详解' },
+      { tag: 'p', text: '工具手册 · 08-30 · 手动创建' },
+      { tag: 'p', text: 'HTTP 表单爆破：`hydra -L users.txt -P pass.txt target http-post-form "/login:username=^USER^&password=^PASS^:F=Invalid"`。线程建议 ≤8（T2 审批约束）。' },
+    ],
+  },
+  {
+    cat: '工具手册',
+    t: 'sqlmap 注入探测与利用',
+    m: '工具手册 · 08-22 · 智能体沉淀',
+    body: [
+      { tag: 'h1', text: 'sqlmap 注入探测与利用' },
+      { tag: 'p', text: '工具手册 · 08-22 · 智能体沉淀' },
+      { tag: 'p', text: 'GET 注入探测：`sqlmap -u "target/page?id=1" --batch --level=3`。POST 注入：`sqlmap -r request.txt --batch`。' },
+    ],
+  },
+  {
+    cat: '复盘记录',
+    t: '2026-09-01 电商渗透复盘',
+    m: '复盘记录 · 09-02 · 来自任务复盘',
+    body: [
+      { tag: 'h1', text: '2026-09-01 电商渗透复盘' },
+      { tag: 'p', text: '复盘记录 · 更新于 2026-09-02 · 来源：ENG-20260901-0031 复盘 · 5 个反向链接' },
+      { tag: 'h2', text: '关键发现' },
+      { tag: 'p', text: 'Tomcat PUT RCE 为核心突破口，横向移动因 SMB 凭据未命中而中止。方法论参考【Kill Chain 与 PTES 的融合实践】。' },
+      { tag: 'p', text: '证据链完整度 92%，主要缺口是 Tomcat Manager 登录后的操作录屏。合规要求见【证据留存的法律边界】。' },
+    ],
+  },
+  {
+    cat: '复盘记录',
+    t: '2026-08-15 内网侦察复盘',
+    m: '复盘记录 · 08-16 · 来自任务复盘',
+    body: [
+      { tag: 'h1', text: '2026-08-15 内网侦察复盘' },
+      { tag: 'p', text: '复盘记录 · 08-16 · 来自任务复盘' },
+      { tag: 'p', text: '10.0.8.0/24 网段存活 23 台主机，其中 3 台开放 445 端口。指纹去重策略见【指纹去重的增量策略】。' },
+    ],
+  },
+  {
+    cat: '环境笔记',
+    t: 'demo.ine.local 测试环境说明',
+    m: '环境笔记 · 09-01 · 手动创建',
+    body: [
+      { tag: 'h1', text: 'demo.ine.local 测试环境说明' },
+      { tag: 'p', text: '环境笔记 · 09-01 · 手动创建' },
+      { tag: 'p', text: '靶场环境，含 Tomcat 9.0.83（PUT 开启）、MySQL 5.7、后台管理系统。用于内部验证与培训。' },
+    ],
+  },
+  {
+    cat: '环境笔记',
+    t: 'SECAI·PT 破阵部署手册',
+    m: '环境笔记 · 08-20 · 手动创建',
+    body: [
+      { tag: 'h1', text: 'SECAI·PT 破阵部署手册' },
+      { tag: 'p', text: '环境笔记 · 08-20 · 手动创建' },
+      { tag: 'p', text: '后端 8700 端口直接 serve apps/web/dist；LLM Key 在 .env。SECAI_FIXTURE=1 可脱离 LLM 跑 demo。' },
+    ],
+  },
 ]
 
 const CATS: Array<{ name: string; count: number }> = [
