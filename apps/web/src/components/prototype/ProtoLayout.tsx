@@ -25,7 +25,6 @@ import { ArsenalScreen } from './screens/ArsenalScreen.tsx'
 import { SkillScreen } from './screens/SkillScreen.tsx'
 import { KbScreen } from './screens/KbScreen.tsx'
 import { CommandPalette } from './CommandPalette.tsx'
-import { NewEngagementWizard } from './NewEngagementWizard.tsx'
 import { ToastHost, showToast } from './Toast.tsx'
 import { SettingsModal, type SettingsTab } from './SettingsModal.tsx'
 import { ModeModal, type CombatMode } from './ModeModal.tsx'
@@ -120,7 +119,6 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
     return localStorage.getItem('secai-proto-collapsed') === '1'
   })
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [newOpen, setNewOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('model')
   const [modeOpen, setModeOpen] = useState(false)
@@ -174,7 +172,6 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
       }
       if (e.key === 'Escape') {
         if (paletteOpen) { setPaletteOpen(false); return }
-        if (newOpen) { setNewOpen(false); return }
         if (settingsOpen) { setSettingsOpen(false); return }
         if (modeOpen) { setModeOpen(false); return }
         if (schedOpen) { setSchedOpen(null); return }
@@ -190,19 +187,9 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [go, paletteOpen, newOpen, settingsOpen, modeOpen, schedOpen])
+  }, [go, paletteOpen, settingsOpen, modeOpen, schedOpen])
 
   // 增删任务：全部走真实 RPC（ProtoRuntime）
-  const addTask = useCallback((cfg: { name: string; target: string; mode: Task['mode']; sched: Task['sched']; next: string }) => {
-    void dataRef.createTask(cfg).then(() => {
-      showToast('任务已下发 · 会话创建中', 'ok')
-    }).catch((cause) => {
-      const msg = cause instanceof Error ? cause.message : String(cause)
-      showToast(`任务创建失败：${msg}`, 'err')
-    })
-    go('chat')
-  }, [dataRef, go])
-
   const selectTask = useCallback((id: string) => {
     dataRef.selectTask(id)
   }, [dataRef])
@@ -261,7 +248,6 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
     }
     const baseCommands: Array<{ id: string; g: string; t: string; k?: string; icon?: string; onRun: () => void }> = [
       ...ORDER.map((r, i) => ({ id: `nav-${r}`, g: '导航', t: `前往${VIEW_NAMES[r]}`, k: String(i + 1), icon: NAV_ICONS[r], onRun: () => go(r) })),
-      { id: 'act-new', g: '操作', t: '新建渗透任务', k: 'N', icon: 'M12 2v20M2 12h20', onRun: () => setNewOpen(true) },
       { id: 'act-mode', g: '操作', t: '切换作战模式', icon: 'M12 2 4 7v10l8 5 8-5V7z', onRun: () => setModeOpen(true) },
       { id: 'act-report', g: '操作', t: '从当前任务生成报告', icon: 'M4 4h16v6H4zM4 14h16v6H4z', onRun: () => go('report') },
       { id: 'act-collapse', g: '操作', t: collapsed ? '展开导航' : '收起导航', icon: 'M3 6h18M3 12h18M3 18h18', onRun: () => setCollapsed((c) => !c) },
@@ -292,7 +278,6 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
         onSelectTask={selectTask}
         onDeleteTask={deleteTask}
         onRenameTask={renameTask}
-        onNewTask={() => setNewOpen(true)}
         onOpenSched={openSched}
         onOpenMode={() => setModeOpen(true)}
         onOpenSettings={() => { setSettingsTab('model'); setSettingsOpen(true) }}
@@ -435,14 +420,6 @@ export function ProtoLayout({ proto }: ProtoLayoutProps) {
         open={paletteOpen}
         commands={commands}
         onClose={() => setPaletteOpen(false)}
-      />
-      <NewEngagementWizard
-        open={newOpen}
-        onClose={() => setNewOpen(false)}
-        onCreate={(cfg) => {
-          addTask(cfg)
-          setNewOpen(false)
-        }}
       />
       <SettingsModal
         open={settingsOpen}

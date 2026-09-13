@@ -25,7 +25,6 @@ export interface ChatScreenProps {
   onSelectTask: (id: string) => void
   onDeleteTask: (id: string) => void
   onRenameTask: (id: string, name: string) => void
-  onNewTask: () => void
   onOpenSched: (taskId: string) => void
   onOpenMode: () => void
   onOpenSettings: () => void
@@ -76,7 +75,7 @@ const DEMO_TRACE: TraceItem[] = [
 const GROUP_ORDER: Task['group'][] = ['计划中 · 定时', '进行中', '今天', '过去七天']
 
 export function ChatScreen(props: ChatScreenProps) {
-  const { db, proto, currentTask, currentMode, onSelectTask, onDeleteTask, onRenameTask, onNewTask, onOpenMode, onOpenSettings, externalText, onConsumeExternalText } = props
+  const { db, proto, currentTask, currentMode, onSelectTask, onDeleteTask, onRenameTask, onOpenMode, onOpenSettings, externalText, onConsumeExternalText } = props
   const onOpenSched = props.onOpenSched
   const [view, setView] = useState<ViewKey>('chat')
   const [convOpen, setConvOpen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 1280 : true)
@@ -153,12 +152,6 @@ export function ChatScreen(props: ChatScreenProps) {
             <div className="proto-sb-head">
               <span className="proto-sb-title">渗透任务</span>
               <span className="proto-badge soft-info" style={{ flex: 1, marginLeft: 2 }}>{db.tasks.length}</span>
-              <button className="proto-new-btn" type="button" onClick={onNewTask}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
-                新任务
-              </button>
             </div>
             <div className="proto-sb-search">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
@@ -216,7 +209,7 @@ export function ChatScreen(props: ChatScreenProps) {
                   onReject={(rpcId, comment) => proto.respond(rpcId, 'deny', comment)}
                 />
               ))}
-              <ChatInput onSend={(text) => proto.send(text)} onNewTask={onNewTask} externalText={externalText} onConsumeExternalText={onConsumeExternalText} />
+              <ChatInput onSend={(text) => proto.send(text)} externalText={externalText} onConsumeExternalText={onConsumeExternalText} />
             </div>
           </div>
 
@@ -482,7 +475,7 @@ function validateFiles(list: File[]): { ok: File[]; rejected: string[] } {
   return { ok, rejected }
 }
 
-function ChatInput({ onSend, onNewTask, externalText, onConsumeExternalText }: { onSend: (text: string) => void; onNewTask?: () => void; externalText?: string; onConsumeExternalText?: () => void }) {
+function ChatInput({ onSend, externalText, onConsumeExternalText }: { onSend: (text: string) => void; externalText?: string; onConsumeExternalText?: () => void }) {
   const [text, setText] = useState('')
   const [files, setFiles] = useState<Array<{ name: string; size: number }>>([])
   const [drag, setDrag] = useState(false)
@@ -586,11 +579,6 @@ function ChatInput({ onSend, onNewTask, externalText, onConsumeExternalText }: {
           }}
         />
         <div className="proto-ip-row">
-          <button type="button" className="proto-ip-plus" title="新建任务" onClick={onNewTask}>
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
           <button type="button" className="proto-ip-plus" title="添加附件" onClick={() => fileRef.current?.click()}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.4 11.05 12.3 20.2a5.5 5.5 0 0 1-7.8-7.8l9.2-9.2a3.7 3.7 0 0 1 5.2 5.2l-9.2 9.2a1.8 1.8 0 0 1-2.6-2.6l8.4-8.4" />

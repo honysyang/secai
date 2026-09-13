@@ -574,25 +574,14 @@ export class ProtoRuntime {
     this.selectMeta(id, mode)
   }
 
-  /** 会话指令（steer RPC）或新建任务（无选中会话时，自动用文本作为目标 run）。
-   * 用户从对话输入框直接敲指令即可，无需先开 3 步向导。
-   *
-   * 失败时同步抛错：extractTargets 失败（无目标）应在 send 调用点立刻反馈；
-   * 网络/RPC 失败走 .catch + toast。 */
-  /** 会话指令（steer RPC）或新建任务（无选中会话时，自动用文本作为目标 run）。
-   * 用户从对话输入框直接敲指令即可，无需先打开 3 步向导。
-   *
-   * 失败时同步抛错：extractTargetsLite 失败（无目标）应在 send 调用点立刻反馈；
-   * 网络/RPC 失败走 .catch + toast。 */
+  /** 自然语言一站式下发（无目标 → 同步 throw；网络失败 → 异步 toast）。
+   * 输入框只此一条通路：粘一句话 → 自动抽目标 → run 新任务。 */
   send = (text: string): void => {
-    const runtime = this.runtime as unknown as { submitOrSend: (t: string) => Promise<void>; selectedId: string | null }
-    if (runtime.selectedId === null) {
-      const targets = extractTargetsLite(text)
-      if (targets.length === 0) {
-        throw new Error('未能从指令中提取授权目标（需要 IP / CIDR / 域名）。请用「对 demo.ine.local 做一次渗透」这种含目标的措辞。')
-      }
+    const targets = extractTargetsLite(text)
+    if (targets.length === 0) {
+      throw new Error('未能从指令中提取授权目标（需要 IP / CIDR / 域名）。请用「对 demo.ine.local 做一次渗透」这种含目标的措辞。')
     }
-    void runtime.submitOrSend(text).catch((cause) => {
+    void this.runtime.submitOrSend(text).catch((cause) => {
       const msg = cause instanceof Error ? cause.message : String(cause)
       console.warn('[secai-app] submitOrSend 失败（异步）', cause)
       showToast(`下发失败：${msg}`, 'err')

@@ -426,19 +426,16 @@ export class AppRuntime {
   }
 
   /**
-   * 智能提交：有选中会话 → steer 指令；无会话 → 用自然语言作任务书 run。
-   * 用户可在对话框直接下达任务，无需先打开「新建任务」弹窗。
+   * 智能提交（自然语言一站式）：所有自然语言文本一律抽目标 → run 新任务。
+   * 选中会话的存在只影响对话流的展示，不再拦截输入框——用户视角看就是
+   * 「粘一句话 → 自动下发」，无需先选会话/打开向导/按按钮。
    *
-   * 自然语言提取：
+   * 行为：
    * - 抽取 IP / CIDR / 域名（按出现顺序去重，≤5 个）作为 targets；
-   * - 提取不到时抛「缺目标」错误，UI 提示用户改写或打开向导；
-   * - 整段 text 作 title，prefix 拼上模式（默认 pt）。
+   * - 提取不到时抛「缺目标」错误，UI toast 提示用户改写措辞（加个域名/IP）；
+   * - 整段 text 前 40 字作 title（过长 ellipsis），原句一并进 run payload 让 agent 看到完整意图。
    */
   async submitOrSend(text: string): Promise<void> {
-    if (this.selectedId !== null) {
-      this.send(text)
-      return
-    }
     const targets = extractTargets(text)
     if (targets.length === 0) {
       throw new Error(
